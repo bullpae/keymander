@@ -143,7 +143,7 @@
   자세한 정보
 ------------------------------------------------------------
 
-  GitHub: https://github.com/bullpae/keymander-cli
+  GitHub: https://github.com/bullpae/keymander
   License: MIT
 
 ============================================================

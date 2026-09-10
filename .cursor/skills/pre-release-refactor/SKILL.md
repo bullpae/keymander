@@ -1,6 +1,6 @@
 ---
 name: pre-release-refactor
-description: Performs pre-release hardening for keymander-cli by auditing critical bugs, security risks, side effects, large files/functions, dead code, UX quality, and CI/release readiness. Use when the user asks for release preparation, deployment readiness checks, pre-release refactoring, or final QA before shipping.
+description: Performs pre-release hardening for keymander by auditing critical bugs, security risks, side effects, large files/functions, dead code, UX quality, and CI/release readiness. Use when the user asks for release preparation, deployment readiness checks, pre-release refactoring, or final QA before shipping.
 ---
 
 # Pre-release Refactor

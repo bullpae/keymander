@@ -39,7 +39,7 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 ### 1.1 Linux 저장소 구조
 
-`https://bullpae.github.io/keymander-cli/` — GitHub Pages, **Actions 아티팩트 배포**
+`https://bullpae.github.io/keymander/` — GitHub Pages, **Actions 아티팩트 배포**
 (브랜치 방식 아님. 저장소 Settings → Pages → Source = GitHub Actions)
 
 ```
@@ -118,7 +118,7 @@ fork하고 PR을 내야 하므로 deploy key로는 안 되고 사용자 PAT가 �
 2. Note: `keymander-winget-automation`, Expiration: 1년 권장
 3. Scopes: **`public_repo`** 하나만
 4. ```bash
-   gh secret set WINGET_GITHUB_TOKEN --repo bullpae/keymander-cli
+   gh secret set WINGET_GITHUB_TOKEN --repo bullpae/keymander
    ```
 
 토큰 만료 시 같은 명령으로 재등록. 만료가 다가오면 GitHub가 메일로 알려준다.
@@ -434,11 +434,11 @@ sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo \
 `apt update`가 실패한다. 조용히 낡은 버전에 머무는 게 아니라 눈에 띄게 실패하므로
 사용자가 알아차리기는 한다.
 
-### 6.4 저장소 가족 정리 상태 (2026-08-08)
+### 6.4 저장소 가족 정리 상태 (2026-09-10 갱신)
 
 | 저장소 | 상태 | 비고 |
 |---|---|---|
-| `keymander-cli` | PUBLIC, 활성 | 본체. 개명 대기 |
+| `keymander` | PUBLIC, 활성 | 본체. **2026-09-10 `keymander-cli`에서 개명 완료** (winget 최초 머지 직후) |
 | `keymander-tui-prototype` | PRIVATE, archived | 원형(2026-02-07~02-11, 44커밋). 이름을 비우려고 개명 |
 | `keymander-desktop` | PRIVATE, archived | 커밋 0개 빈 저장소. 삭제하려면 `delete_repo` 스코프 필요 |
 

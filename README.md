@@ -214,9 +214,9 @@ Upgrade with `brew upgrade keymander`.
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://bullpae.github.io/keymander-cli/keymander-archive-keyring.asc \
+curl -fsSL https://bullpae.github.io/keymander/keymander-archive-keyring.asc \
   | sudo gpg --dearmor -o /etc/apt/keyrings/keymander.gpg
-echo "deb [signed-by=/etc/apt/keyrings/keymander.gpg] https://bullpae.github.io/keymander-cli/apt stable main" \
+echo "deb [signed-by=/etc/apt/keyrings/keymander.gpg] https://bullpae.github.io/keymander/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/keymander.list
 sudo apt update && sudo apt install keymander
 ```
@@ -226,9 +226,9 @@ Upgrades then come with the usual `sudo apt update && sudo apt upgrade`.
 ### Fedora / RHEL / CentOS (dnf, yum)
 
 ```bash
-sudo rpm --import https://bullpae.github.io/keymander-cli/keymander-archive-keyring.asc
+sudo rpm --import https://bullpae.github.io/keymander/keymander-archive-keyring.asc
 sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo \
-  https://bullpae.github.io/keymander-cli/keymander.repo
+  https://bullpae.github.io/keymander/keymander.repo
 sudo dnf install keymander
 ```
 
@@ -247,7 +247,7 @@ winget install keymander
 ```
 
 > Pending initial registration in `microsoft/winget-pkgs`. Until it lands, use
-> the portable zip from [Releases](https://github.com/bullpae/keymander-cli/releases).
+> the portable zip from [Releases](https://github.com/bullpae/keymander/releases).
 
 ### From source
 
@@ -262,7 +262,7 @@ cargo install --path crates/kmd-desktop
 ### Portable install (from releases)
 
 Download `keymander-portable-v<ver>-<os>-<arch>.tar.gz` (or `.zip` on Windows)
-from [GitHub Releases](https://github.com/bullpae/keymander-cli/releases),
+from [GitHub Releases](https://github.com/bullpae/keymander/releases),
 verify it against the attached `SHA256SUMS.txt`, and extract it anywhere:
 
 ```bash

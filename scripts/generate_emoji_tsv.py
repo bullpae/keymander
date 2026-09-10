@@ -5,7 +5,7 @@ import re
 import os
 
 url = "https://unicode.org/Public/emoji/16.0/emoji-test.txt"
-req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; keymander-cli/1.0)"})
+req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; keymander/1.0)"})
 response = urllib.request.urlopen(req)
 content = response.read().decode('utf-8')
 
