@@ -4,6 +4,21 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-09-10
+
+### Changed
+- **저장소 개명 `keymander-cli` → `keymander`.** winget 최초 등록이 머지되어
+  진행. git 리모트·릴리스 URL·winget InstallerUrl은 GitHub 리다이렉트로 계속
+  동작하지만, **GitHub Pages는 리다이렉트되지 않으므로 apt/yum 사용자는 저장소
+  주소를 직접 갱신**해야 한다:
+  ```bash
+  # apt
+  sudo sed -i 's#/keymander-cli/#/keymander/#' /etc/apt/sources.list.d/keymander.list
+  sudo apt update
+  # yum/dnf
+  sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo https://bullpae.github.io/keymander/keymander.repo
+  ```
+
 ### Fixed
 - **한/영(Shift+Space) 전환이 Shift를 떼야만 되던 문제** (macOS) — 전환은 네이티브
   단축키 Ctrl+Space 합성 주입으로 처리하는데, 물리 Shift가 눌린 채 주입하면
