@@ -514,17 +514,30 @@ fn toggle_input_source() {
     let target_name = if to_korean { "ko" } else { "en" };
 
     std::thread::spawn(move || unsafe {
-        // 물리 수정자(Shift 등)가 해제될 때까지 대기 — Shift가 남은 채 주입하면
-        // Ctrl+Shift+Space가 되어 다른 단축키(hotkey 61)로 해석된다. (최대 500ms)
-        const MOD_MASK: u64 = CG_EVENT_FLAG_MASK_SHIFT
-            | CG_EVENT_FLAG_MASK_CONTROL
-            | CG_EVENT_FLAG_MASK_ALTERNATE
-            | CG_EVENT_FLAG_MASK_COMMAND;
-        for _ in 0..50 {
-            if CGEventSourceFlagsState(1) & MOD_MASK == 0 {
-                break;
+        // 물리 Shift가 눌린 채로 Ctrl+Space를 주입하면 OS가 Ctrl+Shift+Space
+        // (다른 단축키)로 해석해 전환이 안 된다. 예전에는 Shift가 물리적으로
+        // 떨어질 때까지 최대 500ms 대기했으나, 그 탓에 "Shift를 떼야만 전환"되고
+        // 오래 쥐면 타임아웃 후 실패하는 부작용이 있었다. 이제는 대기 대신 주입
+        // 직전 flagsChanged로 Shift 플래그만 지운다 — Space를 누르는 즉시 전환된다.
+        // (execute_layer_action의 트리거 modifier 해제 기법과 동일. 합성 이벤트는
+        // MAGIC_USER_DATA가 붙어 자체 탭이 재처리하지 않으므로 엔진의
+        // modifiers_held는 물리 Shift up에서 정상 정리된다.)
+        let ambient = CGEventSourceFlagsState(1);
+        if ambient & CG_EVENT_FLAG_MASK_SHIFT != 0 {
+            let cleared = ambient & !CG_EVENT_FLAG_MASK_SHIFT;
+            let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_PRIVATE);
+            if !source.is_null() {
+                let ev = CGEventCreateKeyboardEvent(source, vkey_to_cg(VKey::LShift), false);
+                if !ev.is_null() {
+                    CGEventSetType(ev, CG_EVENT_FLAGS_CHANGED);
+                    CGEventSetFlags(ev, cleared);
+                    CGEventSetIntegerValueField(ev, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
+                    CGEventPost(CG_SESSION_EVENT_TAP, ev);
+                    CFRelease(ev);
+                }
+                CFRelease(source);
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(3));
         }
 
         tracing::info!("입력 소스 전환: Ctrl+Space 주입 → {target_name}");

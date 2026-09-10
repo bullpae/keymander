@@ -4,6 +4,14 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **한/영(Shift+Space) 전환이 Shift를 떼야만 되던 문제** (macOS) — 전환은 네이티브
+  단축키 Ctrl+Space 합성 주입으로 처리하는데, 물리 Shift가 눌린 채 주입하면
+  OS가 Ctrl+Shift+Space(다른 단축키)로 해석해 전환이 안 됐다. 기존 코드는 Shift가
+  물리적으로 떨어질 때까지 최대 500ms 대기해 이를 피했으나, 그 탓에 "Shift를
+  떼야만 전환"되고 오래 쥐면 타임아웃 후 실패하는 부작용이 있었다. 이제 대기 대신
+  주입 직전 flagsChanged로 Shift 플래그만 지운다 — Space를 누르는 즉시 전환된다.
+
 ## [0.16.1] — 2026-08-30
 
 ### Changed
