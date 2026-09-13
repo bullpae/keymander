@@ -4,7 +4,153 @@ use super::*;
 #[allow(unused_imports)]
 use super::{items_to_results, save_config};
 
+/// `:set` 목록의 한 행. 화면 표시(name/icon/desc)와 실행 키(action)를 함께 든다.
+struct SettingsRow {
+    name: String,
+    action: String,
+    icon: String,
+    desc: String,
+}
+
+/// 프로바이더 토글 4군(LLM·멀티웹·맞춤법·번역)의 차이점만 모은 표.
+///
+/// 네 군은 "목록에서 켜고 끄되, 전부 끄면 기본값으로 되돌린다"는 동작이 같아
+/// 목록 생성(`settings_rows`)과 토글 실행(`toggle_provider`)을 공유한다.
+struct ProviderGroup {
+    kind: ProviderKind,
+    /// action 키의 가운데 조각 — `kmd:settings:{action_prefix}:toggle:{id}`
+    action_prefix: &'static str,
+    label_prefix: &'static str,
+    emoji: &'static str,
+    ascii: &'static str,
+    desc: &'static str,
+    /// (설정 id, 표시 이름). 순서가 곧 목록 순서다.
+    members: &'static [(&'static str, &'static str)],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderKind {
+    Llm,
+    MultiWeb,
+    Spell,
+    Translate,
+}
+
+const PROVIDER_GROUPS: &[ProviderGroup] = &[
+    ProviderGroup {
+        kind: ProviderKind::Llm,
+        action_prefix: "llm",
+        label_prefix: "Multi LLM",
+        emoji: "\u{1F9E0}",
+        ascii: "[LLM]",
+        desc: "Toggle provider for @llm compare",
+        members: &[
+            ("chatgpt", "ChatGPT"),
+            ("gemini", "Gemini"),
+            ("claude", "Claude"),
+            ("grok", "Grok"),
+            ("perplexity", "Perplexity"),
+        ],
+    },
+    ProviderGroup {
+        kind: ProviderKind::MultiWeb,
+        action_prefix: "mweb",
+        label_prefix: "Multi Web",
+        emoji: "\u{1F50E}",
+        ascii: "[WEB]",
+        desc: "Toggle engine for @msearch multi search",
+        members: &[
+            ("google", "Google"),
+            ("naver_search", "Naver"),
+            ("daum", "Daum"),
+        ],
+    },
+    ProviderGroup {
+        kind: ProviderKind::Spell,
+        action_prefix: "spell",
+        label_prefix: "Spell",
+        emoji: "\u{270D}\u{FE0F}",
+        ascii: "[SPL]",
+        desc: "Toggle provider for @sp spelling check",
+        members: &[
+            ("naver_spell", "Naver Spell"),
+            ("pusan_spell", "Pusan Spell"),
+        ],
+    },
+    ProviderGroup {
+        kind: ProviderKind::Translate,
+        action_prefix: "translate",
+        label_prefix: "Translate",
+        emoji: "\u{1F5E3}\u{FE0F}",
+        ascii: "[TR]",
+        desc: "Toggle provider for @tr translation",
+        members: &[
+            ("google_translate", "Google Translate"),
+            ("papago", "Papago"),
+            ("deepl", "DeepL"),
+        ],
+    },
+];
+
 impl App {
+    /// 군별 현재 선택 목록(App 상태 쪽 정본)에 대한 읽기 접근.
+    fn provider_selection(&self, kind: ProviderKind) -> &Vec<String> {
+        match kind {
+            ProviderKind::Llm => &self.selected_llm_providers,
+            ProviderKind::MultiWeb => &self.selected_multi_web_providers,
+            ProviderKind::Spell => &self.spell_providers,
+            ProviderKind::Translate => &self.translate_providers,
+        }
+    }
+
+    /// 프로바이더 하나를 켜고 끈다. 전부 꺼지면 해당 군의 기본값(모든 멤버)으로
+    /// 되돌린다 — `@llm`/`@sp` 같은 프리픽스가 빈 목록으로 무력화되지 않게 한다.
+    /// App 상태와 `runtime_config`를 함께 갱신하고 config에 저장한다.
+    fn toggle_provider(&mut self, group: &ProviderGroup, target: &str) {
+        if target.is_empty() {
+            return;
+        }
+        let selected = match group.kind {
+            ProviderKind::Llm => &mut self.selected_llm_providers,
+            ProviderKind::MultiWeb => &mut self.selected_multi_web_providers,
+            ProviderKind::Spell => &mut self.spell_providers,
+            ProviderKind::Translate => &mut self.translate_providers,
+        };
+
+        if selected.iter().any(|v| v.eq_ignore_ascii_case(target)) {
+            selected.retain(|v| !v.eq_ignore_ascii_case(target));
+        } else {
+            selected.push(target.to_string());
+        }
+        if selected.is_empty() {
+            *selected = group
+                .members
+                .iter()
+                .map(|(id, _)| (*id).to_string())
+                .collect();
+        }
+
+        let selected = selected.clone();
+        match group.kind {
+            ProviderKind::Llm => {
+                self.runtime_config.launcher.multi_llm_providers = selected.clone();
+                save_config(move |cfg| cfg.launcher.multi_llm_providers = selected);
+            }
+            ProviderKind::MultiWeb => {
+                self.runtime_config.launcher.multi_web_providers = selected.clone();
+                save_config(move |cfg| cfg.launcher.multi_web_providers = selected);
+            }
+            ProviderKind::Spell => {
+                self.runtime_config.launcher.spell_providers = selected.clone();
+                save_config(move |cfg| cfg.launcher.spell_providers = selected);
+            }
+            ProviderKind::Translate => {
+                self.runtime_config.launcher.translate_providers = selected.clone();
+                save_config(move |cfg| cfg.launcher.translate_providers = selected);
+            }
+        }
+    }
+
     fn set_clipboard(text: &str) {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             if let Err(e) = clipboard.set_text(text.to_string()) {
@@ -114,16 +260,38 @@ impl App {
             None => String::new(),
         };
 
+        let items: Vec<IndexItem> = self
+            .settings_rows()
+            .into_iter()
+            .filter(|row| filter.is_empty() || row.name.to_lowercase().contains(&filter))
+            .map(|row| IndexItem {
+                name: row.name,
+                path: row.desc,
+                icon: row.icon,
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                keywords: row.action,
+                icon_path: None,
+            })
+            .collect();
+
+        self.apply_contains_items(items);
+    }
+
+    /// `:set` 목록의 행 전체를 현재 상태 기준으로 만든다 (필터 이전).
+    ///
+    /// 순서가 곧 화면 순서다 — 고정 항목 → 테마 → 프로바이더 4군 → 실행 항목 →
+    /// 정보 행(noop, 실행 불가라 맨 끝).
+    fn settings_rows(&self) -> Vec<SettingsRow> {
         let emoji = self.use_emoji;
         let current_theme = self.theme.name;
-        let autostart_enabled = self.daemon_autostart_enabled;
 
         let ime_label = if self.reset_ime_on_launch {
             "IME: Reset to English on Launch [ON]"
         } else {
             "IME: Reset to English on Launch [OFF]"
         };
-        let daemon_autostart_label = match autostart_enabled {
+        let daemon_autostart_label = match self.daemon_autostart_enabled {
             Some(true) => "Daemon Auto Start [ON]",
             Some(false) => "Daemon Auto Start [OFF]",
             None => "Daemon Auto Start [UNKNOWN]",
@@ -226,93 +394,23 @@ impl App {
             ),
         ];
 
-        let llm_rows = [
-            ("chatgpt", "ChatGPT"),
-            ("gemini", "Gemini"),
-            ("claude", "Claude"),
-            ("grok", "Grok"),
-            ("perplexity", "Perplexity"),
-        ];
-        for (id, provider_name) in llm_rows {
-            let enabled = self
-                .selected_llm_providers
-                .iter()
-                .any(|v| v.eq_ignore_ascii_case(id));
-            settings_entries.push((
-                format!(
-                    "Multi LLM: {} [{}]",
-                    provider_name,
-                    if enabled { "ON" } else { "OFF" }
-                ),
-                format!("kmd:settings:llm:toggle:{id}"),
-                if emoji { "\u{1F9E0}" } else { "[LLM]" }.to_string(),
-                "Toggle provider for @llm compare".to_string(),
-            ));
-        }
-
-        let multi_web_rows = [
-            ("google", "Google"),
-            ("naver_search", "Naver"),
-            ("daum", "Daum"),
-        ];
-        for (id, provider_name) in multi_web_rows {
-            let enabled = self
-                .selected_multi_web_providers
-                .iter()
-                .any(|v| v.eq_ignore_ascii_case(id));
-            settings_entries.push((
-                format!(
-                    "Multi Web: {} [{}]",
-                    provider_name,
-                    if enabled { "ON" } else { "OFF" }
-                ),
-                format!("kmd:settings:mweb:toggle:{id}"),
-                if emoji { "\u{1F50E}" } else { "[WEB]" }.to_string(),
-                "Toggle engine for @msearch multi search".to_string(),
-            ));
-        }
-
-        let spell_rows = [
-            ("naver_spell", "Naver Spell"),
-            ("pusan_spell", "Pusan Spell"),
-        ];
-        for (id, provider_name) in spell_rows {
-            let enabled = self
-                .spell_providers
-                .iter()
-                .any(|v| v.eq_ignore_ascii_case(id));
-            settings_entries.push((
-                format!(
-                    "Spell: {} [{}]",
-                    provider_name,
-                    if enabled { "ON" } else { "OFF" }
-                ),
-                format!("kmd:settings:spell:toggle:{id}"),
-                if emoji { "\u{270D}\u{FE0F}" } else { "[SPL]" }.to_string(),
-                "Toggle provider for @sp spelling check".to_string(),
-            ));
-        }
-
-        let translate_rows = [
-            ("google_translate", "Google Translate"),
-            ("papago", "Papago"),
-            ("deepl", "DeepL"),
-        ];
-        for (id, provider_name) in translate_rows {
-            let enabled = self
-                .translate_providers
-                .iter()
-                .any(|v| v.eq_ignore_ascii_case(id));
-            settings_entries.push((
-                format!(
-                    "Translate: {} [{}]",
-                    provider_name,
-                    if enabled { "ON" } else { "OFF" }
-                ),
-                format!("kmd:settings:translate:toggle:{id}"),
-                if emoji { "\u{1F5E3}\u{FE0F}" } else { "[TR]" }.to_string(),
-                "Toggle provider for @tr translation".to_string(),
-            ));
+        // 프로바이더 4군은 라벨 접두·action 접두·아이콘·설명만 다르고 구조가 같다.
+        for group in PROVIDER_GROUPS {
+            let selected = self.provider_selection(group.kind);
+            for (id, provider_name) in group.members {
+                let enabled = selected.iter().any(|v| v.eq_ignore_ascii_case(id));
+                settings_entries.push((
+                    format!(
+                        "{}: {} [{}]",
+                        group.label_prefix,
+                        provider_name,
+                        if enabled { "ON" } else { "OFF" }
+                    ),
+                    format!("kmd:settings:{}:toggle:{id}", group.action_prefix),
+                    if emoji { group.emoji } else { group.ascii }.to_string(),
+                    group.desc.to_string(),
+                ));
+            }
         }
 
         settings_entries.extend_from_slice(&[
@@ -337,21 +435,15 @@ impl App {
             ),
         ]);
 
-        let items: Vec<IndexItem> = settings_entries
-            .iter()
-            .filter(|(name, _, _, _)| filter.is_empty() || name.to_lowercase().contains(&filter))
-            .map(|(name, action, icon, desc)| IndexItem {
-                name: name.clone(),
-                path: desc.to_string(),
-                icon: icon.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: action.clone(),
-                icon_path: None,
+        settings_entries
+            .into_iter()
+            .map(|(name, action, icon, desc)| SettingsRow {
+                name,
+                action,
+                icon,
+                desc,
             })
-            .collect();
-
-        self.apply_contains_items(items);
+            .collect()
     }
 
     pub(super) fn handle_help_query(&mut self) {
@@ -494,122 +586,21 @@ impl App {
                     Message::AutostartToggleFinished(mapped)
                 });
             }
-            llm_toggle if llm_toggle.starts_with("llm:toggle:") => {
-                let target = llm_toggle.strip_prefix("llm:toggle:").unwrap_or("");
-                if !target.is_empty() {
-                    if self
-                        .selected_llm_providers
-                        .iter()
-                        .any(|v| v.eq_ignore_ascii_case(target))
-                    {
-                        self.selected_llm_providers
-                            .retain(|v| !v.eq_ignore_ascii_case(target));
-                    } else {
-                        self.selected_llm_providers.push(target.to_string());
-                    }
-
-                    // Keep @llm usable even when users turn everything off.
-                    if self.selected_llm_providers.is_empty() {
-                        self.selected_llm_providers = vec![
-                            "chatgpt".to_string(),
-                            "gemini".to_string(),
-                            "claude".to_string(),
-                            "grok".to_string(),
-                            "perplexity".to_string(),
-                        ];
-                    }
-
-                    let selected = self.selected_llm_providers.clone();
-                    self.runtime_config.launcher.multi_llm_providers = selected.clone();
-                    save_config(move |cfg| cfg.launcher.multi_llm_providers = selected);
-                }
-
-                self.query = ":set".to_string();
-                self.handle_settings_query(":set");
-                return self.request_focus();
-            }
-            mweb_toggle if mweb_toggle.starts_with("mweb:toggle:") => {
-                let target = mweb_toggle.strip_prefix("mweb:toggle:").unwrap_or("");
-                if !target.is_empty() {
-                    if self
-                        .selected_multi_web_providers
-                        .iter()
-                        .any(|v| v.eq_ignore_ascii_case(target))
-                    {
-                        self.selected_multi_web_providers
-                            .retain(|v| !v.eq_ignore_ascii_case(target));
-                    } else {
-                        self.selected_multi_web_providers.push(target.to_string());
-                    }
-
-                    if self.selected_multi_web_providers.is_empty() {
-                        self.selected_multi_web_providers = vec![
-                            "google".to_string(),
-                            "naver_search".to_string(),
-                            "daum".to_string(),
-                        ];
-                    }
-
-                    let selected = self.selected_multi_web_providers.clone();
-                    self.runtime_config.launcher.multi_web_providers = selected.clone();
-                    save_config(move |cfg| cfg.launcher.multi_web_providers = selected);
-                }
-
-                self.query = ":set".to_string();
-                self.handle_settings_query(":set");
-                return self.request_focus();
-            }
-            spell_toggle if spell_toggle.starts_with("spell:toggle:") => {
-                let target = spell_toggle.strip_prefix("spell:toggle:").unwrap_or("");
-                if !target.is_empty() {
-                    if self
-                        .spell_providers
-                        .iter()
-                        .any(|v| v.eq_ignore_ascii_case(target))
-                    {
-                        self.spell_providers
-                            .retain(|v| !v.eq_ignore_ascii_case(target));
-                    } else {
-                        self.spell_providers.push(target.to_string());
-                    }
-                    if self.spell_providers.is_empty() {
-                        self.spell_providers =
-                            vec!["naver_spell".to_string(), "pusan_spell".to_string()];
-                    }
-                    let selected = self.spell_providers.clone();
-                    self.runtime_config.launcher.spell_providers = selected.clone();
-                    save_config(move |cfg| cfg.launcher.spell_providers = selected);
-                }
-                self.query = ":set".to_string();
-                self.handle_settings_query(":set");
-                return self.request_focus();
-            }
-            translate_toggle if translate_toggle.starts_with("translate:toggle:") => {
-                let target = translate_toggle
-                    .strip_prefix("translate:toggle:")
+            // 프로바이더 4군은 접두만 다르고 동작이 같다 — 표에서 찾아 공통 처리.
+            provider_action
+                if PROVIDER_GROUPS.iter().any(|g| {
+                    provider_action.starts_with(&format!("{}:toggle:", g.action_prefix))
+                }) =>
+            {
+                let group = PROVIDER_GROUPS
+                    .iter()
+                    .find(|g| provider_action.starts_with(&format!("{}:toggle:", g.action_prefix)))
+                    .expect("가드에서 확인한 군");
+                let target = provider_action
+                    .strip_prefix(&format!("{}:toggle:", group.action_prefix))
                     .unwrap_or("");
-                if !target.is_empty() {
-                    if self
-                        .translate_providers
-                        .iter()
-                        .any(|v| v.eq_ignore_ascii_case(target))
-                    {
-                        self.translate_providers
-                            .retain(|v| !v.eq_ignore_ascii_case(target));
-                    } else {
-                        self.translate_providers.push(target.to_string());
-                    }
-                    if self.translate_providers.is_empty() {
-                        self.translate_providers = vec![
-                            "google_translate".to_string(),
-                            "papago".to_string(),
-                            "deepl".to_string(),
-                        ];
-                    }
-                    let selected = self.translate_providers.clone();
-                    self.runtime_config.launcher.translate_providers = selected.clone();
-                    save_config(move |cfg| cfg.launcher.translate_providers = selected);
-                }
+                self.toggle_provider(group, target);
+
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
                 return self.request_focus();

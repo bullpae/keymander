@@ -2673,4 +2673,175 @@ mod tests {
             );
         }
     }
+
+    // ── :set 목록·토글 characterization (settings.rs 분해 보호) ──
+    //
+    // handle_settings_query(246줄)/handle_settings_action(274줄)을 분해하기 전에
+    // 바깥에서 보이는 계약을 고정한다: 어떤 행이 어떤 action 키로 서는지, 토글이
+    // runtime_config와 목록 라벨에 반영되는지, 전체 해제 시 기본값으로 복구되는지.
+
+    fn settings_actions(app: &mut App) -> Vec<String> {
+        app.handle_settings_query(":set");
+        app.results
+            .iter()
+            .map(|r| r.item.keywords.clone())
+            .collect()
+    }
+
+    fn settings_label(app: &mut App, action: &str) -> String {
+        app.handle_settings_query(":set");
+        app.results
+            .iter()
+            .find(|r| r.item.keywords == action)
+            .map(|r| r.item.name.clone())
+            .unwrap_or_else(|| panic!("행 없음: {action}"))
+    }
+
+    fn run_settings_action(app: &mut App, action: &str) {
+        app.handle_settings_query(":set");
+        let hit = app
+            .results
+            .iter()
+            .find(|r| r.item.keywords == action)
+            .unwrap_or_else(|| panic!("행 없음: {action}"))
+            .clone();
+        let _ = app.handle_settings_action(&hit);
+    }
+
+    #[test]
+    fn set_목록_행_구성_스냅샷() {
+        let mut app = make_test_app();
+        let actions = settings_actions(&mut app);
+
+        // 고정 항목이 이 순서로 먼저 온다
+        let head: Vec<&str> = actions.iter().take(7).map(String::as_str).collect();
+        assert_eq!(
+            head,
+            vec![
+                "kmd:settings:config",
+                "kmd:settings:dir",
+                "kmd:settings:noop",
+                "kmd:settings:reset_position",
+                "kmd:settings:toggle_ime_reset",
+                "kmd:settings:toggle_autostart",
+                "kmd:settings:toggle_brand_icons",
+            ]
+        );
+
+        // 테마 5종 + 프로바이더 4군 + 꼬리
+        for expected in [
+            "kmd:settings:theme:keymander",
+            "kmd:settings:theme:obsidian",
+            "kmd:settings:theme:snow",
+            "kmd:settings:theme:rose_pine",
+            "kmd:settings:theme:nord",
+            "kmd:settings:llm:toggle:chatgpt",
+            "kmd:settings:llm:toggle:perplexity",
+            "kmd:settings:mweb:toggle:google",
+            "kmd:settings:mweb:toggle:daum",
+            "kmd:settings:spell:toggle:naver_spell",
+            "kmd:settings:spell:toggle:pusan_spell",
+            "kmd:settings:translate:toggle:google_translate",
+            "kmd:settings:translate:toggle:deepl",
+            "kmd:settings:rebuild",
+        ] {
+            assert!(actions.iter().any(|a| a == expected), "빠진 행: {expected}");
+        }
+
+        // 정보 행(noop)은 맨 끝에 모여 있다
+        let last_two: Vec<&str> = actions.iter().rev().take(2).map(String::as_str).collect();
+        assert_eq!(last_two, vec!["kmd:settings:noop", "kmd:settings:noop"]);
+    }
+
+    #[test]
+    fn set_목록은_질의어로_걸러진다() {
+        let mut app = make_test_app();
+        app.handle_settings_query(":set theme");
+        assert!(!app.results.is_empty());
+        assert!(
+            app.results
+                .iter()
+                .all(|r| r.item.name.to_lowercase().contains("theme")),
+            "필터에 맞지 않는 행이 남아 있다"
+        );
+    }
+
+    #[test]
+    fn 프로바이더_토글은_config와_라벨에_반영된다() {
+        let mut app = make_test_app();
+        let action = "kmd:settings:llm:toggle:chatgpt";
+
+        assert!(settings_label(&mut app, action).contains("[ON]"));
+        run_settings_action(&mut app, action);
+
+        assert!(
+            !app.runtime_config
+                .launcher
+                .multi_llm_providers
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case("chatgpt")),
+            "토글 후 config에서 빠져야 함"
+        );
+        assert!(settings_label(&mut app, action).contains("[OFF]"));
+
+        run_settings_action(&mut app, action);
+        assert!(
+            settings_label(&mut app, action).contains("[ON]"),
+            "재토글 복귀"
+        );
+    }
+
+    #[test]
+    fn 프로바이더_전체해제시_기본값으로_복구된다() {
+        let mut app = make_test_app();
+        for id in ["naver_spell", "pusan_spell"] {
+            run_settings_action(&mut app, &format!("kmd:settings:spell:toggle:{id}"));
+        }
+        assert_eq!(
+            app.spell_providers,
+            vec!["naver_spell".to_string(), "pusan_spell".to_string()],
+            "전부 끄면 기본값으로 되돌아와야 @sp가 계속 동작한다"
+        );
+    }
+
+    #[test]
+    fn ime_토글은_상태와_config를_함께_바꾼다() {
+        let mut app = make_test_app();
+        let before = app.reset_ime_on_launch;
+        run_settings_action(&mut app, "kmd:settings:toggle_ime_reset");
+        assert_eq!(app.reset_ime_on_launch, !before);
+        assert_eq!(app.runtime_config.general.reset_ime_on_launch, !before);
+        assert_eq!(app.query, ":set", "토글 후 목록에 머문다");
+    }
+
+    #[test]
+    fn 테마_액션은_테마와_config를_바꾸고_목록을_닫는다() {
+        let mut app = make_test_app();
+        run_settings_action(&mut app, "kmd:settings:theme:nord");
+        assert_eq!(app.runtime_config.general.theme, "nord");
+        assert!(app.query.is_empty(), "테마 적용 후에는 목록을 닫는다");
+    }
+
+    #[test]
+    fn 알_수_없는_액션과_noop은_상태를_망가뜨리지_않는다() {
+        let mut app = make_test_app();
+        app.handle_settings_query(":set");
+        let noop = app
+            .results
+            .iter()
+            .find(|r| r.item.keywords == "kmd:settings:noop")
+            .cloned()
+            .expect("noop 행");
+        app.query = ":set".to_string();
+        let _ = app.handle_settings_action(&noop);
+        assert_eq!(
+            app.query, ":set",
+            "noop은 쿼리를 건드리지 않고 즉시 반환한다"
+        );
+
+        let mut unknown = noop.clone();
+        unknown.item.keywords = "kmd:settings:no_such_action".to_string();
+        let _ = app.handle_settings_action(&unknown);
+        assert!(app.query.is_empty(), "미지 액션은 경고 후 목록을 닫는다");
+    }
 }

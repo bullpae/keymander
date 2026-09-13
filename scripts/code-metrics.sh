@@ -21,13 +21,21 @@ find crates src -name '*.rs' -not -path '*/target/*' -print0 \
 
 echo
 echo "== 가장 긴 함수 (상위 10, 근사치 — 다음 fn까지의 거리라 사이 항목이 섞일 수 있다) =="
+# FNR(파일별 행 번호)과 파일 전환 감지를 쓴다. NR과 FILENAME을 쓰면 길이가
+# 파일 경계를 넘어 누적되고, 소속 파일도 "다음 fn이 나온 파일"로 잘못 붙는다.
 find crates src -name '*.rs' -not -path '*/target/*' -print0 \
   | xargs -0 awk '
-      /^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?(unsafe[[:space:]]+)?fn / {
-          if (name != "") print NR - start, name, FILENAME
-          name = $0; start = NR
+      FNR == 1 {
+          if (name != "") print prev_lines - start, name, file " :" start
+          name = ""
+          file = FILENAME
       }
-      END { if (name != "") print NR - start, name, FILENAME }' \
+      { prev_lines = FNR }
+      /^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?(unsafe[[:space:]]+)?fn / {
+          if (name != "") print FNR - start, name, file " :" start
+          name = $0; start = FNR; file = FILENAME
+      }
+      END { if (name != "") print prev_lines - start, name, file " :" start }' \
   | sort -rn | head -10 \
   | sed 's/^\([0-9]*\) */  \1줄  /'
 
