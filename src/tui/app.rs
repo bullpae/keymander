@@ -1415,19 +1415,7 @@ fn handle_main_search(
     if mode == SearchMode::Url {
         let (_, normalized_url) = SearchMode::detect(query);
         results = engine.search_with_mode(SearchMode::Contains, query.trim(), SEARCH_RESULT_LIMIT);
-        let url_item = kmd_core::IndexItem {
-            name: format!("Open {}", normalized_url),
-            path: normalized_url.clone(),
-            kind: ItemKind::WebSearch,
-            source: Source::Plugin,
-            icon: if state.use_emoji {
-                "\u{1F310}".to_string() // 🌐
-            } else {
-                "Ww".to_string()
-            },
-            keywords: normalized_url,
-            icon_path: None,
-        };
+        let url_item = kmd_core::query_prefix::url_open_item(&normalized_url, state.use_emoji);
         results.insert(
             0,
             SearchResult {

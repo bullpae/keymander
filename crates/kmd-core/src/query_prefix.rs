@@ -507,6 +507,71 @@ pub fn calc_items(query: &str, use_emoji: bool) -> Vec<IndexItem> {
     crate::plugin::builtin_calc::CalcExtension.search_with_emoji(expr, use_emoji)
 }
 
+/// 빈 입력일 때 보여줄 최근 실행 항목.
+///
+/// 런처를 처음 연 사람에게 "여기서 뭘 할 수 있는지"를 보여주는 유일한 단서다.
+/// 아무것도 안 띄우면 빈 화면이라 학습 단서가 없다(데스크톱이 그 상태였다).
+/// 아이콘 앞의 `*`는 "이력에서 온 항목"이라는 표시다.
+pub fn recent_items(db: &crate::Database, limit: usize, use_emoji: bool) -> Vec<IndexItem> {
+    db.query_history(limit)
+        .into_iter()
+        .map(|h| {
+            let kind = match h.item_type.as_str() {
+                "App" => ItemKind::App,
+                "File" => ItemKind::File,
+                "Dir" => ItemKind::Directory,
+                "Exe" => ItemKind::Executable,
+                "System" => ItemKind::SystemCommand,
+                "Web" => ItemKind::WebSearch,
+                _ => ItemKind::App,
+            };
+            let base_icon = match kind {
+                ItemKind::Directory => {
+                    if use_emoji {
+                        "\u{1F4C1}"
+                    } else {
+                        ">>"
+                    }
+                }
+                _ => {
+                    if use_emoji {
+                        "\u{1F4C4}"
+                    } else {
+                        ".."
+                    }
+                }
+            };
+            let first_char = base_icon.chars().next().unwrap_or('?');
+            IndexItem {
+                name: h.display,
+                path: h.value,
+                kind,
+                source: Source::FileProvider,
+                icon: format!("*{first_char}"),
+                keywords: String::new(),
+                icon_path: None,
+            }
+        })
+        .collect()
+}
+
+/// 입력이 URL로 판정됐을 때 목록 맨 위에 세울 "열기" 항목.
+///
+/// Enter는 항상 **선택된 항목**을 실행하므로, URL을 열려면 열 수 있는 항목이
+/// 목록에 있어야 한다. 이 항목이 없으면 `example.com`을 쳐도 열 방법이 없다
+/// (데스크톱이 그 상태였다). 파일 검색 결과는 그대로 아래에 남는다.
+pub fn url_open_item(normalized_url: &str, use_emoji: bool) -> IndexItem {
+    IndexItem {
+        name: format!("Open {normalized_url}"),
+        path: normalized_url.to_string(),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{1F310}" } else { "Ww" }.to_string(),
+        keywords: normalized_url.to_string(),
+        icon_path: None,
+    }
+}
+
 /// `:emoji <키워드>` / `:e <키워드>` — 이모지 항목.
 pub fn emoji_items(query: &str) -> Vec<IndexItem> {
     let keyword = query
@@ -548,6 +613,38 @@ mod tests {
     //
     // 이 별칭 파싱이 예전에는 두 UI에 각각 복사돼 있었다. 별칭을 하나 늘릴 때
     // 한쪽만 고치면 같은 입력에 다른 결과가 나온다.
+
+    #[test]
+    fn url_열기_항목은_열_수_있는_경로를_담는다() {
+        let item = url_open_item("https://example.com", false);
+        assert_eq!(item.kind, ItemKind::WebSearch);
+        assert_eq!(item.path, "https://example.com", "Enter가 열 대상");
+        assert!(item.name.starts_with("Open "), "{}", item.name);
+        // 이모지 유무로 아이콘만 갈린다
+        assert_ne!(item.icon, url_open_item("https://example.com", true).icon);
+    }
+
+    #[test]
+    fn 최근_항목은_이력_표시를_달고_나온다() {
+        let db = crate::Database::open_in_memory().unwrap();
+        crate::history::record_launch(&db, "app", "/Applications/Safari.app", Some("Safari"));
+
+        let items = recent_items(&db, 10, false);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Safari");
+        assert_eq!(items[0].path, "/Applications/Safari.app");
+        assert!(
+            items[0].icon.starts_with('*'),
+            "이력에서 온 항목 표시: {}",
+            items[0].icon
+        );
+    }
+
+    #[test]
+    fn 이력이_없으면_최근_항목도_없다() {
+        let db = crate::Database::open_in_memory().unwrap();
+        assert!(recent_items(&db, 10, false).is_empty());
+    }
 
     #[test]
     fn emoji_별칭_두_가지가_같은_키워드를_준다() {

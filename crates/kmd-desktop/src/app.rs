@@ -46,6 +46,8 @@ mod view;
 
 pub const DEFAULT_WIDTH: f32 = 1000.0;
 const SEARCH_LIMIT: usize = 50;
+/// 빈 입력일 때 보여줄 최근 실행 항목 수 (TUI와 동일).
+const RECENT_DISPLAY_LIMIT: usize = 20;
 const SCORE_PLUGIN: u32 = u32::MAX;
 
 /// 카드 외곽 래퍼 padding — 바깥 링(peach)과 창 가장자리 사이 간격.
@@ -325,6 +327,9 @@ pub struct App {
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
+    /// 상태바에 잠깐 띄울 알림 (저장 실패 등). 다음 검색에서 지워진다.
+    /// 이벤트는 검색 결과가 아니므로 결과 목록에 끼워 넣지 않는다.
+    status_message: Option<String>,
 
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
@@ -751,6 +756,7 @@ impl App {
             focus_request_count: 0,
             boot_focus_done: false,
             reset_ime_on_launch: reset_ime,
+            status_message: None,
             full_warmup_started: false,
             warmup_token: 0,
         };
@@ -1618,17 +1624,30 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
     });
 }
 
-/// Load → mutate → save the user config file. Logs on failure.
-fn save_config(f: impl FnOnce(&mut kmd_core::Config)) {
+/// 설정 파일을 디스크에서 다시 읽어 해당 필드만 고쳐 저장한다.
+///
+/// 통째로 덮어쓰지 않는 이유: 데몬이나 다른 인스턴스가 같은 파일을 만졌을 때
+/// 우리 메모리 캐시로 그 변경을 지워버리지 않기 위해서다.
+///
+/// 실패하면 사용자에게 보여줄 메시지를 돌려준다 — 조용히 로그만 남기면
+/// 사용자는 설정이 저장된 줄 안다.
+fn save_config(f: impl FnOnce(&mut kmd_core::Config)) -> Option<String> {
     let config_dir = kmd_core::Config::default_config_dir();
     match kmd_core::Config::load(&config_dir) {
         Ok(mut cfg) => {
             f(&mut cfg);
-            if let Err(e) = cfg.save() {
-                tracing::warn!("Failed to save config: {e}");
+            match cfg.save() {
+                Ok(()) => None,
+                Err(e) => {
+                    tracing::warn!("Failed to save config: {e}");
+                    Some(format!("설정 저장 실패: {e}"))
+                }
             }
         }
-        Err(e) => tracing::warn!("Failed to load config for save: {e}"),
+        Err(e) => {
+            tracing::warn!("Failed to load config for save: {e}");
+            Some(format!("설정을 읽지 못해 저장하지 못했습니다: {e}"))
+        }
     }
 }
 
@@ -2672,6 +2691,54 @@ mod tests {
                 "#{i} settings 나가기 입력 처리에서도 refocus 강제 없음"
             );
         }
+    }
+
+    // ── 정본 통합: URL 열기 항목 · 최근 이력 · 상태 알림 ────────────────
+
+    #[test]
+    fn url을_입력하면_열_수_있는_항목이_맨_위에_선다() {
+        let mut app = make_test_app();
+        app.query = "example.com".into();
+        app.handle_main_search("example.com");
+
+        assert!(!app.results.is_empty(), "열 항목이 있어야 한다");
+        assert_eq!(app.results[0].item.kind, kmd_core::ItemKind::WebSearch);
+        assert!(
+            app.results[0].item.path.contains("example.com"),
+            "{}",
+            app.results[0].item.path
+        );
+    }
+
+    #[test]
+    fn 빈_입력이면_최근_실행_항목을_보여준다() {
+        let mut app = make_test_app();
+        kmd_core::history::record_launch(
+            &app.db,
+            "app",
+            "/Applications/Safari.app",
+            Some("Safari"),
+        );
+
+        app.query = String::new();
+        let _ = app.perform_search();
+
+        assert_eq!(app.results.len(), 1, "이력 1건이 보여야 한다");
+        assert_eq!(app.results[0].item.name, "Safari");
+    }
+
+    #[test]
+    fn 상태_알림은_다음_검색에서_지워진다() {
+        let mut app = make_test_app();
+        app.status_message = Some("설정 저장 실패: 디스크 오류".into());
+
+        app.query = "safari".into();
+        let _ = app.perform_search();
+
+        assert!(
+            app.status_message.is_none(),
+            "알림은 짧은 수명 — 다음 검색에서 사라진다"
+        );
     }
 
     // ── :t 는 검색 중에 브라우저를 열지 않는다 ──────────────────────────

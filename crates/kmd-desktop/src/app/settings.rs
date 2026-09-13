@@ -131,24 +131,25 @@ impl App {
         }
 
         let selected = selected.clone();
-        match group.kind {
+        let failure = match group.kind {
             ProviderKind::Llm => {
                 self.runtime_config.launcher.multi_llm_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.multi_llm_providers = selected);
+                save_config(move |cfg| cfg.launcher.multi_llm_providers = selected)
             }
             ProviderKind::MultiWeb => {
                 self.runtime_config.launcher.multi_web_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.multi_web_providers = selected);
+                save_config(move |cfg| cfg.launcher.multi_web_providers = selected)
             }
             ProviderKind::Spell => {
                 self.runtime_config.launcher.spell_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.spell_providers = selected);
+                save_config(move |cfg| cfg.launcher.spell_providers = selected)
             }
             ProviderKind::Translate => {
                 self.runtime_config.launcher.translate_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.translate_providers = selected);
+                save_config(move |cfg| cfg.launcher.translate_providers = selected)
             }
-        }
+        };
+        self.status_message = failure;
     }
 
     fn set_clipboard(text: &str) {
@@ -542,7 +543,8 @@ impl App {
                 let new_val = if mono { "color" } else { "mono" };
                 self.runtime_config.general.brand_icons = new_val.to_string();
                 tracing::info!("brand_icons = {new_val}");
-                save_config(|cfg| cfg.general.brand_icons = new_val.to_string());
+                self.status_message =
+                    save_config(|cfg| cfg.general.brand_icons = new_val.to_string());
 
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
@@ -553,7 +555,7 @@ impl App {
                 let new_val = self.reset_ime_on_launch;
                 self.runtime_config.general.reset_ime_on_launch = new_val;
                 tracing::info!("reset_ime_on_launch = {new_val}");
-                save_config(|cfg| cfg.general.reset_ime_on_launch = new_val);
+                self.status_message = save_config(|cfg| cfg.general.reset_ime_on_launch = new_val);
 
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
@@ -613,7 +615,7 @@ impl App {
 
                 // Persist theme selection to config file.
                 let name_owned = theme_name.to_string();
-                save_config(|cfg| cfg.general.theme = name_owned);
+                self.status_message = save_config(|cfg| cfg.general.theme = name_owned);
             }
             _ => {
                 tracing::warn!("Unknown settings action: {action}");

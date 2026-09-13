@@ -559,11 +559,16 @@ impl App {
     pub(super) fn view_status_bar(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let u = self.ui;
-        let status_text = format!(
-            "{}  \u{00B7}  {} results",
-            self.search_mode.label(),
-            self.results.len()
-        );
+        // 알릴 일이 있으면 모드·개수 자리를 잠시 내준다 — 저장 실패 같은
+        // 이벤트는 검색 결과가 아니므로 결과 목록에 끼워 넣지 않는다.
+        let status_text = match &self.status_message {
+            Some(msg) => msg.clone(),
+            None => format!(
+                "{}  \u{00B7}  {} results",
+                self.search_mode.label(),
+                self.results.len()
+            ),
+        };
 
         let left = text(status_text).size(u.status_font).color(t.overlay);
         let right = text("Esc to close").size(u.status_font).color(t.overlay);

@@ -10,9 +10,20 @@ impl App {
         let generation = self.search_generation;
         let query = self.query.clone();
         let trimmed = query.trim();
+        // 알림은 짧은 수명 — 다음 검색이 시작되면 지운다 (TUI와 같은 규칙).
+        self.status_message = None;
 
         if trimmed.is_empty() {
             self.clear_results_state(kmd_core::SearchMode::Fuzzy);
+            // 빈 화면 대신 최근 실행 항목 — 처음 연 사람에게 유일한 학습 단서다.
+            let recent = kmd_core::query_prefix::recent_items(
+                &self.db,
+                RECENT_DISPLAY_LIMIT,
+                self.use_emoji,
+            );
+            if !recent.is_empty() {
+                self.apply_contains_items(recent);
+            }
             return Task::none();
         }
 
@@ -188,10 +199,19 @@ impl App {
                         },
                     );
                     let templates_to_save = self.runtime_config.launcher.prompt_templates.clone();
-                    save_config(move |c| c.launcher.prompt_templates = templates_to_save);
+                    let failure =
+                        save_config(move |c| c.launcher.prompt_templates = templates_to_save);
+                    // 저장에 실패했는데 "저장됨"이라고 말하면 안 된다.
+                    let (headline, detail) = match &failure {
+                        Some(err) => (format!("템플릿 '{name}' 저장 실패"), err.clone()),
+                        None => (
+                            format!("✅ 템플릿 '{name}' 저장됨"),
+                            format!("@ll :{name} <query> 형태로 사용"),
+                        ),
+                    };
                     self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                        name: format!("✅ 템플릿 '{name}' 저장됨"),
-                        path: format!("@ll :{name} <query> 형태로 사용"),
+                        name: headline,
+                        path: detail,
                         kind: ItemKind::SystemCommand,
                         source: Source::Plugin,
                         icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
@@ -248,10 +268,18 @@ impl App {
                     .prompt_templates
                     .retain(|t| !t.name.eq_ignore_ascii_case(&name_owned));
                 let templates_to_save = self.runtime_config.launcher.prompt_templates.clone();
-                save_config(move |cfg| cfg.launcher.prompt_templates = templates_to_save);
+                let failure =
+                    save_config(move |cfg| cfg.launcher.prompt_templates = templates_to_save);
+                let (headline, detail) = match &failure {
+                    Some(err) => (
+                        format!("템플릿 '{display_name}' 삭제 저장 실패"),
+                        err.clone(),
+                    ),
+                    None => (format!("✅ 템플릿 '{display_name}' 삭제됨"), String::new()),
+                };
                 self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                    name: format!("✅ 템플릿 '{display_name}' 삭제됨"),
-                    path: String::new(),
+                    name: headline,
+                    path: detail,
                     kind: ItemKind::SystemCommand,
                     source: Source::Plugin,
                     icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
@@ -351,6 +379,24 @@ impl App {
     pub(super) fn handle_main_search(&mut self, query: &str) {
         let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
         self.search_mode = mode;
+
+        // URL로 판정된 입력: 파일 검색은 그대로 두고 "열기" 항목을 맨 위에 세운다.
+        // 이게 없으면 example.com 을 쳐도 열 방법이 없다.
+        if mode == kmd_core::SearchMode::Url {
+            let (_, normalized_url) = kmd_core::SearchMode::detect(query);
+            results = self.engine.search_with_mode(
+                kmd_core::SearchMode::Contains,
+                query.trim(),
+                SEARCH_LIMIT,
+            );
+            results.insert(
+                0,
+                kmd_core::SearchResult {
+                    item: kmd_core::query_prefix::url_open_item(&normalized_url, self.use_emoji),
+                    score: SCORE_PLUGIN,
+                },
+            );
+        }
 
         // 실행 이력 기반으로 자주 사용하는 항목의 점수를 높인다.
         // 키 입력마다 호출되는 핫패스 — DB 조회 대신 부팅 시 로드한 맵 사용.
