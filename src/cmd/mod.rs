@@ -21,16 +21,11 @@ pub fn load_or_build_index(
     use_emoji: bool,
 ) -> kmd_core::Index {
     let (bin_path, json_path) = index_cache_paths();
-    let expected_version = kmd_core::Index::current_version();
-
-    if let Some(index) =
-        kmd_core::index::store::try_load_cached(&bin_path, &json_path, expected_version)
-    {
-        return index;
-    }
-
-    let index = kmd_core::Index::build(launcher_config, use_emoji);
-    kmd_core::index::store::save_both(&index, &bin_path, &json_path);
+    // CLI는 나이를 따지지 않는다 — 데스크톱만 데몬 부재 폴백용 freshness를 건다.
+    let (index, _built) =
+        kmd_core::index::store::load_cached_or_build(&bin_path, &json_path, None, || {
+            kmd_core::Index::build(launcher_config, use_emoji)
+        });
     index
 }
 

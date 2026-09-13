@@ -129,6 +129,29 @@ pub fn try_load_cached_with_max_age(
     None
 }
 
+/// 캐시 로드 → (실패 시) 빌드 → 저장. CLI·TUI·데스크톱이 각자 반복하던
+/// 3단 절차를 한 곳에 둔다.
+///
+/// 호출자마다 다른 것은 정책뿐이라 인자로 받는다 — 캐시 경로 쌍, `max_age`
+/// (None이면 나이 무시), 그리고 캐시 미스일 때 무엇을 빌드할지(`build`).
+/// 반환값의 `bool`은 "빌드했는가" — 호출자가 로깅이나 후처리를 구분할 때 쓴다.
+pub fn load_cached_or_build(
+    bin_path: &Path,
+    json_path: &Path,
+    max_age: Option<std::time::Duration>,
+    build: impl FnOnce() -> Index,
+) -> (Index, bool) {
+    let expected_version = Index::current_version();
+    if let Some(cached) =
+        try_load_cached_with_max_age(bin_path, json_path, expected_version, max_age)
+    {
+        return (cached, false);
+    }
+    let index = build();
+    save_both(&index, bin_path, json_path);
+    (index, true)
+}
+
 fn is_file_too_old(path: &Path, max_age: Option<std::time::Duration>) -> bool {
     let Some(max) = max_age else {
         return false;
@@ -185,6 +208,73 @@ mod tests {
             icon_path: None,
         });
         index
+    }
+
+    /// 캐시로 저장·재로드될 수 있는 인덱스 — `Index::new()`는 version이 비어 있어
+    /// 그대로 쓰면 버전 불일치로 항상 거부된다.
+    fn versioned_sample_index() -> Index {
+        let mut index = sample_index();
+        index.version = Index::current_version().to_string();
+        index
+    }
+
+    #[test]
+    fn 캐시가_없으면_빌드하고_저장한다() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("index.bin");
+        let json = dir.path().join("index.json");
+
+        let (index, built) = load_cached_or_build(&bin, &json, None, versioned_sample_index);
+        assert!(built, "캐시가 없으므로 빌드해야 한다");
+        assert_eq!(index.items.len(), 2);
+        assert!(
+            bin.exists() && json.exists(),
+            "빌드 결과를 두 형식으로 저장"
+        );
+    }
+
+    #[test]
+    fn 캐시가_있으면_빌드하지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("index.bin");
+        let json = dir.path().join("index.json");
+        save_both(&versioned_sample_index(), &bin, &json);
+
+        let (index, built) = load_cached_or_build(&bin, &json, None, || {
+            panic!("캐시 히트 시 build를 부르면 안 된다")
+        });
+        assert!(!built);
+        assert_eq!(index.items.len(), 2);
+    }
+
+    #[test]
+    fn 버전이_다른_캐시는_무시하고_다시_빌드한다() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("index.bin");
+        let json = dir.path().join("index.json");
+        let mut stale = sample_index();
+        stale.version = "v0-ancient".to_string();
+        save_both(&stale, &bin, &json);
+
+        let (_, built) = load_cached_or_build(&bin, &json, None, versioned_sample_index);
+        assert!(built, "스키마 버전이 다르면 캐시를 버린다");
+    }
+
+    #[test]
+    fn 캐시가_max_age보다_오래되면_다시_빌드한다() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("index.bin");
+        let json = dir.path().join("index.json");
+        save_both(&versioned_sample_index(), &bin, &json);
+
+        // 나이 0 = 방금 쓴 캐시도 이미 낡은 것으로 본다
+        let (_, built) = load_cached_or_build(
+            &bin,
+            &json,
+            Some(std::time::Duration::from_secs(0)),
+            versioned_sample_index,
+        );
+        assert!(built, "max_age를 넘긴 캐시는 무시하고 새로 빌드한다");
     }
 
     #[test]

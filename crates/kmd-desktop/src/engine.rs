@@ -68,60 +68,46 @@ pub fn create_quick_search_engine(config: &kmd_core::Config) -> kmd_core::Search
 }
 
 fn load_or_build_quick_index(use_emoji: bool) -> kmd_core::Index {
-    use kmd_core::index::store;
-
-    let started = Instant::now();
     let desktop_dir = kmd_core::Config::default_data_dir().join("desktop");
-    let bin_path = desktop_dir.join(QUICK_INDEX_CACHE_BIN_FILENAME);
-    let json_path = desktop_dir.join(QUICK_INDEX_CACHE_FILENAME);
-    let expected_version = kmd_core::Index::current_version();
-
-    // 데몬 리프레셔가 갱신하는 캐시 — freshness 한계는 데몬 부재 시 폴백
-    let max_age = Some(Duration::from_secs(INDEX_FRESHNESS_SECS));
-    if let Some(cached) =
-        store::try_load_cached_with_max_age(&bin_path, &json_path, expected_version, max_age)
-    {
-        tracing::info!(
-            "Quick index cache hit in {} ms",
-            started.elapsed().as_millis()
-        );
-        return cached;
-    }
-
-    let index = kmd_core::Index::build_quick(use_emoji);
-    store::save_both(&index, &bin_path, &json_path);
-    tracing::info!(
-        "Quick index rebuilt from source in {} ms",
-        started.elapsed().as_millis()
-    );
-    index
+    load_index_logged(
+        "Quick index",
+        &desktop_dir.join(QUICK_INDEX_CACHE_BIN_FILENAME),
+        &desktop_dir.join(QUICK_INDEX_CACHE_FILENAME),
+        || kmd_core::Index::build_quick(use_emoji),
+    )
 }
 
 /// 인덱스 로드: bincode → JSON fallback → 새로 빌드.
 /// 캐시가 24시간보다 오래되면 새로 빌드하여 새 앱/CLI를 반영한다.
 fn load_or_build_index(config: &kmd_core::Config) -> kmd_core::Index {
-    use kmd_core::index::store;
-
-    let started = Instant::now();
     let data_dir = kmd_core::Config::default_data_dir();
-    let bin_path = data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME);
-    let json_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
-    let expected_version = kmd_core::Index::current_version();
+    load_index_logged(
+        "Index",
+        &data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME),
+        &data_dir.join(kmd_core::INDEX_CACHE_FILENAME),
+        || kmd_core::Index::build(&config.launcher, config.general.emoji_icons),
+    )
+}
 
+/// 데스크톱 공통 인덱스 로드 — 코어의 캐시/빌드 절차에 소요 시간 로깅만 얹는다.
+///
+/// 두 캐시 모두 데몬 리프레셔가 갱신하므로 freshness 한계를 둔다 —
+/// 데몬이 없을 때 낡은 캐시에 갇히지 않기 위한 폴백이다.
+fn load_index_logged(
+    label: &str,
+    bin_path: &std::path::Path,
+    json_path: &std::path::Path,
+    build: impl FnOnce() -> kmd_core::Index,
+) -> kmd_core::Index {
+    let started = Instant::now();
     let max_age = Some(Duration::from_secs(INDEX_FRESHNESS_SECS));
-    if let Some(cached) =
-        store::try_load_cached_with_max_age(&bin_path, &json_path, expected_version, max_age)
-    {
-        tracing::info!("Index cache hit in {} ms", started.elapsed().as_millis());
-        return cached;
+    let (index, built) =
+        kmd_core::index::store::load_cached_or_build(bin_path, json_path, max_age, build);
+    let elapsed = started.elapsed().as_millis();
+    if built {
+        tracing::info!("{label} rebuilt from source in {elapsed} ms");
+    } else {
+        tracing::info!("{label} cache hit in {elapsed} ms");
     }
-
-    tracing::info!("Index cache miss or stale — rebuilding");
-    let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
-    store::save_both(&index, &bin_path, &json_path);
-    tracing::info!(
-        "Index built from source in {} ms",
-        started.elapsed().as_millis()
-    );
     index
 }
