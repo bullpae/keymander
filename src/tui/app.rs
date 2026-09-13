@@ -132,6 +132,30 @@ struct DrillState {
 }
 
 impl AppState {
+    /// `config`에서 파생되는 필드들을 다시 채운다.
+    ///
+    /// 이 필드들은 렌더·핸들러 경로에서 자주 읽혀 캐시로 두고 있다. 정본은 항상
+    /// `self.config`이고, 설정이 바뀌는 경로(설정 모달 저장 등)는 config를 고친 뒤
+    /// 이 함수 하나만 부르면 된다 — 예전에는 저장 시 12줄을 손으로 재대입해서
+    /// 필드가 늘 때마다 누락되기 쉬웠다. `emoji_icons`는 인덱스 재빌드와 함께
+    /// 다뤄야 해서 호출자가 따로 처리한다.
+    fn sync_config_mirrors(&mut self) {
+        let general = &self.config.general;
+        let launcher = &self.config.launcher;
+        self.show_preview = general.show_preview;
+        self.preview_width_percent = general.preview_width_percent;
+        self.quit_on_launch = launcher.quit_on_launch;
+        self.selected_llm_providers = launcher.multi_llm_providers.clone();
+        self.multi_llm_prefixes = launcher.multi_llm_prefixes.clone();
+        self.llm_autopilot = launcher.llm_autopilot;
+        self.selected_multi_web_providers = launcher.multi_web_providers.clone();
+        self.multi_web_prefixes = launcher.multi_web_prefixes.clone();
+        self.spell_providers = launcher.spell_providers.clone();
+        self.spell_prefixes = launcher.spell_prefixes.clone();
+        self.translate_providers = launcher.translate_providers.clone();
+        self.translate_prefixes = launcher.translate_prefixes.clone();
+    }
+
     pub fn search_mode_label(&self) -> &str {
         self.search_mode.label()
     }
@@ -205,18 +229,17 @@ pub fn run_app(
     let total_items = index.items.len();
     engine.load(index.items);
 
-    // Initialize state
-    let cached_config = config.clone();
+    // Initialize state — config 파생 필드는 sync_config_mirrors가 채운다.
     let mut state = AppState {
         query: String::new(),
         results: Vec::new(),
         selected_index: 0,
         total_items,
-        show_preview: config.general.show_preview,
-        preview_width_percent: config.general.preview_width_percent,
+        show_preview: false,
+        preview_width_percent: 0,
         search_mode: SearchMode::Fuzzy,
         should_quit: false,
-        quit_on_launch: config.launcher.quit_on_launch,
+        quit_on_launch: false,
         hangul_mode: false,
         hangul_auto: false,
         composing: None,
@@ -227,19 +250,20 @@ pub fn run_app(
         settings: None,
         is_portable: kmd_core::portable::is_portable(),
         use_emoji: config.general.emoji_icons,
-        selected_llm_providers: config.launcher.multi_llm_providers.clone(),
-        multi_llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
-        llm_autopilot: config.launcher.llm_autopilot,
-        selected_multi_web_providers: config.launcher.multi_web_providers.clone(),
-        multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
-        spell_providers: config.launcher.spell_providers.clone(),
-        spell_prefixes: config.launcher.spell_prefixes.clone(),
-        translate_providers: config.launcher.translate_providers.clone(),
-        translate_prefixes: config.launcher.translate_prefixes.clone(),
-        config: cached_config,
+        selected_llm_providers: Vec::new(),
+        multi_llm_prefixes: Vec::new(),
+        llm_autopilot: false,
+        selected_multi_web_providers: Vec::new(),
+        multi_web_prefixes: Vec::new(),
+        spell_providers: Vec::new(),
+        spell_prefixes: Vec::new(),
+        translate_providers: Vec::new(),
+        translate_prefixes: Vec::new(),
+        config: config.clone(),
         cached_effective_query: String::new(),
         dirty: true,
     };
+    state.sync_config_mirrors();
 
     // Setup terminal
     enable_raw_mode()?;
@@ -374,19 +398,8 @@ fn handle_settings_key_event(
                 return;
             }
 
-            // Apply immediate settings
-            state.show_preview = state.config.general.show_preview;
-            state.preview_width_percent = state.config.general.preview_width_percent;
-            state.quit_on_launch = state.config.launcher.quit_on_launch;
-            state.selected_llm_providers = state.config.launcher.multi_llm_providers.clone();
-            state.multi_llm_prefixes = state.config.launcher.multi_llm_prefixes.clone();
-            state.llm_autopilot = state.config.launcher.llm_autopilot;
-            state.selected_multi_web_providers = state.config.launcher.multi_web_providers.clone();
-            state.multi_web_prefixes = state.config.launcher.multi_web_prefixes.clone();
-            state.spell_providers = state.config.launcher.spell_providers.clone();
-            state.spell_prefixes = state.config.launcher.spell_prefixes.clone();
-            state.translate_providers = state.config.launcher.translate_providers.clone();
-            state.translate_prefixes = state.config.launcher.translate_prefixes.clone();
+            // Apply immediate settings — config 파생 필드는 한 곳에서 다시 채운다.
+            state.sync_config_mirrors();
             engine.set_kind_weights(state.config.launcher.kind_weights.clone());
 
             if needs_rebuild {
@@ -1609,6 +1622,63 @@ mod tests {
             cached_effective_query: String::new(),
             dirty: true,
         }
+    }
+
+    // ── config 파생 필드 동기화 ─────────────────────────────────────────
+    //
+    // 이 필드들은 config의 캐시다. 예전에는 저장 경로에서 12줄을 손으로
+    // 재대입해 필드가 늘 때 누락되기 쉬웠다 — 이제 sync_config_mirrors 한
+    // 곳이며, 이 테스트가 "config를 고치면 전부 따라온다"를 지킨다.
+    #[test]
+    fn config_변경은_파생_필드에_모두_반영된다() {
+        let mut state = test_state();
+
+        state.config.general.show_preview = true;
+        state.config.general.preview_width_percent = 55;
+        state.config.launcher.quit_on_launch = true;
+        state.config.launcher.llm_autopilot = true;
+        state.config.launcher.multi_llm_providers = vec!["claude".into()];
+        state.config.launcher.multi_llm_prefixes = vec!["@llm".into()];
+        state.config.launcher.multi_web_providers = vec!["google".into()];
+        state.config.launcher.multi_web_prefixes = vec!["@ms".into()];
+        state.config.launcher.spell_providers = vec!["naver_spell".into()];
+        state.config.launcher.spell_prefixes = vec!["@sp".into()];
+        state.config.launcher.translate_providers = vec!["papago".into()];
+        state.config.launcher.translate_prefixes = vec!["@tr".into()];
+
+        state.sync_config_mirrors();
+
+        assert!(state.show_preview);
+        assert_eq!(state.preview_width_percent, 55);
+        assert!(state.quit_on_launch);
+        assert!(state.llm_autopilot);
+        assert_eq!(state.selected_llm_providers, vec!["claude".to_string()]);
+        assert_eq!(state.multi_llm_prefixes, vec!["@llm".to_string()]);
+        assert_eq!(
+            state.selected_multi_web_providers,
+            vec!["google".to_string()]
+        );
+        assert_eq!(state.multi_web_prefixes, vec!["@ms".to_string()]);
+        assert_eq!(state.spell_providers, vec!["naver_spell".to_string()]);
+        assert_eq!(state.spell_prefixes, vec!["@sp".to_string()]);
+        assert_eq!(state.translate_providers, vec!["papago".to_string()]);
+        assert_eq!(state.translate_prefixes, vec!["@tr".to_string()]);
+    }
+
+    #[test]
+    fn 동기화는_기본_설정과도_일치한다() {
+        let mut state = test_state();
+        state.sync_config_mirrors();
+        let cfg = kmd_core::Config::default();
+        assert_eq!(state.show_preview, cfg.general.show_preview);
+        assert_eq!(
+            state.preview_width_percent,
+            cfg.general.preview_width_percent
+        );
+        assert_eq!(
+            state.selected_llm_providers,
+            cfg.launcher.multi_llm_providers
+        );
     }
 
     fn type_str(state: &mut AppState, engine: &mut SearchEngine, s: &str) {
