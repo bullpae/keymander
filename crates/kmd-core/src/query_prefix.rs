@@ -120,7 +120,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         prefix: QueryPrefix::ContentSearch,
         aliases: &[":grep"],
         title: "?  Content Search",
-        usage: "Type ? keyword  (search inside documents — file contents, not names)",
+        usage: "Type ? keyword  (documents; \"exact phrase\", -exclude, ext:md, path:docs)",
         seed: "?",
         icon_emoji: "\u{1F50E}",
         icon_ascii: "[GRP]",

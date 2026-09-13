@@ -59,7 +59,7 @@ enum Commands {
     },
     /// Search inside document contents (FTS5 full-text index)
     Grep {
-        /// Search query (2+ characters)
+        /// Search query (2+ chars). Operators: "exact phrase", -exclude, ext:md, path:docs
         query: Vec<String>,
         /// Re-sync the content index before searching
         #[arg(long)]

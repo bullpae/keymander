@@ -371,21 +371,48 @@ fn read_text(path: &Path, size_hint: usize) -> Option<String> {
 }
 
 /// 본문 검색 — bm25 랭킹 + snippet. 질의가 짧으면(2자 미만) 빈 결과.
+///
+/// 연산자는 [`ParsedQuery`] 참조 — `"구문"`, `-제외`, `ext:`, `path:`.
 pub fn search(db: &Database, query: &str, limit: usize) -> Result<Vec<ContentHit>, DbError> {
-    let Some(match_expr) = build_match_expr(query) else {
+    let parsed = ParsedQuery::parse(query);
+    let Some(match_expr) = parsed.match_expr() else {
         return Ok(Vec::new());
     };
-    let mut stmt = db.conn().prepare(
+
+    // ext:/path:는 FTS가 아니라 메타 테이블(f.path)에 거는 필터라 SQL로 처리한다.
+    // LIKE 패턴의 % _ \ 는 이스케이프해 사용자 입력이 와일드카드가 되지 않게 한다.
+    let mut sql = String::from(
         "SELECT f.path,
                 snippet(content_fts, 0, '«', '»', '…', 16),
                 bm25(content_fts)
          FROM content_fts
          JOIN content_files f ON f.id = content_fts.rowid
-         WHERE content_fts MATCH ?1
-         ORDER BY bm25(content_fts)
-         LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(rusqlite::params![match_expr, limit as i64], |row| {
+         WHERE content_fts MATCH ?1",
+    );
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(match_expr)];
+    for ext in &parsed.extensions {
+        params.push(Box::new(format!("%.{}", like_escape(ext))));
+        sql.push_str(&format!(
+            " AND lower(f.path) LIKE ?{} ESCAPE '\\'",
+            params.len()
+        ));
+    }
+    for frag in &parsed.path_fragments {
+        params.push(Box::new(format!("%{}%", like_escape(frag))));
+        sql.push_str(&format!(
+            " AND lower(f.path) LIKE ?{} ESCAPE '\\'",
+            params.len()
+        ));
+    }
+    params.push(Box::new(limit as i64));
+    sql.push_str(&format!(
+        " ORDER BY bm25(content_fts) LIMIT ?{}",
+        params.len()
+    ));
+
+    let mut stmt = db.conn().prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
         Ok(ContentHit {
             path: row.get(0)?,
             snippet: row.get::<_, String>(1)?.replace(['\n', '\r'], " "),
@@ -395,35 +422,145 @@ pub fn search(db: &Database, query: &str, limit: usize) -> Result<Vec<ContentHit
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-/// 사용자 질의 → FTS5 MATCH 식.
+/// LIKE 패턴에서 와일드카드 의미를 갖는 문자를 이스케이프 (`ESCAPE '\'`와 함께 사용).
+fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// 검색 연산자를 분해한 질의.
 ///
-/// - 각 토큰을 큰따옴표로 감싸 FTS5 연산자(AND/OR/NEAR/괄호 등) 해석을 차단
-/// - 마지막 토큰에는 prefix `*` — 런처의 "타이핑 중" 부분어에 대응
-/// - 전체 유효 문자가 [`MIN_QUERY_CHARS`] 미만이면 None
-fn build_match_expr(query: &str) -> Option<String> {
-    let tokens: Vec<&str> = query.split_whitespace().collect();
-    if tokens.is_empty() {
-        return None;
-    }
-    let total_chars: usize = tokens.iter().map(|t| t.chars().count()).sum();
-    if total_chars < MIN_QUERY_CHARS {
-        return None;
-    }
-    let last = tokens.len() - 1;
-    let expr = tokens
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let quoted = format!("\"{}\"", t.replace('"', "\"\""));
-            if i == last {
-                format!("{quoted}*")
-            } else {
-                quoted
+/// - `"두 단어"` — 구문(정확한 순서) 검색
+/// - `-단어` — 해당 단어가 있는 문서 제외
+/// - `ext:rs` — 확장자 필터 (여러 개면 모두 만족해야 하므로 사실상 하나)
+/// - `path:docs` — 경로 부분 문자열 필터
+///
+/// 나머지는 일반 토큰이다. 순수 구조체라 파싱만 따로 테스트할 수 있다.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ParsedQuery {
+    /// 일반 토큰 — 마지막 것만 prefix 검색(`*`)이 붙는다
+    pub terms: Vec<String>,
+    /// 따옴표로 묶인 구문
+    pub phrases: Vec<String>,
+    /// `-` 접두로 제외할 단어
+    pub excludes: Vec<String>,
+    /// `ext:` 확장자(소문자, 앞의 `.` 제거)
+    pub extensions: Vec<String>,
+    /// `path:` 경로 조각(소문자)
+    pub path_fragments: Vec<String>,
+}
+
+impl ParsedQuery {
+    pub fn parse(query: &str) -> Self {
+        let mut out = Self::default();
+        for raw in split_respecting_quotes(query) {
+            if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+                let inner = raw[1..raw.len() - 1].trim().to_string();
+                if !inner.is_empty() {
+                    out.phrases.push(inner);
+                }
+            } else if let Some(rest) = raw.strip_prefix('-') {
+                if !rest.is_empty() {
+                    out.excludes.push(rest.to_string());
+                }
+            } else if let Some(rest) = raw.strip_prefix("ext:") {
+                let ext = rest.trim_start_matches('.').to_lowercase();
+                if !ext.is_empty() {
+                    out.extensions.push(ext);
+                }
+            } else if let Some(rest) = raw.strip_prefix("path:") {
+                let frag = rest.trim_matches('"').to_lowercase();
+                if !frag.is_empty() {
+                    out.path_fragments.push(frag);
+                }
+            } else if !raw.is_empty() {
+                out.terms.push(raw.to_string());
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(expr)
+        }
+        out
+    }
+
+    /// FTS5 MATCH 식. 본문 조건(일반 토큰·구문·제외)이 하나도 없거나 너무 짧으면 None.
+    ///
+    /// 필터(ext:/path:)만 있는 질의는 본문 조건이 없어 None이다 — 전체 문서를
+    /// 훑는 대신 빈 결과를 준다(런처가 타이핑 중간 상태에서 폭주하지 않게).
+    fn match_expr(&self) -> Option<String> {
+        let body_chars: usize = self
+            .terms
+            .iter()
+            .chain(&self.phrases)
+            .map(|t| t.chars().count())
+            .sum();
+        if body_chars < MIN_QUERY_CHARS {
+            return None;
+        }
+
+        let mut parts: Vec<String> = Vec::new();
+        for p in &self.phrases {
+            parts.push(quote_fts(p));
+        }
+        // 마지막 일반 토큰에만 prefix `*` — 런처의 "타이핑 중" 부분어 대응.
+        // 구문(phrases)에는 붙이지 않는다: 따옴표로 감싼 건 정확히 그것을 찾는 것이다.
+        let last = self.terms.len().saturating_sub(1);
+        for (i, t) in self.terms.iter().enumerate() {
+            let quoted = quote_fts(t);
+            if i == last {
+                parts.push(format!("{quoted}*"));
+            } else {
+                parts.push(quoted);
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        let mut expr = parts.join(" ");
+        for e in &self.excludes {
+            expr.push_str(&format!(" NOT {}", quote_fts(e)));
+        }
+        Some(expr)
+    }
+}
+
+/// FTS5 연산자(AND/OR/NEAR/괄호 등) 해석을 막기 위해 큰따옴표로 감싼다.
+fn quote_fts(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// 공백으로 자르되 큰따옴표 안의 공백은 보존한다. 닫히지 않은 따옴표는
+/// 문자열 끝까지를 하나로 본다 — 타이핑 중간 상태에서도 결과가 나오게.
+fn split_respecting_quotes(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for c in s.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                cur.push(c);
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        // 닫히지 않은 따옴표는 닫아 준다
+        if in_quotes {
+            cur.push('"');
+        }
+        out.push(cur);
+    }
+    out
+}
+
+/// 사용자 질의 → FTS5 MATCH 식. 연산자 처리는 [`ParsedQuery`]가 한다.
+#[cfg(test)]
+fn build_match_expr(query: &str) -> Option<String> {
+    ParsedQuery::parse(query).match_expr()
 }
 
 /// 인덱스 통계 (CLI `kmd index --stats`용).
@@ -702,6 +839,86 @@ mod tests {
         for q in ["AND OR", "NEAR(", "\"열린따옴표", "col:val", "a*b(c)"] {
             search(&db, q, 10).unwrap_or_else(|e| panic!("질의 {q:?} 에서 오류: {e}"));
         }
+    }
+
+    // ── 검색 연산자 (P3 잔여: "구문", -제외, ext:, path:) ──
+
+    #[test]
+    fn 연산자_파싱() {
+        let p = ParsedQuery::parse("\"예산 삭감\" 회의 -초안 ext:.MD path:Docs");
+        assert_eq!(p.phrases, vec!["예산 삭감".to_string()]);
+        assert_eq!(p.terms, vec!["회의".to_string()]);
+        assert_eq!(p.excludes, vec!["초안".to_string()]);
+        assert_eq!(
+            p.extensions,
+            vec!["md".to_string()],
+            "앞의 점 제거 + 소문자"
+        );
+        assert_eq!(p.path_fragments, vec!["docs".to_string()]);
+    }
+
+    #[test]
+    fn 구문은_prefix_없이_제외는_NOT으로() {
+        let expr = ParsedQuery::parse("\"예산 삭감\"").match_expr().unwrap();
+        assert_eq!(expr, "\"예산 삭감\"");
+
+        let expr = ParsedQuery::parse("예산 -초안").match_expr().unwrap();
+        assert_eq!(expr, "\"예산\"* NOT \"초안\"");
+    }
+
+    #[test]
+    fn 필터만_있는_질의는_본문_조건이_없어_빈_결과() {
+        assert_eq!(ParsedQuery::parse("ext:rs").match_expr(), None);
+        assert_eq!(ParsedQuery::parse("path:docs").match_expr(), None);
+        let db = Database::open_in_memory().unwrap();
+        assert!(search(&db, "ext:rs", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 닫히지_않은_따옴표도_오류가_아니다() {
+        let p = ParsedQuery::parse("\"열린 구문");
+        assert_eq!(p.phrases, vec!["열린 구문".to_string()]);
+    }
+
+    #[test]
+    fn 연산자_질의가_실제_검색에서_동작한다() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "note.md", "예산 삭감 회의록".as_bytes());
+        write_file(dir.path(), "draft.rs", "예산 삭감 초안 코드".as_bytes());
+        let db = Database::open_in_memory().unwrap();
+        sync(&db, &test_launcher(dir.path())).unwrap();
+
+        let hits = search(&db, "\"예산 삭감\"", 10).unwrap();
+        assert_eq!(hits.len(), 2, "구문은 두 문서 모두에 있다");
+
+        let hits = search(&db, "예산 -초안", 10).unwrap();
+        assert_eq!(hits.len(), 1, "제외어가 있는 문서는 빠진다");
+        assert!(hits[0].path.ends_with("note.md"));
+
+        let hits = search(&db, "예산 ext:md", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].path.ends_with("note.md"));
+
+        let hits = search(&db, "예산 ext:rs", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].path.ends_with("draft.rs"));
+
+        let hits = search(&db, "예산 path:nonexistent-dir", 10).unwrap();
+        assert!(hits.is_empty(), "경로 필터가 걸리면 결과 없음");
+    }
+
+    #[test]
+    fn like_와일드카드는_이스케이프된다() {
+        // path:%  가 "아무 경로나"로 해석되면 필터가 무력화된다
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "plain.md", "예산 자료".as_bytes());
+        let db = Database::open_in_memory().unwrap();
+        sync(&db, &test_launcher(dir.path())).unwrap();
+
+        assert!(
+            search(&db, "예산 path:%", 10).unwrap().is_empty(),
+            "% 는 리터럴로 취급되어야 한다"
+        );
     }
 
     #[test]
