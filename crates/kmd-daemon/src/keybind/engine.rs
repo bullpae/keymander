@@ -27,7 +27,8 @@ pub enum KeyDecision {
     /// Windows는 SendInput이 modifier 간섭을 받지 않아 소비하지 않는다.
     Execute {
         action: BindAction,
-        #[allow(dead_code)] // macOS 어댑터에서만 소비
+        // macOS 어댑터에서만 소비 (레이어 트리거 modifier를 풀고 주입)
+        #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
         layer_trigger: Option<VKey>,
     },
     /// 코드(chord) 모드 진입 — 레이어 패스쓰루에서 미매핑 키가 눌렸다.
@@ -229,11 +230,15 @@ impl EngineState {
         trigger
     }
 
-    // ── macOS 어댑터용 헬퍼 ──────────────────────────────────────────────
-    // (Windows는 훅 이벤트만으로 상태가 완결되므로 사용하지 않는다)
+    // ── 플랫폼 어댑터용 헬퍼 ────────────────────────────────────────────
+    //
+    // 아래 dead_code 허용은 "쓰는 플랫폼이 따로 있다"는 뜻이다. 조건을 실제
+    // 사용처에 맞춰 좁혀 두었으니, 어떤 플랫폼에서도 안 쓰이게 되면 컴파일러가
+    // 다시 알려준다 — 무조건 allow로 두면 진짜 죽은 코드가 숨는다.
 
-    /// 훅/탭이 타임아웃 등으로 이벤트를 놓쳤을 때 일시 상태 전체 초기화
-    #[allow(dead_code)]
+    /// 훅/탭이 타임아웃 등으로 이벤트를 놓쳤을 때 일시 상태 전체 초기화.
+    /// macOS 탭 재활성화(macos.rs)와 Windows 훅 워치독(windows.rs) 양쪽에서 쓴다.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub fn reset_transient_state(&mut self) {
         self.modifiers_held.clear();
         self.reset_runtime_state();
@@ -258,14 +263,16 @@ impl EngineState {
         stop_mouse
     }
 
-    /// 해당 키가 현재 눌린 수정자로 추적 중인지 (flagsChanged is_down 판정 폴백)
-    #[allow(dead_code)]
+    /// 해당 키가 현재 눌린 수정자로 추적 중인지 (flagsChanged is_down 판정 폴백).
+    /// macOS 전용 — Windows 훅은 이벤트에 down/up이 실려 폴백이 필요 없다.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn is_modifier_held(&self, vkey: VKey) -> bool {
         self.modifiers_held.contains(&vkey)
     }
 
-    /// 현재 눌린 것으로 추적 중인 수정자 목록 (stop 시 stuck-modifier 해제용)
-    #[allow(dead_code)]
+    /// 현재 눌린 것으로 추적 중인 수정자 목록 (stop 시 stuck-modifier 해제용).
+    /// macOS 전용 — 탭 종료 시 남은 수정자를 직접 풀어 준다.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn held_modifiers(&self) -> Vec<VKey> {
         self.modifiers_held.iter().copied().collect()
     }
@@ -273,7 +280,7 @@ impl EngineState {
     /// OS가 보고한 수정자 플래그와 내부 추적 상태를 동기화.
     /// 플래그가 꺼진 수정자는 Left/Right 키를 모두 제거한다
     /// (macOS flagsChanged — 놓친 keyup으로 인한 stuck modifier 방지).
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn sync_modifier_flags(&mut self, shift: bool, ctrl: bool, alt: bool, win: bool) {
         if !shift {
             self.modifiers_held.remove(&VKey::LShift);
