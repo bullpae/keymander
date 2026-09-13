@@ -42,7 +42,8 @@
 | **R2-4. cargo-deb 한글 재발 방지** | ✅ 완료 (2026-08-28) — `scripts/check-encoding.sh` + CI 잡. UTF-8 유효성(CP949 혼입)과 BOM 규칙을 본다. **`.ps1`은 BOM이 필수**(PS 5.1이 없으면 ANSI로 읽어 한글을 깨뜨림), 나머지는 금지. 도입하자마자 `assemble-config.ps1`에 BOM이 빠져 있던 것을 잡았다. 대상 파일이 0개면 "통과"가 아니라 실패(exit 2)로 본다 — 조용한 통과가 가장 위험하다 |
 | **R2-5. 설정 키 4중 열거** | ✅ 대부분 해결 (2026-08-28) — `config_registry!` 매크로가 **한 줄 선언에서 get/set 양쪽을 생성**한다. 단순 키 27개(숫자·불리언·문자열)는 비대칭이 원천적으로 불가능해졌고 `get_value`/`set_value`의 중복 arm 54개가 사라졌다. 리스트 정규화·읽기 전용 의사 키 등 16개는 여전히 명시적 arm(정당함). 테스트가 레지스트리↔명시적 arm 중복까지 막는다.<br>남은 것: **UI 목록(`items.rs`)은 여전히 별도 열거** — 라벨·위젯·설명이 붙어 있어 합칠 수 없고, 왕복 테스트가 누락을 막는다 |
 | **R2-6. 프리픽스 라우팅 이중화** | ✅ 부분 완료 (2026-08-27) — 두 UI가 각자 벗겨내던 프리픽스 문자열(`:emoji`\|`:e`, `!`\|`>`, `:keymap`\|`:km`)을 `kmd_core::query_prefix`의 순수 함수로 모았다. **나머지는 의도적으로 통합하지 않았다** — `transform`(데스크톱=결과 항목/TUI=상태 메시지), `prompt`·`keys`(캐시된 config vs 매번 디스크 로드), `web`(점수 부여 상이)는 실제로 갈라진 동작이다. 통합하려면 먼저 어느 쪽이 옳은지 정해야 한다 |
-| **R2-7. TUI가 검색마다 config를 디스크에서 읽는다** | ✅ 완료 (2026-08-28) — `AppState.config` 캐시를 두고 `:keys`/`:keymap`/`:prompt`/`?` 핸들러가 이를 쓴다. 설정을 바꾸는 경로(설정 모달 저장, 폴더 제안 추가, 키맵 액션, 템플릿 add/remove)는 캐시를 직접 고쳐 어긋나지 않게 했다. `load_config()` 호출이 11곳 → **1곳**(시작 시 1회)<br>⚠️ 잔여: 메인 루프가 소유한 `config`와 `AppState.config` **두 벌이 공존**한다. 저장 시 함께 갱신하지만 구조적으로는 한 벌이어야 맞다 — 메인 루프 시그니처를 건드려야 해 별도 작업으로 남긴다 |
+| **R2-7. TUI가 검색마다 config를 디스크에서 읽는다** | ✅ 완료 (2026-08-28) — `AppState.config` 캐시를 두고 `:keys`/`:keymap`/`:prompt`/`?` 핸들러가 이를 쓴다. 설정을 바꾸는 경로(설정 모달 저장, 폴더 제안 추가, 키맵 액션, 템플릿 add/remove)는 캐시를 직접 고쳐 어긋나지 않게 했다. `load_config()` 호출이 11곳 → **1곳**(시작 시 1회)<br>✅ 잔여도 해소 (2026-09-13) — 메인 루프의 `config`는 초기 셋업 구간에서만 쓰이고 이후 정본은 `AppState.config` 한 벌이다. 대신 **다른 중복이 있었다**: `AppState`가 config를 들고서도 `show_preview`·providers·prefixes 등 12개를 미러링하고 저장 시 12줄을 손으로 재대입했다(필드가 늘 때 누락되기 쉬움) → `sync_config_mirrors()` 하나로 모으고, 초기화·저장 양쪽이 같은 함수를 쓴다. "config를 고치면 전부 따라온다"를 지키는 테스트 2개 추가 |
+| **R2-8. 데스크톱 settings 핸들러 비대** | ✅ 완료 (2026-09-13) — `app/settings.rs`가 662줄 중 520줄을 두 함수에 담고 있었다. `handle_settings_query` 246줄 → 23줄(목록 생성을 `settings_rows`로 분리), `handle_settings_action` 274줄 → 106줄. 핵심은 **프로바이더 4군(LLM·멀티웹·맞춤법·번역) 통합** — 라벨·접두·아이콘만 다르고 동작이 같아 `PROVIDER_GROUPS` 표 + `toggle_provider` 하나로 합쳤다(목록 생성 4벌·토글 분기 4벌 약 190줄 제거). "전부 끄면 기본값 복구" 규칙도 한 곳이 됐다. 분해 전 characterization 테스트 7개를 먼저 깔았다 |
 
 ## 3. 확장 구조 (P3 — 분리 구조 유지 결정 하에)
 
@@ -56,7 +57,7 @@
 | **R3-2. 전경창 캡처** | ✅ 2026-08-08 — NSWorkspace 전경 PID 캡처/활성화, Launch 시점 캡처, E2E 검증(캡처→타앱→복귀 붙여넣기). docs/12 P2 |
 | **클립보드 P1.1 프라이버시** | ✅ Concealed(비번) 제외 + changeCount 감시(macOS) |
 | **클립보드 P3 런처 UI** | ✅ 2026-08-08 구현 — `;`/`:clip` 검색→Enter=이전 앱 붙여넣기. 라우팅·IPC 검증, GUI 상호작용만 실기기 확인 대상. docs/12 §6 |
-| **R3-3. 삼중 중복 정리** | ⬜ calc/emoji/shell 확장과 SearchEngine 배선이 desktop·tui·daemon 3곳에 중복 — 단일 등록 지점으로 |
+| **R3-3. 삼중 중복 정리** | 🔶 일부 완료 (2026-09-13) — **인덱스 캐시 로드→빌드→저장** 3단 절차가 CLI(`src/cmd`)와 데스크톱(전체·quick 2벌)에 각자 적혀 있던 것을 `store::load_cached_or_build`로 모았다. 호출자별로 다른 정책(freshness 유무, 무엇을 빌드할지)만 인자로 넘기고, 데스크톱의 소요 시간 로깅은 `load_index_logged`가 공유한다. core 테스트 4개 추가.<br>남은 것: 엔진 생성 3곳(`daemon/server.rs`·`desktop/engine.rs`·`tui/app.rs`)과 프리픽스 디스패치 테이블 2벌(`desktop/search_routing.rs`↔`tui/app.rs`). 순수 함수는 R2-6에서 이미 공유했으므로 남은 건 배선인데, **어느 UI의 동작이 정본인지 정해야 통합할 수 있다**(R2-6 보류 사유와 같음) |
 | **R3-4. ExtensionAction 확장** | ⬜ `Paste`/`Inject` 추가 + 순수형(클라이언트)/능력형(데몬 IPC) 경계 도입 |
 
 ## 4. 외부 대기
@@ -64,13 +65,21 @@
 - **winget**: PR #413755 검증 통과, 모더레이터 머지 대기 → 머지 후 `WINGET_GITHUB_TOKEN` 등록 + 저장소 개명(`docs/07 §6` 런북)
 - **Windows 창 문제**: R1-1 진단값 (사용자 Windows 머신)
 
-## 권장 착수 순서 (2026-08-27 갱신)
+## 권장 착수 순서 (2026-09-13 갱신)
 
-1. **R2-2 `kmd-desktop/app.rs` 분해 계속** — `view_detail_panel`·`update_inner`가
-   다음 후보. `process_key` 때처럼 characterization 테스트를 먼저 깔 것
-4. **R2-3 테스트 공백 마저** — `execute_selected`의 실행 분기, 드릴다운 진입/복귀
-5. R1-4 데몬 .app 번들화 / R3-3·R3-4 확장 구조 (설계 결정 필요)
-6. R2-4 인코딩 검사 (CI 한 줄)
+코드로 정리할 수 있는 것은 대체로 소진됐다. 남은 큰 항목은 전부 **설계 결정이
+먼저**라 착수 순서가 아니라 결정 순서로 적는다.
+
+1. **R1-4 데몬 `.app` 번들화** — TCC 재부여 마찰의 근본 해법이지만 빌드·배포
+   파이프라인(`scripts/deploy-local.sh`, docs/07)을 함께 고쳐야 한다. 할지 말지부터
+2. **R3-4 `ExtensionAction` 확장** — `Paste`/`Inject` 추가 + 순수형(클라이언트)/
+   능력형(데몬 IPC) 경계 도입. R3-3의 남은 절반과 묶어서 판단하는 게 자연스럽다
+3. **R2-6 / R3-3 잔여** — 두 UI의 프리픽스 핸들러 동작이 실제로 다르다.
+   어느 쪽이 정본인지 정하는 것이 통합보다 먼저다
+4. `src/tui/settings/items.rs`의 `items_for_tab`(254줄), `src/tui/app.rs`의
+   `execute_selected`(250줄) — 다음 R2-2급 후보. 순수 데이터/분기라 분해는 쉽다
+5. 보류 유지: `app/view.rs`의 `view`·`view_detail_panel`(iced 레이아웃 빌더),
+   `ipc::Response::status_lines`의 표시 문구(새 소비자가 생기면 presenter 분리)
 
 **보류 중** — 판단이 필요해 손대지 않은 것:
 - `ipc::Response::status_lines`가 프로토콜 크레이트에 표시 문구를 갖고 있다
