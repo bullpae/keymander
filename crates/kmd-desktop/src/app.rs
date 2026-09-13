@@ -2674,6 +2674,38 @@ mod tests {
         }
     }
 
+    // ── :t 는 검색 중에 브라우저를 열지 않는다 ──────────────────────────
+    //
+    // 데스크톱은 QueryChanged마다 디바운스 없이 검색을 돌린다. 검색 핸들러가
+    // URL을 열던 시절에는 `:t spell 안녕`을 타이핑하면 키마다 탭이 열렸다.
+
+    #[test]
+    fn 변환질의는_검색중_실행되지_않고_실행항목을_세운다() {
+        let mut app = make_test_app();
+        app.spell_providers = vec!["naver_spell".into()];
+        app.query = ":t spell 안녕하세요".into();
+        app.handle_transform_query(":t spell 안녕하세요");
+
+        assert_eq!(app.results.len(), 1);
+        assert_eq!(
+            app.results[0].item.keywords,
+            kmd_core::transform::TRANSFORM_RUN_MARKER
+        );
+        assert!(app.results[0].item.path.contains("안녕하세요"));
+    }
+
+    #[test]
+    fn 변환질의_타이핑_도중에도_항목만_바뀐다() {
+        let mut app = make_test_app();
+        app.spell_providers = vec!["naver_spell".into()];
+        for partial in ["안", "안녕", "안녕하"] {
+            let q = format!(":t spell {partial}");
+            app.query = q.clone();
+            app.handle_transform_query(&q);
+            assert_eq!(app.results.len(), 1, "'{partial}'에서 결과가 늘어남");
+        }
+    }
+
     // ── :set 목록·토글 characterization (settings.rs 분해 보호) ──
     //
     // handle_settings_query(246줄)/handle_settings_action(274줄)을 분해하기 전에

@@ -792,6 +792,44 @@ fn execute_selected(
     }
 
     // Calculator result → copy to clipboard
+    // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 브라우저가 열리지 않게)
+    use kmd_core::transform;
+    if result.item.keywords == transform::TRANSFORM_RUN_MARKER {
+        let trimmed = state.query.trim();
+        let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
+        let dispatch = normalized.as_deref().unwrap_or(trimmed);
+        if let Some(mut tq) = transform::parse_transform_query(dispatch) {
+            if tq.text.is_empty() {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    if let Ok(text) = clipboard.get_text() {
+                        tq.text = text;
+                    }
+                }
+            }
+            let urls = transform::build_transform_urls(
+                &tq,
+                &state.spell_providers,
+                &state.translate_providers,
+            );
+            let kind_label = match &tq.kind {
+                transform::TransformKind::Spell => "맞춤법 검사",
+                transform::TransformKind::Translate(_) => "번역",
+            };
+            state.status_message = Some(format!(
+                "\u{2705} {} 실행 ({} 서비스)",
+                kind_label,
+                urls.len()
+            ));
+            open_urls_and_quit(state, &urls);
+        }
+        return;
+    }
+
+    // 클립보드가 비어 실행할 수 없는 :t 안내 — 선택해도 아무 일도 하지 않는다
+    if result.item.keywords == transform::TRANSFORM_EMPTY_MARKER {
+        return;
+    }
+
     if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(&result.item.path);
@@ -1116,26 +1154,19 @@ fn handle_transform_query(query: &str, state: &mut AppState) {
                         tq.text = text;
                     }
                 }
-                if tq.text.is_empty() {
-                    state.status_message = Some("❌ 클립보드가 비어 있습니다".to_string());
-                    state.results.clear();
-                    state.selected_index = 0;
-                    return;
-                }
             }
 
-            let urls = transform::build_transform_urls(
+            // 검색 중에는 열지 않는다 — 실행 항목만 보여주고 Enter에서 연다.
+            // (데스크톱과 같은 규칙: "검색은 순수하게, 실행은 Enter에서")
+            let count = transform::build_transform_urls(
                 &tq,
                 &state.spell_providers,
                 &state.translate_providers,
-            );
-            let kind_label = match &tq.kind {
-                transform::TransformKind::Spell => "맞춤법 검사",
-                transform::TransformKind::Translate(_) => "번역",
-            };
-            state.status_message = Some(format!("✅ {} 실행 ({} 서비스)", kind_label, urls.len()));
-            open_urls_and_quit(state, &urls);
-            state.results.clear();
+            )
+            .len();
+            let item = transform::run_item(&tq, count, state.use_emoji);
+            state.results = items_to_results(std::iter::once(item), SCORE_CALC);
+            state.search_mode = SearchMode::Contains;
             state.selected_index = 0;
         }
         None => {
@@ -1622,6 +1653,54 @@ mod tests {
             cached_effective_query: String::new(),
             dirty: true,
         }
+    }
+
+    // ── :t 는 검색 중에 브라우저를 열지 않는다 ──────────────────────────
+    //
+    // 예전에는 검색 핸들러가 곧바로 URL을 열어, 타이핑하는 동안 키를 누를 때마다
+    // 탭이 열렸다. 이제 실행 항목 하나만 세우고 실제 열기는 Enter에서 한다.
+
+    #[test]
+    fn 변환질의는_검색중_실행되지_않고_실행항목을_세운다() {
+        let mut state = test_state();
+        state.spell_providers = vec!["naver_spell".into()];
+        handle_transform_query(":t spell 안녕하세요", &mut state);
+
+        assert_eq!(state.results.len(), 1, "실행 항목 하나만 선다");
+        assert_eq!(
+            state.results[0].item.keywords,
+            kmd_core::transform::TRANSFORM_RUN_MARKER
+        );
+        assert!(
+            state.results[0].item.path.contains("안녕하세요"),
+            "무엇을 보낼지 보여준다: {}",
+            state.results[0].item.path
+        );
+        assert!(
+            state.status_message.is_none(),
+            "검색 단계에서는 '실행됨' 메시지가 뜨지 않는다"
+        );
+    }
+
+    #[test]
+    fn 변환질의_타이핑_도중에도_항목만_바뀐다() {
+        let mut state = test_state();
+        state.spell_providers = vec!["naver_spell".into()];
+        // "안", "안녕", "안녕하" … 한 글자씩 늘려도 매번 항목 하나뿐이어야 한다
+        for partial in ["안", "안녕", "안녕하"] {
+            handle_transform_query(&format!(":t spell {partial}"), &mut state);
+            assert_eq!(state.results.len(), 1, "'{partial}'에서 결과가 늘어남");
+        }
+    }
+
+    #[test]
+    fn 변환_도움말은_그대로_유지된다() {
+        let mut state = test_state();
+        handle_transform_query(":t", &mut state);
+        assert!(
+            state.results.len() > 1,
+            ":t 만 입력하면 도움말 목록이 나온다"
+        );
     }
 
     // ── config 파생 필드 동기화 ─────────────────────────────────────────

@@ -202,6 +202,39 @@ impl App {
             return self.perform_search();
         }
 
+        // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 탭 폭주 방지)
+        if result.item.keywords == kmd_core::transform::TRANSFORM_RUN_MARKER {
+            let trimmed = self.query.trim();
+            let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
+            let dispatch = normalized.as_deref().unwrap_or(trimmed);
+            if let Some(mut tq) = kmd_core::transform::parse_transform_query(dispatch) {
+                if tq.text.is_empty() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if let Ok(text) = clipboard.get_text() {
+                            tq.text = text;
+                        }
+                    }
+                }
+                for url in kmd_core::transform::build_transform_urls(
+                    &tq,
+                    &self.spell_providers,
+                    &self.translate_providers,
+                ) {
+                    if let kmd_core::action::ActionResult::Error(e) =
+                        kmd_core::action::open_url(&url)
+                    {
+                        tracing::warn!("URL 열기 실패: {url} — {e}");
+                    }
+                }
+            }
+            return iced::exit();
+        }
+
+        // 클립보드가 비어 실행할 수 없는 :t 안내 — 선택해도 아무 일도 하지 않는다
+        if result.item.keywords == kmd_core::transform::TRANSFORM_EMPTY_MARKER {
+            return Task::none();
+        }
+
         // 미지 명령 안내 → :help 로 이동
         if result.item.keywords == "kmd:unknown_cmd" {
             self.query = ":help".to_string();
@@ -309,8 +342,11 @@ impl App {
             }
         }
 
-        // 계산기 결과: 값을 클립보드에 복사 후 종료
-        if result.item.kind == ItemKind::Calculator {
+        // 계산기·이모지 결과: 값을 클립보드에 복사 후 종료.
+        // (core의 action::execute는 이 둘을 Launched로만 돌려준다 — 클립보드는
+        // UI의 몫이라 여기서 처리한다. 예전에는 이모지 분기가 없어 데스크톱에서
+        // Enter를 눌러도 아무것도 복사되지 않고 창만 닫혔다.)
+        if matches!(result.item.kind, ItemKind::Calculator | ItemKind::Emoji) {
             if !result.item.path.is_empty() {
                 if let Ok(mut cb) = arboard::Clipboard::new() {
                     let _ = cb.set_text(&result.item.path);

@@ -130,9 +130,102 @@ pub fn build_transform_urls(
     }
 }
 
+/// `:t` 실행 항목의 keywords 마커. Enter에서 이 접두를 보고 URL을 연다.
+pub const TRANSFORM_RUN_MARKER: &str = "kmd:transform:run";
+
+/// 클립보드가 비었을 때의 안내 항목 마커 (선택해도 아무 일도 없다).
+pub const TRANSFORM_EMPTY_MARKER: &str = "kmd:transform:empty";
+
+/// `:t` 질의를 **실행 항목 하나**로 만든다.
+///
+/// 검색 중에 브라우저를 열면 안 된다 — 타이핑하는 동안 키를 누를 때마다 탭이
+/// 열린다(실제 발생한 버그). 다른 모든 프리픽스처럼 "검색은 순수하게, 실행은
+/// Enter에서"를 지키기 위해, 검색 단계에서는 이 항목만 보여주고 실제 열기는
+/// 호출자가 Enter에서 [`build_transform_urls`]로 수행한다.
+///
+/// `text`가 비어 있으면(클립보드도 비었으면) 실행 불가 안내 항목을 돌려준다.
+pub fn run_item(query: &TransformQuery, service_count: usize, use_emoji: bool) -> IndexItem {
+    if query.text.trim().is_empty() {
+        return IndexItem {
+            name: "클립보드가 비어 있습니다".to_string(),
+            path: "텍스트를 복사한 뒤 다시 실행하세요".to_string(),
+            kind: ItemKind::SystemCommand,
+            source: Source::Plugin,
+            icon: if use_emoji { "\u{2139}\u{FE0F}" } else { "[!]" }.to_string(),
+            keywords: TRANSFORM_EMPTY_MARKER.to_string(),
+            icon_path: None,
+        };
+    }
+
+    let (label, icon_emoji, icon_ascii) = match &query.kind {
+        TransformKind::Spell => ("맞춤법 검사", "\u{270D}\u{FE0F}", "[SPL]"),
+        TransformKind::Translate(TranslateDirection::EnToKo) => {
+            ("번역 (→ 한국어)", "\u{1F5E3}\u{FE0F}", "[TR]")
+        }
+        TransformKind::Translate(TranslateDirection::KoToEn) => {
+            ("번역 (→ 영어)", "\u{1F5E3}\u{FE0F}", "[TR]")
+        }
+        TransformKind::Translate(TranslateDirection::Auto) => {
+            ("번역 (자동)", "\u{1F5E3}\u{FE0F}", "[TR]")
+        }
+    };
+
+    // 무엇을 보낼지 눈으로 확인하고 Enter를 누를 수 있게 대상 텍스트를 보여준다.
+    let preview: String = query.text.chars().take(40).collect();
+    let ellipsis = if query.text.chars().count() > 40 {
+        "…"
+    } else {
+        ""
+    };
+
+    IndexItem {
+        name: format!("{label} 실행 — {service_count}개 서비스 열기"),
+        path: format!("\"{preview}{ellipsis}\""),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        icon: if use_emoji { icon_emoji } else { icon_ascii }.to_string(),
+        keywords: TRANSFORM_RUN_MARKER.to_string(),
+        icon_path: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 실행_항목은_열지_않고_선택_가능한_항목만_만든다() {
+        let q = parse_transform_query(":t spell 안녕").unwrap();
+        let item = run_item(&q, 2, false);
+        assert_eq!(item.keywords, TRANSFORM_RUN_MARKER);
+        assert!(item.name.contains("맞춤법"), "{}", item.name);
+        assert!(item.name.contains('2'), "서비스 개수 표시: {}", item.name);
+        assert!(
+            item.path.contains("안녕"),
+            "대상 텍스트 표시: {}",
+            item.path
+        );
+    }
+
+    #[test]
+    fn 텍스트가_없으면_실행_불가_안내() {
+        let q = TransformQuery {
+            kind: TransformKind::Spell,
+            text: String::new(),
+        };
+        let item = run_item(&q, 2, false);
+        assert_eq!(item.keywords, TRANSFORM_EMPTY_MARKER);
+    }
+
+    #[test]
+    fn 긴_텍스트는_잘라서_보여준다() {
+        let q = TransformQuery {
+            kind: TransformKind::Translate(TranslateDirection::Auto),
+            text: "가".repeat(60),
+        };
+        let item = run_item(&q, 3, true);
+        assert!(item.path.ends_with("…\""), "말줄임: {}", item.path);
+    }
 
     #[test]
     fn test_parse_spell() {

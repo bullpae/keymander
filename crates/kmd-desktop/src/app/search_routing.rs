@@ -123,37 +123,16 @@ impl App {
                         }
                     }
                 }
-                if tq.text.is_empty() {
-                    self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                        name: "❌ 클립보드가 비어 있습니다".to_string(),
-                        path: "텍스트를 복사한 후 다시 시도하세요".to_string(),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji {
-                            "\u{2139}\u{FE0F}"
-                        } else {
-                            "[!]"
-                        }
-                        .to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    })));
-                    return;
-                }
-
-                let urls = transform::build_transform_urls(
+                // 검색 중에는 열지 않는다 — 타이핑하는 동안 키마다 탭이 열린다.
+                // 실행 항목 하나만 보여주고, 실제 열기는 Enter에서 한다.
+                let count = transform::build_transform_urls(
                     &tq,
                     &self.spell_providers,
                     &self.translate_providers,
-                );
-                for url in &urls {
-                    if let kmd_core::action::ActionResult::Error(e) =
-                        kmd_core::action::open_url(url)
-                    {
-                        tracing::warn!("URL 열기 실패: {url} — {e}");
-                    }
-                }
-                self.clear_results_state(kmd_core::SearchMode::Contains);
+                )
+                .len();
+                let item = transform::run_item(&tq, count, self.use_emoji);
+                self.apply_contains_results(items_to_results(std::iter::once(item)));
             }
             None => {
                 let items = transform::help_items(self.use_emoji);
