@@ -30,8 +30,10 @@
 # Windows 10 레거시 콘솔에서는 자동으로 false 적용
 # emoji_icons = true
 
-# Desktop 실행 시 IME를 영어 모드로 전환
-# reset_ime_on_launch = true
+# Desktop 실행 시 IME를 영어 모드로 전환 (기본 켜짐)
+# 런처 명령은 대부분 영문/기호로 시작하므로(@, :, ! 등) 한글 입력 상태에서
+# 열려도 바로 칠 수 있게 한다. 끄려면 아래 줄의 주석을 풀고 false로.
+reset_ime_on_launch = true
 
 # Desktop 런처 기본 폰트 크기 (px)
 # 모든 UI 요소가 이 값에 비례하여 자동 조절됨 (범위: 12–32, 기본: 16)
