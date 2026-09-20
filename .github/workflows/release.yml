@@ -33,9 +33,39 @@ jobs:
             fi
           done
 
+  # 태그가 가리키는 커밋에서 테스트를 직접 돌린다.
+  #
+  # 예전에는 빌드 잡들이 validate-version에만 의존해서, **CI 테스트가 실패해도
+  # 릴리스가 게시됐다**(v0.16.5에서 Windows 테스트가 깨진 채 배포됨). 별도
+  # 워크플로인 CI의 성공 여부는 릴리스가 알지 못하므로, 여기서 다시 돌려
+  # 게시 전에 막는다. 빌드보다 빠르게 끝나 전체 시간도 거의 늘지 않는다.
+  test-release-commit:
+    name: Test (${{ matrix.os }})
+    needs: validate-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev
+      - run: cargo test --workspace --locked
+        env:
+          KMD_E2E: "1"
+
   build-cli:
     name: Build CLI ${{ matrix.target }}
-    needs: validate-version
+    needs: [validate-version, test-release-commit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -95,7 +125,7 @@ jobs:
 
   build-desktop:
     name: Build Desktop ${{ matrix.target }}
-    needs: validate-version
+    needs: [validate-version, test-release-commit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -163,7 +193,7 @@ jobs:
 
   build-bundle:
     name: Portable Bundle ${{ matrix.target }}
-    needs: validate-version
+    needs: [validate-version, test-release-commit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -238,7 +268,7 @@ jobs:
 
   build-packages:
     name: Linux Packages (deb/rpm)
-    needs: validate-version
+    needs: [validate-version, test-release-commit]
     # rc 등 프리릴리스 제외 — apt/yum 발행이 게이트되어 쓰일 곳이 없고,
     # RPM 버전 규칙이 '-'를 불허해 rc 버전(0.x.0-rc.1)에서 generate-rpm이 죽는다
     if: ${{ !contains(github.ref_name, '-') }}

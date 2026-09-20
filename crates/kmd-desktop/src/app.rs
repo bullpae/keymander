@@ -1336,22 +1336,31 @@ impl App {
         Task::none()
     }
 
+    /// Quick Action 완료 콜백.
+    ///
+    /// 실패하면 창을 닫지 않는다 — 닫아버리면 사용자는 명령이 성공한 줄 안다.
+    /// 예전에는 실행 실패도 복사 실패도 로그만 남기고 무조건 종료해서, 종료
+    /// 코드 검증을 추가해도 GUI에서는 오류를 볼 수 없었다.
     fn handle_shell_done(&mut self, result: Result<String, String>) -> Task<Message> {
         match result {
-            Ok(output) => {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&output) {
-                        tracing::warn!("클립보드 쓰기 실패: {e}");
-                    }
+            Ok(output) => match copy_shell_output(&output) {
+                Ok(()) => {
+                    let first_line = output.lines().next().unwrap_or("(no output)");
+                    tracing::info!("Shell output copied: {first_line}");
+                    iced::exit()
                 }
-                let first_line = output.lines().next().unwrap_or("(no output)");
-                tracing::info!("Shell output copied: {first_line}");
-            }
+                Err(e) => {
+                    tracing::warn!("클립보드 쓰기 실패: {e}");
+                    self.status_message = Some(format!("실행은 됐으나 복사 실패: {e}"));
+                    Task::none()
+                }
+            },
             Err(msg) => {
                 tracing::error!("Shell error: {msg}");
+                self.status_message = Some(msg);
+                Task::none()
             }
         }
-        iced::exit()
     }
 
     fn handle_clip_search_finished(
@@ -1631,22 +1640,24 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
 ///
 /// 실패하면 사용자에게 보여줄 메시지를 돌려준다 — 조용히 로그만 남기면
 /// 사용자는 설정이 저장된 줄 안다.
+/// Quick Action 출력을 클립보드에 쓴다. 실패는 그대로 돌려준다 —
+/// 호출부가 창을 닫을지 알릴지 정한다.
+fn copy_shell_output(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// 설정 파일을 디스크에서 다시 읽어 **바꾸는 항목만** 고쳐 저장한다.
+/// 실패하면 사용자에게 보여줄 메시지를 돌려준다.
 fn save_config(f: impl FnOnce(&mut kmd_core::Config)) -> Option<String> {
-    let config_dir = kmd_core::Config::default_config_dir();
-    match kmd_core::Config::load(&config_dir) {
-        Ok(mut cfg) => {
-            f(&mut cfg);
-            match cfg.save() {
-                Ok(()) => None,
-                Err(e) => {
-                    tracing::warn!("Failed to save config: {e}");
-                    Some(format!("설정 저장 실패: {e}"))
-                }
-            }
-        }
+    let path = kmd_core::Config::default_config_dir().join(kmd_core::CONFIG_FILENAME);
+    match kmd_core::Config::update_and_save(&path, f) {
+        Ok(_) => None,
         Err(e) => {
-            tracing::warn!("Failed to load config for save: {e}");
-            Some(format!("설정을 읽지 못해 저장하지 못했습니다: {e}"))
+            tracing::warn!("Failed to save config: {e}");
+            Some(format!("설정 저장 실패: {e}"))
         }
     }
 }

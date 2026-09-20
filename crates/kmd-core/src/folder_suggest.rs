@@ -253,12 +253,34 @@ fn display_path(path: &Path) -> String {
 
 /// 제안 항목 Enter 처리 — search_paths에 추가하고 config를 저장한다.
 /// 저장까지 성공하면 안내 메시지를 반환한다 (keymap::execute_keymap_action 패턴).
+///
+/// 저장에 성공한 뒤에만 호출자의 설정을 갱신한다. 예전에는 메모리를 먼저 고치고
+/// 저장해서, 실패하면 화면상 추가된 경로가 메모리에만 남았다. 또 디스크의 최신
+/// 설정 위에 이 변경만 얹으므로, 그 사이 다른 곳에서 바뀐 값을 되돌리지 않는다.
 pub fn execute_suggest_action(config: &mut Config, keywords: &str) -> Option<String> {
-    let msg = apply_suggest_add(config, keywords)?;
-    if let Err(e) = config.save() {
-        return Some(format!("설정 저장 실패: {e}"));
+    // 먼저 사본에 적용해 "추가할 것이 있는지"와 안내 문구를 얻는다.
+    let mut probe = config.clone();
+    let msg = apply_suggest_add(&mut probe, keywords)?;
+
+    let Some(path) = config.config_path.clone() else {
+        // 저장 경로를 모르면 메모리에만 반영한다 (테스트·임시 설정 경로).
+        *config = probe;
+        return Some(msg);
+    };
+
+    let added = keywords.strip_prefix(SUGGEST_MARKER)?.to_string();
+    match Config::update_and_save(&path, |latest| {
+        let pb = PathBuf::from(&added);
+        if !latest.launcher.search_paths.contains(&pb) {
+            latest.launcher.search_paths.push(pb);
+        }
+    }) {
+        Ok(saved) => {
+            *config = saved;
+            Some(msg)
+        }
+        Err(e) => Some(format!("설정 저장 실패: {e}")),
     }
-    Some(msg)
 }
 
 /// 순수 적용부 (저장 없음) — 테스트용 분리.

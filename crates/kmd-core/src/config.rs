@@ -538,7 +538,7 @@ fn default_search_paths() -> Vec<PathBuf> {
 
 /// Search result priority weights per item kind.
 /// Higher values push results toward the top (0-100 range recommended).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct KindWeights {
     pub directory: u32,
@@ -757,6 +757,46 @@ impl Config {
         };
 
         write_atomic(path, &content)
+    }
+
+    /// 디스크의 최신 설정을 읽어 **변경분만 적용**하고 저장한다.
+    ///
+    /// `save()`는 메모리에 있는 설정 전체를 파일에 반영한다. 그래서 오래 열어 둔
+    /// 창이 저장하면 **그 사이 다른 곳(CLI·데몬·다른 창)에서 바뀐 값까지 옛 값으로
+    /// 되돌린다**:
+    ///
+    /// ```text
+    /// TUI 열기(테마=A) → CLI에서 테마=B로 변경 → TUI에서 검색 경로만 수정·저장
+    ///   → save()는 테마=A까지 다시 쓴다 (CLI 변경 유실)
+    /// ```
+    ///
+    /// 이 함수는 저장 직전에 파일을 다시 읽어 그 위에 `edit`이 바꾸는 항목만
+    /// 얹는다. 호출자는 **자기가 바꾸는 필드만** 손대면 된다.
+    ///
+    /// 파일 잠금은 아직 없다 — 두 프로세스가 같은 순간에 읽고 쓰면 나중 것이
+    /// 이긴다. 다만 창을 열어 둔 시간 전체가 아니라 저장 순간의 짧은 창만
+    /// 남으므로, 실사용에서 유실이 사실상 사라진다.
+    ///
+    /// 반환값은 저장된 설정 — 호출자가 메모리 캐시를 이것으로 교체하면
+    /// 디스크와 어긋나지 않는다.
+    pub fn update_and_save(
+        path: &Path,
+        edit: impl FnOnce(&mut Config),
+    ) -> Result<Config, ConfigError> {
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut latest = match Config::load(dir) {
+            Ok(c) => c,
+            // 파일이 없거나 깨졌으면 기본값 위에 편집을 얹는다 —
+            // 저장 자체를 포기하면 사용자 조작이 조용히 사라진다.
+            Err(e) => {
+                tracing::warn!("설정을 다시 읽지 못해 기본값에 적용한다: {e}");
+                Config::default()
+            }
+        };
+        latest.config_path = Some(path.to_path_buf());
+        edit(&mut latest);
+        latest.save()?;
+        Ok(latest)
     }
 
     /// Get a config value by dot-separated key path
@@ -1159,6 +1199,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CONFIG_FILENAME;
 
     // ── 잘못된 값 거부 (2026-08-27) ────────────────────────────────────
     //
@@ -1268,6 +1309,77 @@ mod tests {
         let mut p = std::env::temp_dir();
         p.push(format!("kmd_cfg_test_{tag}_{}.toml", std::process::id()));
         p
+    }
+
+    // ── 동시 편집: 남의 변경을 덮지 않는다 (REF-01) ────────────────────
+    //
+    // save()는 메모리 전체를 쓰므로, 오래 열어 둔 창이 저장하면 그 사이 다른
+    // 곳에서 바뀐 값까지 되돌린다. update_and_save는 저장 직전에 파일을 다시
+    // 읽어 변경분만 얹는다.
+
+    #[test]
+    fn 변경분만_적용해_다른_곳의_수정을_보존한다() {
+        let dir = std::env::temp_dir().join(format!(
+            "kmd_cfg_concurrent_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILENAME);
+
+        // 초기 상태 저장
+        let mut base = Config {
+            config_path: Some(path.clone()),
+            ..Default::default()
+        };
+        base.general.theme = "default".into();
+        base.general.render_fps = 30;
+        base.save().unwrap();
+
+        // A가 설정을 읽어 든다(오래 열어 둔 창)
+        let stale = Config::load(&dir).unwrap();
+        assert_eq!(stale.general.theme, "default");
+
+        // 그 사이 B가 테마를 바꿔 저장
+        Config::update_and_save(&path, |c| c.general.theme = "nord".into()).unwrap();
+
+        // A가 자기 항목(fps)만 바꿔 저장 — B의 테마를 되돌리면 안 된다
+        let saved = Config::update_and_save(&path, |c| {
+            c.general.render_fps = stale.general.render_fps + 15;
+        })
+        .unwrap();
+
+        assert_eq!(saved.general.render_fps, 45, "내 변경은 반영된다");
+        assert_eq!(saved.general.theme, "nord", "남의 변경을 덮지 않는다");
+
+        // 디스크에도 동일하게 남아야 한다
+        let reloaded = Config::load(&dir).unwrap();
+        assert_eq!(reloaded.general.theme, "nord");
+        assert_eq!(reloaded.general.render_fps, 45);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 저장_실패는_오류로_전달된다() {
+        // 일반 파일을 부모로 지정 — 그 아래에는 디렉터리를 만들 수 없다
+        let dir = std::env::temp_dir().join(format!(
+            "kmd_cfg_failpath_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("not-a-dir");
+        std::fs::write(&blocker, b"x").unwrap();
+
+        let err = Config::update_and_save(&blocker.join(CONFIG_FILENAME), |c| {
+            c.general.render_fps = 99;
+        });
+        assert!(err.is_err(), "저장 불가 경로는 오류여야 한다");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -266,10 +266,12 @@ pub fn run_app(
     state.sync_config_mirrors();
 
     // Setup terminal — 복구는 가드가 책임진다 (아래 TerminalSession 참조).
+    // 가드는 raw mode를 켠 **직후** 만든다. execute!가 실패하면 raw mode만
+    // 켜진 채 남는데, 가드가 그 뒤에 있으면 그 경우가 복구되지 않는다.
     enable_raw_mode()?;
+    let _terminal_guard = TerminalSession;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
-    let _terminal_guard = TerminalSession;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -367,14 +369,13 @@ struct TerminalSession;
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
+        // 각 복구 단계를 따로 실행한다 — execute!로 묶으면 앞 명령이 실패할 때
+        // 뒤 명령이 통째로 생략된다. 되돌릴 수 있는 것은 최대한 되돌린다.
         let mut out = std::io::stdout();
-        let _ = crossterm::execute!(
-            out,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            crossterm::cursor::Show
-        );
+        let _ = crossterm::execute!(out, DisableBracketedPaste);
+        let _ = crossterm::execute!(out, LeaveAlternateScreen);
+        let _ = crossterm::execute!(out, crossterm::cursor::Show);
+        let _ = disable_raw_mode();
     }
 }
 
@@ -418,14 +419,54 @@ fn apply_settings_action(
             // "저장됨"으로 보이는 불일치가 남았다. 파생 필드 동기화도 건너뛰어
             // 메모리 안에서까지 어긋났다.
             let edited = settings_state.config.clone();
-            if let Err(e) = edited.save() {
-                state.status_message = Some(format!("[!] Save failed: {}", e));
-                state.settings = Some(settings_state); // dirty 유지 — 아직 저장 전이다
+            let Some(path) = state
+                .config
+                .config_path
+                .clone()
+                .or_else(|| edited.config_path.clone())
+            else {
+                state.status_message = Some("[!] Save failed: 설정 경로를 알 수 없습니다".into());
+                state.settings = Some(settings_state);
                 return;
-            }
+            };
 
-            // 여기부터는 파일이 확실히 새 값이다.
-            state.config = edited;
+            // 모달이 열려 있는 동안 다른 곳(CLI·데몬·데스크톱)에서 바뀐 값을
+            // 되돌리지 않도록, 디스크의 최신 설정 위에 **이 모달에서 실제로
+            // 바뀐 항목만** 얹는다. 예전에는 편집본 전체를 저장해서, 창을 오래
+            // 열어 둘수록 남의 변경을 덮어쓸 창이 넓어졌다.
+            let before = state.config.clone();
+            let saved = kmd_core::Config::update_and_save(&path, |latest| {
+                for key in kmd_core::Config::registry_keys() {
+                    let (old, new) = (before.get_value(key), edited.get_value(key));
+                    if old != new {
+                        if let Some(v) = new {
+                            let _ = latest.set_value(key, &v);
+                        }
+                    }
+                }
+                // 레지스트리 밖의 리스트형 항목은 모달이 직접 편집한다.
+                if before.launcher.search_paths != edited.launcher.search_paths {
+                    latest.launcher.search_paths = edited.launcher.search_paths.clone();
+                }
+                if before.launcher.ignore_patterns != edited.launcher.ignore_patterns {
+                    latest.launcher.ignore_patterns = edited.launcher.ignore_patterns.clone();
+                }
+                if before.launcher.kind_weights != edited.launcher.kind_weights {
+                    latest.launcher.kind_weights = edited.launcher.kind_weights.clone();
+                }
+            });
+
+            let saved = match saved {
+                Ok(c) => c,
+                Err(e) => {
+                    state.status_message = Some(format!("[!] Save failed: {}", e));
+                    state.settings = Some(settings_state); // dirty 유지 — 아직 저장 전이다
+                    return;
+                }
+            };
+
+            // 여기부터는 파일이 확실히 새 값이다. 메모리도 저장된 것으로 맞춘다.
+            state.config = saved;
             settings_state.dirty = false;
 
             // Apply immediate settings — config 파생 필드는 한 곳에서 다시 채운다.
@@ -1689,13 +1730,37 @@ mod tests {
         let mut state = test_state();
         let mut engine = SearchEngine::new();
 
-        // 저장 불가능한 경로를 가리켜 실패를 강제한다
-        let unwritable = PathBuf::from("/nonexistent-dir-kmd-test/config.toml");
+        // 저장 실패를 확실히 유도한다.
+        //
+        // "없는 디렉터리" 경로로는 부족하다 — Config::save()가 부모를
+        // create_dir_all로 만들기 때문에, 권한만 있으면 저장이 성공한다
+        // (Windows CI에서 실제로 성공해 이 테스트가 깨졌다).
+        // 대신 **일반 파일을 부모로** 지정한다: 파일 아래에는 디렉터리를
+        // 만들 수 없으므로 OS·권한과 무관하게 실패한다.
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "kmd_save_fail_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir).expect("테스트 디렉터리 생성");
+        let blocker = tmp_dir.join("parent-is-a-file");
+        std::fs::write(&blocker, b"not a directory").expect("차단 파일 생성");
+        let unwritable = blocker.join("config.toml");
+
         let before_fps = state.config.general.render_fps;
 
         let mut edited = kmd_core::Config::default();
         edited.general.render_fps = before_fps + 17;
         edited.config_path = Some(unwritable);
+
+        // 전제 검증: 이 경로가 정말 저장 불가여야 이 테스트가 의미를 갖는다.
+        // (예전 버전은 "없는 디렉터리"를 썼는데 save()가 부모를 만들어 성공해
+        // 버렸고, 아무것도 검증하지 못한 채 통과/실패를 오갔다.)
+        assert!(
+            edited.save().is_err(),
+            "테스트 전제가 깨졌다 — 이 경로에 저장이 성공해 버린다"
+        );
 
         state.settings = Some(crate::tui::settings::SettingsState::new(edited));
         if let Some(s) = state.settings.as_mut() {
@@ -1727,6 +1792,8 @@ mod tests {
             "실패를 알려야 한다: {:?}",
             state.status_message
         );
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 
     // ── :t 는 검색 중에 브라우저를 열지 않는다 ──────────────────────────
