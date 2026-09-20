@@ -265,10 +265,11 @@ pub fn run_app(
     };
     state.sync_config_mirrors();
 
-    // Setup terminal
+    // Setup terminal — 복구는 가드가 책임진다 (아래 TerminalSession 참조).
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    let _terminal_guard = TerminalSession;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -348,16 +349,33 @@ pub fn run_app(
         }
     }
 
-    // Restore terminal
-    disable_raw_mode()?;
-    crossterm::execute!(
-        terminal.backend_mut(),
-        DisableBracketedPaste,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
-
+    // 터미널 복구는 _terminal_guard의 Drop이 처리한다 — 여기서 중복으로 하지
+    // 않는다. 정상 종료든 `?`로 빠져나가든 패닉이든 같은 경로로 복구된다.
     Ok(())
+}
+
+/// 터미널을 원래 상태로 되돌리는 RAII 가드.
+///
+/// raw mode·대체 화면·bracketed paste를 켠 구간에서 `?`가 하나라도 조기 반환하면
+/// 복구 코드가 실행되지 않아 **사용자 셸이 망가진 채 남는다**(에코 없음, 프롬프트
+/// 안 보임). 실제로 이 함수에는 `terminal.draw()?`·`events.next()?` 등 조기 반환
+/// 지점이 여럿 있었다. Drop에 맡기면 오류·패닉 어느 쪽으로 나가도 복구된다.
+///
+/// Drop에서는 실패해도 할 수 있는 게 없으므로 결과를 무시한다 — 나머지 복구
+/// 단계는 계속 시도하는 편이 낫다.
+struct TerminalSession;
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut out = std::io::stdout();
+        let _ = crossterm::execute!(
+            out,
+            DisableBracketedPaste,
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+    }
 }
 
 // ── Settings Integration ─────────────────────────────────────────────────────
@@ -374,7 +392,16 @@ fn handle_settings_key_event(
     };
 
     let action = settings::handle_settings_key(&mut settings_state, key);
+    apply_settings_action(state, settings_state, action, engine);
+}
 
+/// 설정 모달의 액션을 적용한다 (키 입력 해석과 분리 — 테스트에서 직접 호출).
+fn apply_settings_action(
+    state: &mut AppState,
+    mut settings_state: SettingsState,
+    action: SettingsAction,
+    engine: &mut SearchEngine,
+) {
     match action {
         SettingsAction::None => {
             // Put it back
@@ -385,18 +412,21 @@ fn handle_settings_key_event(
             state.settings = None;
         }
         SettingsAction::Save { needs_rebuild } => {
-            // 편집 결과를 정본(`state.config`)에 반영한다.
-            // 예전에는 메인 루프가 소유한 `config`와 이 캐시 두 벌이 공존해
-            // 한쪽만 고치면 `:keys`/`:keymap`이 옛 설정을 보게 됐다 — 이제 한 벌이다.
-            state.config = settings_state.config.clone();
-            settings_state.dirty = false;
-
-            // Save to file
-            if let Err(e) = state.config.save() {
+            // 저장이 **성공한 뒤에만** 메모리 상태를 바꾼다.
+            // 예전에는 state.config를 먼저 교체하고 dirty를 내린 다음 저장해서,
+            // 저장이 실패하면 파일은 옛 값인데 메모리는 새 값이고 편집창은
+            // "저장됨"으로 보이는 불일치가 남았다. 파생 필드 동기화도 건너뛰어
+            // 메모리 안에서까지 어긋났다.
+            let edited = settings_state.config.clone();
+            if let Err(e) = edited.save() {
                 state.status_message = Some(format!("[!] Save failed: {}", e));
-                state.settings = Some(settings_state);
+                state.settings = Some(settings_state); // dirty 유지 — 아직 저장 전이다
                 return;
             }
+
+            // 여기부터는 파일이 확실히 새 값이다.
+            state.config = edited;
+            settings_state.dirty = false;
 
             // Apply immediate settings — config 파생 필드는 한 곳에서 다시 채운다.
             state.sync_config_mirrors();
@@ -626,6 +656,18 @@ fn handle_paste(
 // ── Execute ──────────────────────────────────────────────────────────────────
 
 /// URL 목록을 브라우저로 열고, quit_on_launch 설정 시 종료 플래그 설정
+/// 클립보드에 쓰고 실패를 그대로 돌려준다.
+///
+/// 예전에는 호출부마다 `let _ = clipboard.set_text(..)`로 결과를 버리고 무조건
+/// "Copied"라고 표시했다 — 클립보드가 막힌 환경(원격 세션·권한 제한)에서
+/// 복사된 줄 알고 붙여넣다 낭패를 본다.
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())
+}
+
 fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
     for url in urls {
         let _ = action::open_url(url);
@@ -830,22 +872,16 @@ fn execute_selected(
         return;
     }
 
-    if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(&result.item.path);
-            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path));
-            // ✅
-        }
-        return;
-    }
-
-    // Emoji result → copy to clipboard
-    if result.item.kind == ItemKind::Emoji && !result.item.path.is_empty() {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(&result.item.path);
-            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path));
-            // ✅
-        }
+    // 계산기·이모지 결과 → 클립보드 복사.
+    // 복사에 실패하면 실패를 알린다 — 예전에는 결과를 버리고 무조건 "Copied"라
+    // 표시해서, 클립보드가 막힌 환경에서 복사된 줄 알고 붙여넣다 낭패를 봤다.
+    if matches!(result.item.kind, ItemKind::Calculator | ItemKind::Emoji)
+        && !result.item.path.is_empty()
+    {
+        state.status_message = Some(match copy_to_clipboard(&result.item.path) {
+            Ok(()) => format!("\u{2705} Copied: {}", result.item.path),
+            Err(e) => format!("\u{274C} 복사 실패: {e}"),
+        });
         return;
     }
 
@@ -858,12 +894,11 @@ fn execute_selected(
             let shell_ext = builtin_shell::ShellExtension;
             match shell_ext.execute(&result.item) {
                 kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
-                    // Copy to clipboard and show first line as status
-                    let first_line = output.lines().next().unwrap_or("(no output)");
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(&output);
-                    }
-                    state.status_message = Some(format!("\u{2705} {}", first_line));
+                    let first_line = output.lines().next().unwrap_or("(no output)").to_string();
+                    state.status_message = Some(match copy_to_clipboard(&output) {
+                        Ok(()) => format!("\u{2705} {first_line}"),
+                        Err(e) => format!("\u{274C} 실행은 됐으나 복사 실패: {e}"),
+                    });
                 }
                 kmd_core::plugin::ExtensionAction::Display(msg) => {
                     state.status_message = Some(format!("\u{274C} {}", msg)); // ❌
@@ -1641,6 +1676,57 @@ mod tests {
             cached_effective_query: String::new(),
             dirty: true,
         }
+    }
+
+    // ── 설정 저장은 성공한 뒤에만 상태를 바꾼다 (REF-01) ────────────────
+    //
+    // 예전에는 state.config를 먼저 교체하고 dirty를 내린 다음 저장해서, 저장이
+    // 실패하면 파일은 옛 값·메모리는 새 값·편집창은 "저장됨"이 되는 불일치가
+    // 남았다.
+
+    #[test]
+    fn 저장_실패시_메모리_설정과_편집상태가_그대로다() {
+        let mut state = test_state();
+        let mut engine = SearchEngine::new();
+
+        // 저장 불가능한 경로를 가리켜 실패를 강제한다
+        let unwritable = PathBuf::from("/nonexistent-dir-kmd-test/config.toml");
+        let before_fps = state.config.general.render_fps;
+
+        let mut edited = kmd_core::Config::default();
+        edited.general.render_fps = before_fps + 17;
+        edited.config_path = Some(unwritable);
+
+        state.settings = Some(crate::tui::settings::SettingsState::new(edited));
+        if let Some(s) = state.settings.as_mut() {
+            s.dirty = true;
+        }
+
+        let settings_state = state.settings.take().expect("모달 준비됨");
+        apply_settings_action(
+            &mut state,
+            settings_state,
+            SettingsAction::Save {
+                needs_rebuild: false,
+            },
+            &mut engine,
+        );
+
+        assert_eq!(
+            state.config.general.render_fps, before_fps,
+            "저장 실패 시 메모리 설정은 그대로여야 한다"
+        );
+        let settings = state.settings.as_ref().expect("모달이 열린 채 남는다");
+        assert!(settings.dirty, "저장 안 됐으므로 dirty가 유지되어야 한다");
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Save failed"),
+            "실패를 알려야 한다: {:?}",
+            state.status_message
+        );
     }
 
     // ── :t 는 검색 중에 브라우저를 열지 않는다 ──────────────────────────

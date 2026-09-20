@@ -174,7 +174,25 @@ fn lower_indexer_thread_priority() {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn lower_indexer_thread_priority() {}
 
+/// 전체 인덱스 재생성 직렬화 락.
+///
+/// 재생성 경로는 둘이다 — 주기 리프레셔와 IPC `RebuildIndex`. 둘이 겹치면 같은
+/// 트리를 두 번 스캔하고 같은 캐시 파일에 경쟁적으로 쓴다(임시 파일명이 PID
+/// 기준이라 같은 데몬 안의 두 스레드는 구분되지 않았다). 이 락으로 한 번에
+/// 하나만 돌게 한다.
+static INDEX_REBUILD_LOCK: Mutex<()> = Mutex::new(());
+
+/// 재생성 락을 잡는다. 오염된 락(이전 재생성이 패닉)도 계속 쓴다 —
+/// 인덱스 재생성은 실패해도 다음 주기에 다시 하면 되는 작업이라,
+/// 락 오염 때문에 영구히 멈추는 쪽이 더 나쁘다.
+fn lock_index_rebuild() -> std::sync::MutexGuard<'static, ()> {
+    INDEX_REBUILD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
+    let _rebuild_guard = lock_index_rebuild();
     let started = Instant::now();
     let index = Index::build(&config.launcher, config.general.emoji_icons);
     let count = index.items.len();
@@ -637,6 +655,8 @@ fn process_request(
         }
 
         Request::RebuildIndex => {
+            // 주기 리프레셔와 같은 락 — 둘이 겹쳐 중복 스캔·캐시 경쟁을 만들지 않게.
+            let _rebuild_guard = lock_index_rebuild();
             let config = load_config();
             let index = Index::build(&config.launcher, config.general.emoji_icons);
             let count = index.items.len();

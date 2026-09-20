@@ -26,9 +26,12 @@ pub fn save_index(index: &Index, path: &Path) -> Result<(), StoreError> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
-    // 프로세스별 고유 tmp — 데몬과 데스크톱이 동시에 캐시를 써도 같은 tmp를
-    // 밟지 않는다(기존 고정 tmp 이름은 동시 쓰기 시 파일이 섞일 수 있었다).
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    // 프로세스·스레드별 고유 tmp — 데몬과 데스크톱이 동시에 캐시를 써도, 또
+    // 같은 데몬 안의 두 재생성 경로(주기 리프레셔·IPC)가 겹쳐도 같은 tmp를
+    // 밟지 않는다. PID만으로는 같은 프로세스의 스레드를 구분하지 못했다.
+    let tid = format!("{:?}", std::thread::current().id());
+    let tid: String = tid.chars().filter(|c| c.is_alphanumeric()).collect();
+    let tmp = path.with_extension(format!("tmp.{}.{tid}", std::process::id()));
     let _ = std::fs::remove_file(&tmp); // 같은 pid의 이전 크래시 잔여물 제거
 
     let mut opts = std::fs::OpenOptions::new();

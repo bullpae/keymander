@@ -71,7 +71,9 @@ jobs:
             libudev-dev libssl-dev
       # KMD_E2E=1: 데몬 프로세스 E2E(tests/e2e_daemon.rs, unix 전용)까지 실행.
       # Windows는 테스트가 cfg(unix)로 컴파일 제외라 env가 있어도 무해하다.
-      - run: cargo test --workspace
+      # --locked: Cargo.lock을 그대로 쓴다. 락이 낡았으면 조용히 갱신하는 대신
+      # 실패해서, 빌드마다 의존성이 달라지는 일을 막는다.
+      - run: cargo test --workspace --locked
         env:
           KMD_E2E: "1"
 

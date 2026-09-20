@@ -1115,7 +1115,26 @@ fn merge_table(old: &mut toml_edit::Table, new: &toml_edit::Table) {
 fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
     use std::io::Write;
 
-    let tmp = path.with_extension("toml.tmp");
+    // 임시 파일명은 프로세스·스레드별로 고유해야 한다. 고정 이름(config.toml.tmp)을
+    // 쓰면 데몬·데스크톱·TUI가 동시에 저장할 때 서로의 임시 파일을 덮어써
+    // 뒤섞인 내용이 rename될 수 있다.
+    let unique = format!(
+        "toml.tmp.{}.{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    );
+    // ThreadId의 Debug는 "ThreadId(2)" 꼴이라 경로에 쓰기 나쁜 문자를 지운다.
+    let unique: String = unique
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let tmp = path.with_extension(unique);
     let io_err = |e| ConfigError::Io(path.to_path_buf(), e);
 
     {
@@ -1304,9 +1323,19 @@ render_fps = 30
         c.save().unwrap();
 
         assert!(path.exists(), "저장된 파일 존재");
+        // 임시 파일명은 프로세스·스레드별로 고유하므로 이름을 특정할 수 없다.
+        // 대신 **이 테스트가 만든 파일**의 이름으로 시작하는 tmp만 센다
+        // (공용 temp 디렉터리에는 무관한 .tmp 파일이 널려 있다).
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(&stem) && n.contains(".toml.tmp"))
+            .collect();
         assert!(
-            !path.with_extension("toml.tmp").exists(),
-            "임시 파일은 rename으로 사라져야 한다"
+            leftovers.is_empty(),
+            "임시 파일은 rename으로 사라져야 한다: {leftovers:?}"
         );
         // 저장 결과가 다시 읽히는 온전한 TOML인지
         let reloaded: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

@@ -3,6 +3,14 @@
 use super::context_actions_for;
 use super::*;
 
+/// 클립보드에 쓰고 실패를 그대로 돌려준다 — 호출부가 사용자에게 알릴 수 있게.
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())
+}
+
 impl App {
     /// Enter 실행 진입점 (KeyEvent에서 호출). 클립보드 결과에서 Cmd(macOS)/
     /// Ctrl+Enter는 붙여넣지 않고 시스템 클립보드에 **복사만** 하며, 그 외에는
@@ -279,8 +287,11 @@ impl App {
                 });
             }
             // 사용자 명령 → 새 터미널 창에서 실행 (결과가 화면에 유지됨)
+            // 실패하면 창을 닫지 않는다 — 닫아버리면 사용자는 명령이 돌아간 줄 안다.
             if let Err(e) = builtin_shell::launch_in_terminal(&result.item.path) {
                 tracing::warn!("터미널 실행 실패: {e}");
+                self.status_message = Some(format!("터미널 실행 실패: {e}"));
+                return Task::none();
             }
             return iced::exit();
         }
@@ -348,8 +359,11 @@ impl App {
         // Enter를 눌러도 아무것도 복사되지 않고 창만 닫혔다.)
         if matches!(result.item.kind, ItemKind::Calculator | ItemKind::Emoji) {
             if !result.item.path.is_empty() {
-                if let Ok(mut cb) = arboard::Clipboard::new() {
-                    let _ = cb.set_text(&result.item.path);
+                // 복사에 실패하면 창을 닫지 않는다 — 닫아버리면 복사된 줄 안다.
+                if let Err(e) = copy_to_clipboard(&result.item.path) {
+                    tracing::warn!("클립보드 복사 실패: {e}");
+                    self.status_message = Some(format!("복사 실패: {e}"));
+                    return Task::none();
                 }
             }
             return iced::exit();

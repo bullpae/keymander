@@ -73,7 +73,7 @@ jobs:
         run: cargo check --workspace
 
       - name: Build
-        run: cargo build --release -p keymander --target ${{ matrix.target }}
+        run: cargo build --release -p keymander --target ${{ matrix.target }} --locked
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -141,7 +141,7 @@ jobs:
         run: cargo check --workspace
 
       - name: Build
-        run: cargo build --release -p kmd-desktop --target ${{ matrix.target }}
+        run: cargo build --release -p kmd-desktop --target ${{ matrix.target }} --locked
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -202,9 +202,9 @@ jobs:
 
       - name: Build all binaries
         run: |
-          cargo build --release -p keymander --target ${{ matrix.target }}
-          cargo build --release -p kmd-desktop --target ${{ matrix.target }}
-          cargo build --release -p kmd-daemon --target ${{ matrix.target }}
+          cargo build --release -p keymander --target ${{ matrix.target }} --locked
+          cargo build --release -p kmd-desktop --target ${{ matrix.target }} --locked
+          cargo build --release -p kmd-daemon --target ${{ matrix.target }} --locked
 
       - name: Stage portable bundle
         shell: bash
@@ -258,7 +258,7 @@ jobs:
         run: cargo install cargo-deb cargo-generate-rpm --locked
 
       - name: Build all binaries
-        run: cargo build --release -p keymander -p kmd-desktop -p kmd-daemon
+        run: cargo build --release -p keymander -p kmd-desktop -p kmd-daemon --locked
 
       - name: Stage example config
         run: |

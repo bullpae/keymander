@@ -417,7 +417,24 @@ impl ShellExtension {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000);
         }
-        let (_success, stdout, _stderr, _code) = run_with_timeout(cmd, COMMAND_TIMEOUT)?;
+        let (success, stdout, stderr, code) = run_with_timeout(cmd, COMMAND_TIMEOUT)?;
+
+        // 비정상 종료를 성공으로 넘기지 않는다 — 예전에는 종료 코드와 stderr를
+        // 버려서, 명령이 실패해도 빈 출력이 "(no output)"으로 표시됐다.
+        if !success {
+            let detail = if !stderr.trim().is_empty() {
+                stderr.trim().to_string()
+            } else if !stdout.trim().is_empty() {
+                stdout.trim().to_string()
+            } else {
+                "출력 없음".to_string()
+            };
+            let where_ = match code {
+                Some(c) => format!("종료 코드 {c}"),
+                None => "신호로 종료됨".to_string(),
+            };
+            return Err(format!("{} 실패 ({where_}): {detail}", action.name));
+        }
 
         if stdout.is_empty() {
             Ok("(no output)".to_string())
@@ -503,6 +520,29 @@ impl Extension for ShellExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 실패를 성공으로 보고하지 않는다 (REF-02) ──────────────────────
+    //
+    // 예전에는 run_with_timeout의 종료 코드·stderr를 버려서, 명령이 실패해도
+    // 빈 출력이 "(no output)"으로 표시됐다.
+
+    #[test]
+    fn 비정상_종료는_오류로_전달된다() {
+        // 반드시 실패하는 명령을 직접 돌려 동일한 판정 로직을 확인한다
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo to-stderr >&2; exit 3"]);
+        let (success, _stdout, stderr, code) =
+            run_with_timeout(cmd, COMMAND_TIMEOUT).expect("실행 자체는 된다");
+        assert!(!success, "exit 3은 실패로 판정되어야 한다");
+        assert_eq!(code, Some(3));
+        assert!(stderr.contains("to-stderr"), "stderr가 보존되어야 한다");
+    }
+
+    #[test]
+    fn 알_수_없는_quick_action은_오류() {
+        let err = ShellExtension::execute_quick_action("no-such-action").unwrap_err();
+        assert!(err.contains("Unknown quick action"), "{err}");
+    }
 
     #[test]
     fn test_quick_actions_list() {
