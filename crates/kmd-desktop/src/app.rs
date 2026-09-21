@@ -1649,10 +1649,32 @@ fn copy_shell_output(text: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// 설정 저장 대상 경로.
+///
+/// 테스트에서는 **실제 사용자 설정 파일을 건드리면 안 된다.** 설정 토글을
+/// 검증하는 테스트들이 이 함수를 타는데, 그게 `~/Library/Application Support`의
+/// 진짜 config.toml을 쓰는 바람에 `cargo test`를 돌릴 때마다 사용자의 IME
+/// 설정·테마·공급자 목록이 바뀌었다(실제 발생: "재설치하면 초기화된다"고
+/// 보고된 증상의 정체). 테스트에서는 임시 경로로 격리한다.
+fn config_save_path() -> std::path::PathBuf {
+    #[cfg(test)]
+    {
+        // 테스트 바이너리별로 고유한 임시 파일 — 병렬 실행에도 섞이지 않는다.
+        std::env::temp_dir().join(format!(
+            "kmd_desktop_test_config_{}.toml",
+            std::process::id()
+        ))
+    }
+    #[cfg(not(test))]
+    {
+        kmd_core::Config::default_config_dir().join(kmd_core::CONFIG_FILENAME)
+    }
+}
+
 /// 설정 파일을 디스크에서 다시 읽어 **바꾸는 항목만** 고쳐 저장한다.
 /// 실패하면 사용자에게 보여줄 메시지를 돌려준다.
 fn save_config(f: impl FnOnce(&mut kmd_core::Config)) -> Option<String> {
-    let path = kmd_core::Config::default_config_dir().join(kmd_core::CONFIG_FILENAME);
+    let path = config_save_path();
     match kmd_core::Config::update_and_save(&path, f) {
         Ok(_) => None,
         Err(e) => {
@@ -2911,6 +2933,19 @@ mod tests {
             app.spell_providers,
             vec!["naver_spell".to_string(), "pusan_spell".to_string()],
             "전부 끄면 기본값으로 되돌아와야 @sp가 계속 동작한다"
+        );
+    }
+
+    #[test]
+    fn 테스트는_실제_사용자_설정을_건드리지_않는다() {
+        // 설정 토글 테스트들이 save_config를 타는데, 그게 실제 config.toml을
+        // 쓰면 `cargo test`를 돌릴 때마다 사용자 설정이 바뀐다(실제 발생:
+        // IME 설정이 재설치 때마다 초기화된다는 증상의 정체였다).
+        let real = kmd_core::Config::default_config_dir().join(kmd_core::CONFIG_FILENAME);
+        assert_ne!(
+            config_save_path(),
+            real,
+            "테스트에서 실제 사용자 설정 경로를 쓰면 안 된다"
         );
     }
 
