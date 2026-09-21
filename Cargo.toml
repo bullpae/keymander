@@ -10,7 +10,7 @@ iced_wgpu = { path = "vendor/iced_wgpu" }
 
 [package]
 name = "keymander"
-version = "0.16.6"
+version = "0.16.7"
 edition = "2021"
 build = "build.rs"
 description = "키보드 하나로 모든 것을 지휘한다 — CLI-first 크로스플랫폼 런처"

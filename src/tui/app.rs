@@ -436,23 +436,27 @@ fn apply_settings_action(
             // 열어 둘수록 남의 변경을 덮어쓸 창이 넓어졌다.
             let before = state.config.clone();
             let saved = kmd_core::Config::update_and_save(&path, |latest| {
-                for key in kmd_core::Config::registry_keys() {
+                // **모든** 편집 가능 키를 훑는다. registry_keys()만 보면 명시적
+                // arm으로 처리되는 키(everything_path·keymap.*·각종 providers/
+                // prefixes 11개)가 빠져, 화면에서 바꿔도 저장되지 않는다.
+                // kind_weights도 여기서 키 단위로 처리되므로 구조체를 통째로
+                // 대입하지 않는다 — 대입하면 남이 바꾼 다른 가중치를 되돌린다.
+                for key in kmd_core::Config::all_editable_keys() {
                     let (old, new) = (before.get_value(key), edited.get_value(key));
                     if old != new {
                         if let Some(v) = new {
-                            let _ = latest.set_value(key, &v);
+                            if let Err(e) = latest.set_value(key, &v) {
+                                tracing::warn!("설정 '{key}' 적용 실패: {e}");
+                            }
                         }
                     }
                 }
-                // 레지스트리 밖의 리스트형 항목은 모달이 직접 편집한다.
+                // 리스트 편집 UI가 직접 다루는 항목 (키 문자열로 왕복하지 않는다)
                 if before.launcher.search_paths != edited.launcher.search_paths {
                     latest.launcher.search_paths = edited.launcher.search_paths.clone();
                 }
                 if before.launcher.ignore_patterns != edited.launcher.ignore_patterns {
                     latest.launcher.ignore_patterns = edited.launcher.ignore_patterns.clone();
-                }
-                if before.launcher.kind_weights != edited.launcher.kind_weights {
-                    latest.launcher.kind_weights = edited.launcher.kind_weights.clone();
                 }
             });
 
@@ -697,6 +701,29 @@ fn handle_paste(
 // ── Execute ──────────────────────────────────────────────────────────────────
 
 /// URL 목록을 브라우저로 열고, quit_on_launch 설정 시 종료 플래그 설정
+/// 디스크의 최신 설정에 변경분만 얹어 저장하고, 성공하면 메모리 캐시를
+/// 저장된 설정으로 교체한다.
+///
+/// 직접 `state.config`를 고치고 `save()`하면 두 가지가 깨진다 —
+/// 그 사이 다른 곳에서 바뀐 값을 되돌리고, 저장이 실패해도 메모리에는
+/// 변경이 남는다. 설정을 바꾸는 모든 TUI 경로가 이 함수를 쓴다.
+fn save_config_change(
+    state: &mut AppState,
+    edit: impl FnOnce(&mut kmd_core::Config),
+) -> Result<(), String> {
+    let Some(path) = state.config.config_path.clone() else {
+        return Err("설정 경로를 알 수 없습니다".to_string());
+    };
+    match kmd_core::Config::update_and_save(&path, edit) {
+        Ok(saved) => {
+            state.config = saved;
+            state.sync_config_mirrors();
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// 클립보드에 쓰고 실패를 그대로 돌려준다.
 ///
 /// 예전에는 호출부마다 `let _ = clipboard.set_text(..)`로 결과를 버리고 무조건
@@ -1279,24 +1306,22 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
             } else if body.is_empty() {
                 state.status_message = Some("❌ 본문이 비어 있습니다".to_string());
             } else {
-                state
-                    .config
-                    .launcher
-                    .prompt_templates
-                    .retain(|t| !t.name.eq_ignore_ascii_case(name));
-                state
-                    .config
-                    .launcher
-                    .prompt_templates
-                    .push(kmd_core::config::PromptTemplate {
-                        name: name.to_string(),
-                        body: body.to_string(),
-                    });
-                if let Err(e) = state.config.save() {
-                    state.status_message = Some(format!("❌ 저장 실패: {e}"));
-                } else {
-                    state.status_message = Some(format!("✅ 템플릿 '{name}' 저장됨"));
-                }
+                let (nm, bd) = (name.to_string(), body.to_string());
+                state.status_message = Some(
+                    match save_config_change(state, move |latest| {
+                        latest
+                            .launcher
+                            .prompt_templates
+                            .retain(|t| !t.name.eq_ignore_ascii_case(&nm));
+                        latest
+                            .launcher
+                            .prompt_templates
+                            .push(kmd_core::config::PromptTemplate { name: nm, body: bd });
+                    }) {
+                        Ok(()) => format!("✅ 템플릿 '{name}' 저장됨"),
+                        Err(e) => format!("❌ 저장 실패: {e}"),
+                    },
+                );
             }
         } else {
             state.status_message = Some("사용법: :prompt add <name> <body>".to_string());
@@ -1317,18 +1342,25 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
         if name.is_empty() {
             state.status_message = Some("사용법: :prompt remove <name>".to_string());
         } else {
-            let before = state.config.launcher.prompt_templates.len();
-            state
+            let exists = state
                 .config
                 .launcher
                 .prompt_templates
-                .retain(|t| !t.name.eq_ignore_ascii_case(name));
-            if state.config.launcher.prompt_templates.len() < before {
-                if let Err(e) = state.config.save() {
-                    state.status_message = Some(format!("❌ 저장 실패: {e}"));
-                } else {
-                    state.status_message = Some(format!("✅ 템플릿 '{name}' 삭제됨"));
-                }
+                .iter()
+                .any(|t| t.name.eq_ignore_ascii_case(name));
+            if exists {
+                let nm = name.to_string();
+                state.status_message = Some(
+                    match save_config_change(state, move |latest| {
+                        latest
+                            .launcher
+                            .prompt_templates
+                            .retain(|t| !t.name.eq_ignore_ascii_case(&nm));
+                    }) {
+                        Ok(()) => format!("✅ 템플릿 '{name}' 삭제됨"),
+                        Err(e) => format!("❌ 저장 실패: {e}"),
+                    },
+                );
             } else {
                 state.status_message = Some(format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"));
             }
@@ -1724,6 +1756,110 @@ mod tests {
     // 예전에는 state.config를 먼저 교체하고 dirty를 내린 다음 저장해서, 저장이
     // 실패하면 파일은 옛 값·메모리는 새 값·편집창은 "저장됨"이 되는 불일치가
     // 남았다.
+
+    /// 설정 모달을 열고 편집한 뒤 저장 액션까지 돌린다 — 저장된 파일을 돌려준다.
+    fn save_via_modal(
+        state: &mut AppState,
+        engine: &mut SearchEngine,
+        edit: impl FnOnce(&mut kmd_core::Config),
+    ) -> kmd_core::Config {
+        let mut edited = state.config.clone();
+        edit(&mut edited);
+        state.settings = Some(crate::tui::settings::SettingsState::new(edited));
+        if let Some(s) = state.settings.as_mut() {
+            s.dirty = true;
+        }
+        let settings_state = state.settings.take().expect("모달");
+        apply_settings_action(
+            state,
+            settings_state,
+            SettingsAction::Save {
+                needs_rebuild: false,
+            },
+            engine,
+        );
+        let dir = state.config.config_path.clone().unwrap();
+        kmd_core::Config::load(dir.parent().unwrap()).expect("저장된 설정 재로드")
+    }
+
+    fn state_with_config_file(tag: &str) -> (AppState, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "kmd_tui_cfg_{tag}_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(kmd_core::CONFIG_FILENAME);
+
+        let mut state = test_state();
+        state.config.config_path = Some(path.clone());
+        state.config.save().expect("초기 저장");
+        (state, dir)
+    }
+
+    // ── 설정 화면의 모든 항목이 실제로 저장되는가 ───────────────────────
+    //
+    // v0.16.6은 registry_keys()만 훑어, 화면에서 편집한 11개 항목(keymap 경로·
+    // 각종 providers/prefixes 등)이 **저장 성공으로 표시된 채 사라졌다.**
+    // 저장 후 파일을 다시 읽어 확인한다.
+
+    #[test]
+    fn 레지스트리_밖_항목도_저장된다() {
+        let (mut state, dir) = state_with_config_file("nonreg");
+        let mut engine = SearchEngine::new();
+
+        let saved = save_via_modal(&mut state, &mut engine, |c| {
+            c.launcher.keymap.kanata_path = Some("/tmp/my-kanata".into());
+            c.launcher.spell_providers = vec!["pusan_spell".into()];
+            c.launcher.translate_prefixes = vec!["@tr2".into()];
+            c.launcher.keymap.backend = "kanata".into();
+        });
+
+        assert_eq!(
+            saved.launcher.keymap.kanata_path.as_deref(),
+            Some(std::path::Path::new("/tmp/my-kanata")),
+            "kanata 경로가 저장되지 않았다"
+        );
+        assert_eq!(saved.launcher.spell_providers, vec!["pusan_spell"]);
+        assert_eq!(saved.launcher.translate_prefixes, vec!["@tr2"]);
+        assert_eq!(saved.launcher.keymap.backend, "kanata");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 레지스트리_항목도_그대로_저장된다() {
+        let (mut state, dir) = state_with_config_file("reg");
+        let mut engine = SearchEngine::new();
+
+        let saved = save_via_modal(&mut state, &mut engine, |c| {
+            c.general.render_fps = 47;
+            c.launcher.max_results = 123;
+        });
+
+        assert_eq!(saved.general.render_fps, 47);
+        assert_eq!(saved.launcher.max_results, 123);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 저장은_다른_곳의_변경을_되돌리지_않는다() {
+        let (mut state, dir) = state_with_config_file("concurrent");
+        let mut engine = SearchEngine::new();
+        let path = state.config.config_path.clone().unwrap();
+
+        // 모달을 여는 사이 다른 곳에서 테마 변경
+        kmd_core::Config::update_and_save(&path, |c| c.general.theme = "nord".into()).unwrap();
+
+        let saved = save_via_modal(&mut state, &mut engine, |c| c.general.render_fps = 51);
+
+        assert_eq!(saved.general.render_fps, 51, "내 변경은 반영된다");
+        assert_eq!(saved.general.theme, "nord", "남의 변경을 덮지 않는다");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn 저장_실패시_메모리_설정과_편집상태가_그대로다() {

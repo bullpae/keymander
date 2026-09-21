@@ -759,6 +759,42 @@ impl Config {
         write_atomic(path, &content)
     }
 
+    /// `get_value`/`set_value`로 다룰 수 있는 **모든** 설정 키.
+    ///
+    /// `registry_keys()`는 매크로가 생성한 단순 키만 담는다. 리스트 정규화나
+    /// 중첩 구조가 필요한 키는 여전히 명시적 match arm으로 처리되는데, 이 둘을
+    /// 헷갈리면 조용한 유실이 난다 — 실제로 TUI 저장이 `registry_keys()`만
+    /// 훑어 **화면에서 편집한 11개 항목이 저장되지 않았다**(v0.16.6 회귀).
+    ///
+    /// 아래 `EXPLICIT_KEYS`와 레지스트리를 합친 것이 정본이다. 새 키를 명시적
+    /// arm으로 추가하면 여기에도 넣어야 하며, `모든_편집키가_왕복한다` 테스트가
+    /// 누락을 잡는다.
+    pub fn all_editable_keys() -> Vec<&'static str> {
+        /// 매크로 밖에서 match arm으로 처리되는 키들 (리스트·중첩 구조).
+        // 주의: search_paths·ignore_patterns는 여기 없다 — get_value를 지원하지
+        // 않고 전용 리스트 편집 UI가 직접 다룬다. 저장 경로도 그 둘만 따로
+        // 비교해 반영한다.
+        const EXPLICIT_KEYS: &[&str] = &[
+            "launcher.everything_path",
+            "launcher.multi_llm_providers",
+            "launcher.multi_llm_prefixes",
+            "launcher.multi_web_providers",
+            "launcher.multi_web_prefixes",
+            "launcher.spell_providers",
+            "launcher.spell_prefixes",
+            "launcher.translate_providers",
+            "launcher.translate_prefixes",
+            "launcher.llm_autopilot",
+            "launcher.keymap.backend",
+            "launcher.keymap.kanata_path",
+            "launcher.keymap.profile_dir",
+            "launcher.keymap.active_profile",
+        ];
+        let mut keys: Vec<&'static str> = Self::registry_keys().to_vec();
+        keys.extend_from_slice(EXPLICIT_KEYS);
+        keys
+    }
+
     /// 디스크의 최신 설정을 읽어 **변경분만 적용**하고 저장한다.
     ///
     /// `save()`는 메모리에 있는 설정 전체를 파일에 반영한다. 그래서 오래 열어 둔
@@ -784,15 +820,11 @@ impl Config {
         edit: impl FnOnce(&mut Config),
     ) -> Result<Config, ConfigError> {
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let mut latest = match Config::load(dir) {
-            Ok(c) => c,
-            // 파일이 없거나 깨졌으면 기본값 위에 편집을 얹는다 —
-            // 저장 자체를 포기하면 사용자 조작이 조용히 사라진다.
-            Err(e) => {
-                tracing::warn!("설정을 다시 읽지 못해 기본값에 적용한다: {e}");
-                Config::default()
-            }
-        };
+        // 읽기 실패는 그대로 올린다. 기본값으로 진행하면 **파일에 문법 오류가
+        // 있는 상태에서 설정 하나를 바꿨을 때 나머지가 전부 기본값으로 덮인다.**
+        // (파일이 아예 없는 경우는 Config::load가 이미 기본값을 돌려주므로
+        // 여기까지 오지 않는다.)
+        let mut latest = Config::load(dir)?;
         latest.config_path = Some(path.to_path_buf());
         edit(&mut latest);
         latest.save()?;
@@ -1309,6 +1341,95 @@ mod tests {
         let mut p = std::env::temp_dir();
         p.push(format!("kmd_cfg_test_{tag}_{}.toml", std::process::id()));
         p
+    }
+
+    // ── 편집 가능 키 전수 왕복 ─────────────────────────────────────────
+    //
+    // v0.16.6에서 TUI 저장이 registry_keys()만 훑어, 명시적 arm으로 처리되는
+    // 11개 키(everything_path·keymap.*·각종 providers/prefixes)가 화면에서
+    // 편집해도 저장되지 않았다. all_editable_keys()가 정본임을 여기서 지킨다.
+
+    #[test]
+    fn 모든_편집키가_왕복한다() {
+        let mut c = Config::default();
+        for key in Config::all_editable_keys() {
+            let before = c
+                .get_value(key)
+                .unwrap_or_else(|| panic!("get_value 없음: {key}"));
+            // 읽은 값을 그대로 다시 넣는 것은 항상 성공해야 한다
+            c.set_value(key, &before)
+                .unwrap_or_else(|e| panic!("set_value 실패: {key} — {e}"));
+            let after = c.get_value(key).unwrap();
+            assert_eq!(before, after, "왕복이 값을 바꿨다: {key}");
+        }
+    }
+
+    #[test]
+    fn 편집키_목록에_중복이_없다() {
+        let keys = Config::all_editable_keys();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            keys.len(),
+            sorted.len(),
+            "레지스트리와 명시적 키 목록이 겹친다 — 한쪽이 죽은 코드가 된다"
+        );
+    }
+
+    #[test]
+    fn 변경분_적용이_모든_키에서_동작한다() {
+        // 저장 경로가 실제로 쓰는 패턴: 두 설정을 키 단위로 비교해 다른 것만 적용
+        let base = Config::default();
+        let mut edited = Config::default();
+        edited.launcher.keymap.kanata_path = Some("/tmp/kanata".into());
+        edited.launcher.spell_providers = vec!["naver_spell".into()];
+        edited.launcher.everything_path = Some("/tmp/es.exe".into());
+
+        let mut target = Config::default();
+        for key in Config::all_editable_keys() {
+            let (old, new) = (base.get_value(key), edited.get_value(key));
+            if old != new {
+                if let Some(v) = new {
+                    target.set_value(key, &v).unwrap();
+                }
+            }
+        }
+
+        assert_eq!(
+            target.launcher.keymap.kanata_path.as_deref(),
+            Some(std::path::Path::new("/tmp/kanata")),
+            "keymap.kanata_path가 반영되지 않았다"
+        );
+        assert_eq!(target.launcher.spell_providers, vec!["naver_spell"]);
+        assert_eq!(
+            target.launcher.everything_path.as_deref(),
+            Some(std::path::Path::new("/tmp/es.exe"))
+        );
+    }
+
+    #[test]
+    fn 읽기_실패는_기본값으로_덮지_않는다() {
+        let dir = std::env::temp_dir().join(format!(
+            "kmd_cfg_broken_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILENAME);
+
+        // 문법이 깨진 설정 파일
+        std::fs::write(&path, b"this is [not valid toml").unwrap();
+
+        let r = Config::update_and_save(&path, |c| c.general.render_fps = 99);
+        assert!(r.is_err(), "깨진 설정을 기본값으로 덮어쓰면 안 된다");
+
+        // 원본이 그대로 남아야 한다
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("not valid toml"), "원본이 보존되어야 한다");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── 동시 편집: 남의 변경을 덮지 않는다 (REF-01) ────────────────────
