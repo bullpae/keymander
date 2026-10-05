@@ -15,7 +15,7 @@ keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 �
 | Homebrew | `brew install bullpae/tap/keymander` | ✅ 설치·갱신 자동 | 없음 |
 | apt (Debian/Ubuntu) | `apt install keymander` | ✅ 설치·갱신 자동 | 없음 |
 | yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
-| winget (Windows) | `winget install keymander` | ✅ 등록 완료 (v0.16.2, 2026-09-10) | 🔶 **갱신 PR은 수동** — §2.2 |
+| winget (Windows) | `winget install keymander` | ✅ 등록 완료 (v0.16.2, 2026-09-10) | 🔶 **갱신 자동화는 토큰에 `workflow` 스코프 필요** — §2.2 |
 
 사용자 관점의 채널별 설치 배치(바이너리·예시 config 경로, 포터블/표준 모드,
 런타임 파일 위치)는 README의 **"Install layout by channel"** 절이 정본이다.
@@ -108,32 +108,61 @@ scripts/gen-winget-manifests.sh <버전> /tmp/winget
 저장소가 거대해서 clone보다 GitHub contents API로 올리는 게 훨씬 빠르다.
 PR 제목 관례: `New package: bullpae.keymander version X.Y.Z`
 
-### 2.2 winget 자동 갱신용 PAT — 🔶 아직 동작하지 않는다
+### 2.2 winget 자동 갱신용 PAT — 🔶 `workflow` 스코프가 필요하다
 
-winget-releaser는 winget-pkgs를 fork하고 PR을 내야 하므로 deploy key로는 안 되고
-사용자 PAT가 필요하다.
+winget-releaser(내부적으로 komac)는 winget-pkgs 포크에 브랜치를 만들고 PR을 내야
+하므로 deploy key로는 안 되고 사용자 PAT가 필요하다.
 
-**현재 상태**: `WINGET_GITHUB_TOKEN`은 등록돼 있지만 릴리스 워크플로의 winget 잡이
-**`CreateRef` 권한 오류로 실패**한다. fine-grained PAT으로는 포크에 브랜치를
-만들 수 없다 — 아래 **classic** PAT가 맞다. 그때까지는 릴리스 후 로컬에서
-수동 제출한다 (PR #432626·#433987·#437988을 이렇게 올렸다):
+**`CreateRef` 실패의 진짜 원인 (2026-10-05 규명)**: 에러 문구는
+`bullpae does not have the correct permissions to execute CreateRef`. komac은 포크에
+**upstream 최신 커밋을 가리키는 브랜치**를 만든다. 그런데 포크의 master가
+뒤처져 있고 그사이 upstream이 `.github/workflows/`를 고쳤다면, 그 브랜치 생성은
+포크 기준으로 **워크플로 파일 변경**이 된다. GitHub는 이를 `workflow` 스코프 없는
+토큰에 허용하지 않는다.
+
+그래서 증상이 간헐적이었다:
+
+| 시점 | 결과 | 이유 |
+|---|---|---|
+| v0.16.3 | ✅ | 포크를 막 맞춘 직후 — 워크플로 동일 |
+| v0.16.4~0.16.9 | ❌ | upstream이 워크플로를 바꿈 (확인 당시 포크가 27,062커밋 뒤처짐, workflows 트리 불일치) |
+| 로컬 `komac --submit` | 항상 ✅ | `gh auth token`에 `workflow` 스코프가 있다 |
+
+토큰을 여러 번 다시 등록해도 같은 에러가 난 것도 이 때문이다(스코프가 그대로였다).
+예전 문서의 "fine-grained PAT이라 안 된다"는 **틀린 추정**이었다.
+
+**응급 처치** — 포크를 upstream에 맞추면 워크플로 차이가 사라져 기존 토큰으로도
+통과한다(포크 master에 고유 커밋이 없어 fast-forward):
 
 ```bash
-komac update bullpae.keymander --version <VER> \
-  --urls <설치파일 URL들> --submit --token "$(gh auth token)"
+gh api -X POST repos/bullpae/winget-pkgs/merge-upstream -f branch=master
 ```
 
-**발행 절차 (classic PAT)**:
+단 upstream이 워크플로를 또 고치면 재발한다. CI에 이 동기화 단계를 넣어도
+**동기화 자체가 워크플로 파일을 갱신하므로 같은 스코프가 필요**해 해결이 안 된다.
 
-1. GitHub → Settings → Developer settings → Personal access tokens →
-   **Tokens (classic)** → Generate new token (classic)
-2. Note: `keymander-winget-automation`, Expiration: 1년 권장
-3. Scopes: **`public_repo`** 하나만
+**근본 해결 — `workflow` 스코프를 포함한 classic PAT**:
+
+1. 발급 링크(스코프 미리 선택됨):
+   <https://github.com/settings/tokens/new?scopes=public_repo,workflow&description=keymander-winget>
+2. Expiration: 1년 권장
+3. Scopes: **`public_repo` + `workflow`** (둘 다 필요)
 4. ```bash
    gh secret set WINGET_GITHUB_TOKEN --repo bullpae/keymander
    ```
 
 토큰 만료 시 같은 명령으로 재등록. 만료가 다가오면 GitHub가 메일로 알려준다.
+
+**그때까지의 우회** — 릴리스 후 로컬에서 수동 제출(PR #432626·#433987·#437988·
+#446932를 이렇게 올렸다). zip 이름은 `release.yml`의 `installers-regex`와 같아야 한다:
+
+```bash
+GITHUB_TOKEN=$(gh auth token) KOMAC_FORK_OWNER=bullpae \
+komac update bullpae.keymander --version <VER> \
+  --urls https://github.com/bullpae/keymander/releases/download/v<VER>/keymander-portable-x86_64-pc-windows-msvc.zip \
+         https://github.com/bullpae/keymander/releases/download/v<VER>/keymander-portable-aarch64-pc-windows-msvc.zip \
+  --submit
+```
 
 ### 2.3 이미 등록된 시크릿 (재작업 불필요)
 
