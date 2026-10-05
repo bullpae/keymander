@@ -499,7 +499,14 @@ impl App {
         ];
 
         let emoji = self.use_emoji;
-        let mut items: Vec<kmd_core::SearchResult> = FALLBACK_IDS
+
+        // 검색 결과가 비는 가장 흔한 원인은 "그 폴더가 검색 범위 밖"이다.
+        // 웹 검색을 권하기 전에 범위 추가 제안을 먼저 보여준다 — 예전에는 이
+        // 제안이 `?` 프리픽스 안에만 있어 사용자가 찾을 수 없었다.
+        let mut items: Vec<kmd_core::SearchResult> =
+            kmd_core::folder_suggest::suggestion_results(&self.runtime_config.launcher, emoji, 2);
+
+        let web_items: Vec<kmd_core::SearchResult> = FALLBACK_IDS
             .iter()
             .filter_map(|id| WEB_SERVICES.iter().find(|s| s.id == *id))
             .map(|service| {
@@ -507,6 +514,7 @@ impl App {
                 kmd_core::SearchResult { item, score: 0 }
             })
             .collect();
+        items.extend(web_items);
 
         let multi_items = web::multi_llm_result_items(query, &self.selected_llm_providers, emoji);
         if let Some(multi_item) = multi_items.into_iter().next() {

@@ -1546,6 +1546,17 @@ fn handle_main_search(
         kmd_core::history::boost_results(&mut results, db);
     }
 
+    // 결과가 없으면 "검색 범위 밖 폴더" 제안을 보여준다. 빈 화면만 내놓으면
+    // 사용자는 왜 안 나오는지 알 수 없다 — 가장 흔한 원인이 범위 누락이다.
+    // (데스크톱도 같은 지점에서 같은 제안을 쓴다)
+    if results.is_empty() && !query.trim().is_empty() {
+        results.extend(kmd_core::folder_suggest::suggestion_results(
+            &state.config.launcher,
+            state.use_emoji,
+            2,
+        ));
+    }
+
     state.results = results;
     state.selected_index = 0;
 }

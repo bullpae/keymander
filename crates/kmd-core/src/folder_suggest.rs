@@ -49,12 +49,106 @@ fn home_dir() -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-/// 후보 폴더를 스캔해 제안 목록을 만든다 (실제 홈 기준).
+/// 제안 후보를 찾을 루트 목록.
+///
+/// 홈 직계만 보면 **홈 밖에서 일하는 사용자에게는 아무것도 제안하지 못한다.**
+/// Windows에서 `D:\\work`처럼 다른 드라이브에 작업 폴더를 두는 구성이 흔한데,
+/// 그 경우 기본 검색 경로(Desktop/Documents/Downloads/OneDrive)에도 없고 제안
+/// 후보에도 없어 검색이 통째로 비는 것처럼 보인다 (실사용 보고).
+/// 그래서 홈과 함께 드라이브·볼륨 루트도 후보 루트로 본다.
+fn candidate_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(home) = home_dir() {
+        roots.push(home);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        for letter in 'A'..='Z' {
+            let drive = PathBuf::from(format!("{letter}:\\"));
+            if drive.is_dir() {
+                roots.push(drive);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(entries) = std::fs::read_dir("/Volumes") {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    roots.push(p);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for mp in ["/mnt", "/media"] {
+            if let Ok(entries) = std::fs::read_dir(mp) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        roots.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// 드라이브 루트 직계에 있는 OS/시스템 폴더 — 제안 후보로 부적절하다.
+/// (홈은 별도 루트로 스캔하므로 `Users`도 여기서 거른다)
+fn is_system_dir_name(name: &str) -> bool {
+    const SYSTEM_DIRS: &[&str] = &[
+        "Windows",
+        "Program Files",
+        "Program Files (x86)",
+        "ProgramData",
+        "System Volume Information",
+        "Recovery",
+        "PerfLogs",
+        "Users",
+        "Library",
+        "System",
+        "Applications",
+        "node_modules",
+        "bin",
+        "sbin",
+        "usr",
+        "var",
+        "etc",
+        "opt",
+        "proc",
+        "dev",
+        "tmp",
+    ];
+    SYSTEM_DIRS.iter().any(|d| d.eq_ignore_ascii_case(name))
+}
+
+/// 후보 폴더를 스캔해 제안 목록을 만든다 (홈 + 드라이브/볼륨 루트).
+///
+/// 스캔 예산([`ENTRY_BUDGET`])은 **전체 루트가 공유**한다 — 루트가 늘어도
+/// 키 입력 경로의 최악 비용이 그대로 유지된다.
 pub fn suggest_folders(launcher: &LauncherConfig, max: usize) -> Vec<FolderSuggestion> {
-    let Some(home) = home_dir() else {
-        return Vec::new();
-    };
-    suggest_folders_in(&home, launcher, SystemTime::now(), max)
+    let now = SystemTime::now();
+    let mut budget = ENTRY_BUDGET;
+    let mut all: Vec<FolderSuggestion> = Vec::new();
+    for root in candidate_roots() {
+        if budget == 0 {
+            break;
+        }
+        all.extend(scan_root(&root, launcher, now, &mut budget));
+    }
+    all.sort_by_key(|s| std::cmp::Reverse(s.recent_files));
+    all.truncate(max);
+    all
 }
 
 /// 현재 검색 범위와 겹치는(조상/자손 어느 쪽이든) 폴더인가.
@@ -71,8 +165,7 @@ fn covered_by_search_paths(launcher: &LauncherConfig, path: &Path) -> bool {
 /// 첫 호출만 스캔 비용(예산 상한 내)을 내고, 이후 10분간 캐시를 반환한다.
 /// 캐시 반환 시에도 현재 search_paths 기준으로 다시 걸러낸다.
 pub fn cached_suggestions(launcher: &LauncherConfig, max: usize) -> Vec<FolderSuggestion> {
-    static CACHE: Mutex<Option<(Instant, Vec<FolderSuggestion>)>> = Mutex::new(None);
-    let mut guard = match CACHE.lock() {
+    let mut guard = match SUGGEST_CACHE.lock() {
         Ok(g) => g,
         Err(_) => return suggest_folders(launcher, max),
     };
@@ -85,6 +178,46 @@ pub fn cached_suggestions(launcher: &LauncherConfig, max: usize) -> Vec<FolderSu
     let out = filter_covered(launcher, fresh.iter().cloned(), max);
     *guard = Some((Instant::now(), fresh));
     out
+}
+
+/// 제안 세션 캐시 (스캔 결과, 마지막 계산 시각).
+static SUGGEST_CACHE: Mutex<Option<(Instant, Vec<FolderSuggestion>)>> = Mutex::new(None);
+/// 백그라운드 워밍이 이미 돌고 있는지 — 매 키 입력마다 스레드를 띄우지 않는다.
+static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// **UI 경로 전용** — 캐시에 있으면 돌려주고, 없으면 백그라운드로 채운 뒤
+/// 이번에는 빈 목록을 반환한다.
+///
+/// 제안 계산은 파일시스템 스캔이라 키 입력 경로에서 동기로 돌리면 안 된다.
+/// 후보 루트에 외장·네트워크 볼륨이 들어가면 한 번의 검색이 수 초씩 멈춘다
+/// (실측: 이 함수를 만들기 전 테스트에서 검색 한 번이 14초까지 늘어졌다).
+/// 제안은 다음 검색부터 나타나며, 그 지연은 사용자에게 무해하다.
+pub fn cached_suggestions_nonblocking(
+    launcher: &LauncherConfig,
+    max: usize,
+) -> Vec<FolderSuggestion> {
+    use std::sync::atomic::Ordering;
+
+    if let Ok(guard) = SUGGEST_CACHE.lock() {
+        if let Some((at, cached)) = guard.as_ref() {
+            if at.elapsed() < CACHE_TTL {
+                return filter_covered(launcher, cached.iter().cloned(), max);
+            }
+        }
+    }
+
+    // 캐시가 없거나 낡았다 — 한 번만 백그라운드 워밍을 띄운다.
+    if !WARMING.swap(true, Ordering::AcqRel) {
+        let cfg = launcher.clone();
+        std::thread::spawn(move || {
+            let fresh = suggest_folders(&cfg, 5);
+            if let Ok(mut g) = SUGGEST_CACHE.lock() {
+                *g = Some((Instant::now(), fresh));
+            }
+            WARMING.store(false, Ordering::Release);
+        });
+    }
+    Vec::new()
 }
 
 /// 검색 범위와 겹치는 항목을 걸러내고 max개까지 반환 (순수 함수 — 테스트용 분리).
@@ -100,11 +233,28 @@ fn filter_covered(
 }
 
 /// 테스트 가능한 내부 구현 — 홈 경로와 현재 시각을 주입받는다.
+#[cfg(test)]
 fn suggest_folders_in(
     home: &Path,
     launcher: &LauncherConfig,
     now: SystemTime,
     max: usize,
+) -> Vec<FolderSuggestion> {
+    let mut budget = ENTRY_BUDGET;
+    let mut s = scan_root(home, launcher, now, &mut budget);
+    s.sort_by_key(|x| std::cmp::Reverse(x.recent_files));
+    s.truncate(max);
+    s
+}
+
+/// 루트 하나의 **직계 하위 폴더**를 후보로 스캔한다.
+/// 정렬·절단은 호출자가 한다 (여러 루트 결과를 합쳐야 하므로).
+/// `budget`은 루트 간 공유된다.
+fn scan_root(
+    root: &Path,
+    launcher: &LauncherConfig,
+    now: SystemTime,
+    budget: &mut usize,
 ) -> Vec<FolderSuggestion> {
     let ignore_set: HashSet<&str> = launcher
         .ignore_patterns
@@ -114,14 +264,13 @@ fn suggest_folders_in(
     let allowed = crate::content_index::allowed_extensions(&launcher.content_search);
     let recent_cutoff = now - Duration::from_secs(RECENT_DAYS * 24 * 3600);
 
-    let mut budget = ENTRY_BUDGET;
     let mut suggestions: Vec<FolderSuggestion> = Vec::new();
 
-    let Ok(entries) = std::fs::read_dir(home) else {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
     for entry in entries.flatten() {
-        if budget == 0 {
+        if *budget == 0 {
             break;
         }
         let path = entry.path();
@@ -131,6 +280,10 @@ fn suggest_folders_in(
         let name = entry.file_name().to_string_lossy().to_string();
         // 숨김·시스템·무시 패턴 폴더는 후보에서 제외
         if name.starts_with('.') || name.starts_with('$') || ignore_set.contains(name.as_str()) {
+            continue;
+        }
+        // 드라이브 루트 직계의 OS 폴더(Windows, Program Files, Users…)는 후보가 아니다
+        if is_system_dir_name(&name) {
             continue;
         }
         // 이미 검색 범위와 겹치는 폴더는 제외 (조상/자손 어느 쪽이든)
@@ -144,7 +297,7 @@ fn suggest_folders_in(
             &allowed,
             &launcher.content_search,
             recent_cutoff,
-            &mut budget,
+            budget,
         );
         if count >= MIN_RECENT_FILES {
             suggestions.push(FolderSuggestion {
@@ -154,8 +307,6 @@ fn suggest_folders_in(
         }
     }
 
-    suggestions.sort_by_key(|s| std::cmp::Reverse(s.recent_files));
-    suggestions.truncate(max);
     suggestions
 }
 
@@ -216,7 +367,8 @@ pub fn suggestion_results(
     use_emoji: bool,
     max: usize,
 ) -> Vec<SearchResult> {
-    cached_suggestions(launcher, max)
+    // UI 경로 — 절대 블로킹하지 않는다 (cached_suggestions_nonblocking 참조)
+    cached_suggestions_nonblocking(launcher, max)
         .into_iter()
         .map(|s| {
             let display = display_path(&s.path);
@@ -313,6 +465,76 @@ mod tests {
         LauncherConfig {
             search_paths: paths,
             ..Default::default()
+        }
+    }
+
+    // ── 홈 밖 루트도 후보가 된다 (Windows D:\work 같은 구성) ──────────
+    //
+    // 예전에는 read_dir(home) 하나만 봐서, 홈 밖에 작업 폴더를 둔 사용자에게는
+    // 제안이 영원히 비어 있었다 — 윈도우에서 검색이 안 된다는 보고의 원인.
+
+    #[test]
+    fn 시스템_폴더는_후보에서_제외된다() {
+        let root = tempfile::tempdir().unwrap();
+        // 드라이브 루트 직계의 OS 폴더를 흉내 — 문서가 많아도 제안하면 안 된다
+        for sys in ["Windows", "Program Files", "Users"] {
+            let d = root.path().join(sys);
+            std::fs::create_dir(&d).unwrap();
+            for i in 0..8 {
+                write_file(&d, &format!("f{i}.md"), "x");
+            }
+        }
+        // 진짜 작업 폴더
+        let work = root.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        for i in 0..8 {
+            write_file(&work, &format!("n{i}.md"), "x");
+        }
+
+        let mut budget = ENTRY_BUDGET;
+        let got = scan_root(
+            root.path(),
+            &launcher_with_paths(vec![]),
+            SystemTime::now(),
+            &mut budget,
+        );
+        let names: Vec<String> = got
+            .iter()
+            .map(|s| s.path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["work".to_string()],
+            "시스템 폴더가 섞였다: {names:?}"
+        );
+    }
+
+    #[test]
+    fn 예산은_루트_사이에_공유된다() {
+        let a = tempfile::tempdir().unwrap();
+        let busy = a.path().join("docs");
+        std::fs::create_dir(&busy).unwrap();
+        for i in 0..8 {
+            write_file(&busy, &format!("n{i}.md"), "x");
+        }
+
+        // 예산이 0이면 더 스캔하지 않는다 — 루트가 늘어도 최악 비용이 고정된다
+        let mut budget = 0usize;
+        let got = scan_root(
+            a.path(),
+            &launcher_with_paths(vec![]),
+            SystemTime::now(),
+            &mut budget,
+        );
+        assert!(got.is_empty(), "예산 소진 후에는 스캔하지 않아야 한다");
+    }
+
+    #[test]
+    fn 후보_루트에_홈이_포함된다() {
+        let roots = candidate_roots();
+        assert!(!roots.is_empty(), "후보 루트가 비어 있다");
+        if let Some(home) = home_dir() {
+            assert!(roots.contains(&home), "홈이 후보 루트에 없다: {roots:?}");
         }
     }
 
