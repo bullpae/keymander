@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.16.9] — 2026-10-05
+
 ### Added
 - **자주 여는 폴더를 검색 범위에 추가하라고 제안한다.** 기존 제안은 "최근 파일이
   많이 바뀐 폴더"만 봤는데, 실제로 자주 **여는** 폴더와 다를 때가 많았다. 이제
