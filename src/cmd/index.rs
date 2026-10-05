@@ -14,9 +14,9 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
                 "제안할 폴더가 없습니다 — 검색 범위 밖에서 최근 활동이 활발한 폴더가 없습니다."
             );
         } else {
-            println!("검색 범위에 추가할 만한 폴더 (최근 2주 활동 기준):\n");
+            println!("검색 범위에 추가할 만한 폴더 (사용 이력 + 최근 활동 기준):\n");
             for s in &suggestions {
-                println!("  {}  — 최근 문서 {}개", s.path.display(), s.recent_files);
+                println!("  {}  — {}", s.path.display(), s.reason_label());
             }
             println!(
                 "\n추가: 런처에서 `?` 입력 후 제안 항목에 Enter, 또는 config.toml의\n\

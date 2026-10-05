@@ -32,12 +32,39 @@ const ENTRY_BUDGET: usize = 12_000;
 /// 세션 캐시 TTL
 const CACHE_TTL: Duration = Duration::from_secs(600);
 
+/// 제안 근거 — 왜 이 폴더를 권하는지. 문구가 달라야 사용자가 납득한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuggestReason {
+    /// 신호 ① 변경 활동 — 최근 [`RECENT_DAYS`]일 내 수정된 문서 수
+    RecentActivity(usize),
+    /// 신호 ② 실행 이력 — 이 폴더 아래 항목을 연 누적 횟수.
+    /// 사용자가 **실제로 쓰는** 폴더라는 더 직접적인 증거다.
+    LaunchHistory(usize),
+}
+
 /// 제안 1건.
 #[derive(Debug, Clone)]
 pub struct FolderSuggestion {
     pub path: PathBuf,
-    /// 최근 RECENT_DAYS일 내 수정된 인덱싱 대상 파일 수
-    pub recent_files: usize,
+    pub reason: SuggestReason,
+}
+
+impl FolderSuggestion {
+    /// 정렬용 점수. 실행 이력은 "직접 썼다"는 증거라 같은 수치여도 더 높게 친다.
+    pub fn score(&self) -> usize {
+        match self.reason {
+            SuggestReason::RecentActivity(n) => n,
+            SuggestReason::LaunchHistory(n) => n.saturating_mul(3),
+        }
+    }
+
+    /// 제안 이유를 사람이 읽는 문구로.
+    pub fn reason_label(&self) -> String {
+        match self.reason {
+            SuggestReason::RecentActivity(n) => format!("최근 2주 문서 {n}개"),
+            SuggestReason::LaunchHistory(n) => format!("여기서 {n}번 열었음"),
+        }
+    }
 }
 
 /// 홈 디렉터리 (HOME → USERPROFILE 폴백).
@@ -132,6 +159,80 @@ fn is_system_dir_name(name: &str) -> bool {
     SYSTEM_DIRS.iter().any(|d| d.eq_ignore_ascii_case(name))
 }
 
+/// 실행 이력에서 "자주 쓰는 폴더"를 뽑는다 (신호 ②, docs/15).
+///
+/// 변경 활동(신호 ①)은 "파일이 자주 바뀌는 곳"을 찾지만, 사용자가 **실제로
+/// 여는** 폴더와는 다를 수 있다. 이력은 더 직접적이다 — `:f`로 폴더를 직접
+/// 지정해 열었거나 드릴다운으로 들어간 경로가 그대로 남기 때문에, 검색 범위
+/// 밖에서 수동으로 파일을 찾아 쓰고 있던 폴더가 정확히 드러난다.
+///
+/// 파일은 부모 폴더로, 폴더는 자기 자신으로 집계한다.
+fn suggest_from_history(
+    db: &crate::db::Database,
+    launcher: &LauncherConfig,
+    max: usize,
+) -> Vec<FolderSuggestion> {
+    /// 집계에 쓸 이력 상한 — frequency 내림차순이라 상위만 봐도 충분하다.
+    const HISTORY_SCAN: usize = 500;
+    /// 제안 최소 기준 — 한두 번 연 폴더까지 권하면 소음이 된다.
+    const MIN_LAUNCHES: usize = 3;
+
+    let mut by_parent: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
+
+    for h in db.query_history(HISTORY_SCAN) {
+        // 경로가 있는 항목만. item_type 표기가 데스크톱(소문자)과 TUI(대문자)로
+        // 갈려 있어 대소문자를 무시한다.
+        let kind = h.item_type.to_ascii_lowercase();
+        let is_dir = kind == "dir" || kind == "directory";
+        if !(is_dir || kind == "file") {
+            continue;
+        }
+        let p = PathBuf::from(&h.value);
+        if !p.is_absolute() {
+            continue;
+        }
+        let folder = if is_dir {
+            p
+        } else {
+            match p.parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => continue,
+            }
+        };
+        if !folder.is_dir() {
+            continue; // 지워졌거나 외장이 빠진 경로
+        }
+        *by_parent.entry(folder).or_insert(0) += h.frequency.max(1) as usize;
+    }
+
+    let mut out: Vec<FolderSuggestion> = by_parent
+        .into_iter()
+        .filter(|(path, n)| *n >= MIN_LAUNCHES && !covered_by_search_paths(launcher, path))
+        .map(|(path, n)| FolderSuggestion {
+            path,
+            reason: SuggestReason::LaunchHistory(n),
+        })
+        .collect();
+    out.sort_by_key(|s| std::cmp::Reverse(s.score()));
+    out.truncate(max);
+    out
+}
+
+/// 기본 위치의 이력 DB를 열어 신호 ②를 구한다 (실패하면 빈 목록).
+fn history_suggestions(launcher: &LauncherConfig, max: usize) -> Vec<FolderSuggestion> {
+    let path = crate::Config::default_data_dir().join(crate::DB_FILENAME);
+    if !path.exists() {
+        return Vec::new();
+    }
+    match crate::db::Database::open(&path) {
+        Ok(db) => suggest_from_history(&db, launcher, max),
+        Err(e) => {
+            tracing::debug!("이력 기반 폴더 제안 건너뜀: {e}");
+            Vec::new()
+        }
+    }
+}
+
 /// 후보 폴더를 스캔해 제안 목록을 만든다 (홈 + 드라이브/볼륨 루트).
 ///
 /// 스캔 예산([`ENTRY_BUDGET`])은 **전체 루트가 공유**한다 — 루트가 늘어도
@@ -139,14 +240,25 @@ fn is_system_dir_name(name: &str) -> bool {
 pub fn suggest_folders(launcher: &LauncherConfig, max: usize) -> Vec<FolderSuggestion> {
     let now = SystemTime::now();
     let mut budget = ENTRY_BUDGET;
-    let mut all: Vec<FolderSuggestion> = Vec::new();
+
+    // 신호 ② 실행 이력 — 사용자가 실제로 연 폴더. 더 직접적인 증거라 먼저 둔다.
+    let mut all: Vec<FolderSuggestion> = history_suggestions(launcher, max.max(5));
+    let seen: HashSet<PathBuf> = all.iter().map(|s| s.path.clone()).collect();
+
+    // 신호 ① 변경 활동 — 아직 열어본 적 없지만 파일이 활발히 바뀌는 폴더.
     for root in candidate_roots() {
         if budget == 0 {
             break;
         }
-        all.extend(scan_root(&root, launcher, now, &mut budget));
+        for s in scan_root(&root, launcher, now, &mut budget) {
+            // 같은 폴더가 양쪽에 잡히면 이력 쪽을 남긴다 (문구가 더 설득력 있다)
+            if !seen.contains(&s.path) {
+                all.push(s);
+            }
+        }
     }
-    all.sort_by_key(|s| std::cmp::Reverse(s.recent_files));
+
+    all.sort_by_key(|s| std::cmp::Reverse(s.score()));
     all.truncate(max);
     all
 }
@@ -242,7 +354,7 @@ fn suggest_folders_in(
 ) -> Vec<FolderSuggestion> {
     let mut budget = ENTRY_BUDGET;
     let mut s = scan_root(home, launcher, now, &mut budget);
-    s.sort_by_key(|x| std::cmp::Reverse(x.recent_files));
+    s.sort_by_key(|x| std::cmp::Reverse(x.score()));
     s.truncate(max);
     s
 }
@@ -302,7 +414,7 @@ fn scan_root(
         if count >= MIN_RECENT_FILES {
             suggestions.push(FolderSuggestion {
                 path,
-                recent_files: count,
+                reason: SuggestReason::RecentActivity(count),
             });
         }
     }
@@ -374,10 +486,7 @@ pub fn suggestion_results(
             let display = display_path(&s.path);
             SearchResult {
                 item: IndexItem {
-                    name: format!(
-                        "{display} 을(를) 검색 범위에 추가 — 최근 2주 문서 {}개",
-                        s.recent_files
-                    ),
+                    name: format!("{display} 을(를) 검색 범위에 추가 — {}", s.reason_label()),
                     path: "Enter로 추가하면 파일명·본문 검색이 이 폴더까지 확장됩니다".to_string(),
                     kind: ItemKind::SystemCommand,
                     source: Source::Plugin,
@@ -466,6 +575,116 @@ mod tests {
             search_paths: paths,
             ..Default::default()
         }
+    }
+
+    // ── 신호 ② 실행 이력: 자주 연 폴더를 권한다 ───────────────────────
+    //
+    // docs/15에서 "후속 여지"로 남겨둔 신호. 변경 활동(①)은 파일이 바뀌는 곳을
+    // 찾지만, 사용자가 실제로 **여는** 폴더는 이력에만 드러난다.
+
+    #[test]
+    fn 자주_연_폴더를_이력에서_뽑는다() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        write_file(&work, "a.md", "x");
+        let file = work.join("a.md");
+
+        let db = crate::db::Database::open_in_memory().unwrap();
+        // 같은 파일을 세 번 열었다 → 부모 폴더가 후보
+        for _ in 0..3 {
+            db.record_launch("file", &file.to_string_lossy(), Some("a.md"))
+                .unwrap();
+        }
+
+        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        assert_eq!(got.len(), 1, "부모 폴더가 제안돼야 한다: {got:?}");
+        assert_eq!(got[0].path, work);
+        assert!(
+            matches!(got[0].reason, SuggestReason::LaunchHistory(n) if n >= 3),
+            "이력 신호여야 한다: {:?}",
+            got[0].reason
+        );
+    }
+
+    #[test]
+    fn 한두번_연_폴더는_제안하지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        let rare = dir.path().join("rare");
+        std::fs::create_dir(&rare).unwrap();
+        write_file(&rare, "b.md", "x");
+
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.record_launch("file", &rare.join("b.md").to_string_lossy(), None)
+            .unwrap();
+
+        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        assert!(got.is_empty(), "1회 실행은 소음이다: {got:?}");
+    }
+
+    #[test]
+    fn 이미_검색범위인_폴더는_이력에서도_제외된다() {
+        let dir = tempfile::tempdir().unwrap();
+        let covered = dir.path().join("docs");
+        std::fs::create_dir(&covered).unwrap();
+        write_file(&covered, "c.md", "x");
+
+        let db = crate::db::Database::open_in_memory().unwrap();
+        for _ in 0..5 {
+            db.record_launch("file", &covered.join("c.md").to_string_lossy(), None)
+                .unwrap();
+        }
+
+        let got = suggest_from_history(&db, &launcher_with_paths(vec![covered.clone()]), 5);
+        assert!(got.is_empty(), "이미 검색되는 폴더는 권할 필요가 없다");
+    }
+
+    #[test]
+    fn 앱_웹_항목은_폴더_집계에서_빠진다() {
+        let db = crate::db::Database::open_in_memory().unwrap();
+        for _ in 0..9 {
+            db.record_launch("app", "firefox", Some("Firefox")).unwrap();
+            db.record_launch("Web", "https://example.com", None)
+                .unwrap();
+        }
+        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        assert!(got.is_empty(), "경로가 아닌 항목이 섞였다: {got:?}");
+    }
+
+    #[test]
+    fn item_type_대소문자가_달라도_집계된다() {
+        // 데스크톱은 "file", TUI는 "File"로 기록한다 — 둘 다 잡아야 한다
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path().join("mixed");
+        std::fs::create_dir(&w).unwrap();
+        write_file(&w, "d.md", "x");
+        let f = w.join("d.md").to_string_lossy().to_string();
+
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.record_launch("file", &f, None).unwrap();
+        db.record_launch("File", &f, None).unwrap();
+        db.record_launch("FILE", &f, None).unwrap();
+
+        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        assert_eq!(got.len(), 1, "대소문자 때문에 누락됐다: {got:?}");
+    }
+
+    #[test]
+    fn 이력_신호가_활동_신호보다_우선한다() {
+        let a = FolderSuggestion {
+            path: PathBuf::from("/tmp/by-history"),
+            reason: SuggestReason::LaunchHistory(4),
+        };
+        let b = FolderSuggestion {
+            path: PathBuf::from("/tmp/by-activity"),
+            reason: SuggestReason::RecentActivity(10),
+        };
+        assert!(
+            a.score() > b.score(),
+            "실제로 연 폴더가 먼저 와야 한다 ({} vs {})",
+            a.score(),
+            b.score()
+        );
     }
 
     // ── 홈 밖 루트도 후보가 된다 (Windows D:\work 같은 구성) ──────────
@@ -561,7 +780,7 @@ mod tests {
         );
         assert_eq!(s.len(), 1, "임계값(5) 이상만 제안: {s:?}");
         assert!(s[0].path.ends_with("projects"));
-        assert_eq!(s[0].recent_files, 6);
+        assert_eq!(s[0].reason, SuggestReason::RecentActivity(6));
     }
 
     #[test]
@@ -615,7 +834,7 @@ mod tests {
         let a = PathBuf::from("/tmp/kmd-suggest-test-a");
         let items = vec![FolderSuggestion {
             path: a.clone(),
-            recent_files: 9,
+            reason: SuggestReason::RecentActivity(9),
         }];
         let empty = launcher_with_paths(vec![]);
         assert_eq!(
