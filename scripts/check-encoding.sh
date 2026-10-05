@@ -29,7 +29,13 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 2
 fi
 
-mapfile -t FILES < <(
+# `mapfile`은 쓰지 않는다 — bash 4+ 전용이라 macOS 기본 bash(3.2)에서
+# "command not found"로 죽는다. CI(ubuntu)만 통과하고 개발자는 로컬에서
+# 미리 돌릴 수 없는 상태였다.
+FILES=()
+while IFS= read -r line; do
+  FILES+=("$line")
+done < <(
   git ls-files -- \
     '*.rs' '*.toml' '*.md' '*.sh' '*.ps1' '*.yml' '*.yaml' \
     '*.json' '*.kbd' '*.tsv' '*.txt' '*.plist' \
@@ -49,7 +55,10 @@ for f in "${FILES[@]}"; do
   [ -f "$f" ] || continue
 
   # 1) UTF-8 유효성 — iconv가 통과 못 하면 깨진 바이트가 있다
-  if ! iconv -f UTF-8 -t UTF-8 "$f" >/dev/null 2>&1; then
+  # 출력을 /dev/null로 직접 보내지 않고 파이프를 거친다: macOS iconv는 출력이
+  # /dev/null이면 유효한 파일에도 "Inappropriate ioctl for device"로 실패한다
+  # (오탐 28건). pipefail이 켜져 있어 iconv의 실패는 그대로 전달된다.
+  if ! iconv -f UTF-8 -t UTF-8 "$f" 2>/dev/null | cat >/dev/null; then
     echo "❌ UTF-8 아님 (CP949 혼입 의심): $f"
     fail=1
   fi

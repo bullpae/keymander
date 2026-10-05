@@ -56,8 +56,5 @@ pub fn load_config() -> color_eyre::Result<kmd_core::Config> {
 /// Shared helper used by `search` and `launch` subcommands.
 pub fn create_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine {
     let index = load_or_build_index(&config.launcher, config.general.emoji_icons);
-    let mut engine = kmd_core::SearchEngine::new();
-    engine.set_kind_weights(config.launcher.kind_weights.clone());
-    engine.load(index.items);
-    engine
+    kmd_core::SearchEngine::with_items(&config.launcher.kind_weights, index.items)
 }

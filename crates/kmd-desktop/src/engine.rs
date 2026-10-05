@@ -36,9 +36,7 @@ pub fn create_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine
 
     tracing::info!("Loaded {} items into search engine", index.items.len());
 
-    let mut engine = kmd_core::SearchEngine::new();
-    engine.set_kind_weights(config.launcher.kind_weights.clone());
-    engine.load(index.items);
+    let engine = kmd_core::SearchEngine::with_items(&config.launcher.kind_weights, index.items);
     tracing::info!(
         "Full search engine ready in {} ms",
         started.elapsed().as_millis()
@@ -56,9 +54,7 @@ pub fn create_quick_search_engine(config: &kmd_core::Config) -> kmd_core::Search
     let index = load_or_build_quick_index(config.general.emoji_icons);
     let count = index.items.len();
 
-    let mut engine = kmd_core::SearchEngine::new();
-    engine.set_kind_weights(config.launcher.kind_weights.clone());
-    engine.load(index.items);
+    let engine = kmd_core::SearchEngine::with_items(&config.launcher.kind_weights, index.items);
     tracing::info!(
         "Quick search engine ready in {} ms ({} items)",
         started.elapsed().as_millis(),

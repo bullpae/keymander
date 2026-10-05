@@ -57,7 +57,6 @@ type CGEventTapCallBack = unsafe extern "C" fn(
 ) -> CGEventRef;
 
 #[link(name = "CoreGraphics", kind = "framework")]
-#[allow(dead_code)]
 extern "C" {
     fn CGEventTapCreate(
         tap: u32,

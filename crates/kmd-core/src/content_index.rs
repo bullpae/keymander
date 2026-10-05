@@ -858,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn 구문은_prefix_없이_제외는_NOT으로() {
+    fn 구문은_prefix_없이_제외는_not으로() {
         let expr = ParsedQuery::parse("\"예산 삭감\"").match_expr().unwrap();
         assert_eq!(expr, "\"예산 삭감\"");
 

@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -182,6 +182,35 @@ fn lower_indexer_thread_priority() {}
 /// 하나만 돌게 한다.
 static INDEX_REBUILD_LOCK: Mutex<()> = Mutex::new(());
 
+/// 동시에 처리하는 IPC 연결 상한 (REF-08).
+///
+/// accept 루프는 연결마다 스레드를 띄운다. 상한이 없으면 연결을 열어 두기만
+/// 하는 클라이언트(읽기 타임아웃 30초)가 스레드를 무한히 쌓을 수 있다. 정상
+/// 사용은 CLI·런처의 짧은 요청뿐이라 한두 개를 넘지 않는다 — 64면 넉넉하다.
+const MAX_CONNECTIONS: usize = 64;
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// 연결 슬롯 — 가지고 있는 동안 카운터 하나를 점유하고, drop되면 반납한다.
+/// 핸들러가 에러·패닉으로 끝나도 반납이 빠지지 않게 RAII로 둔다.
+struct ConnectionSlot(&'static AtomicUsize);
+
+impl ConnectionSlot {
+    fn try_acquire(counter: &'static AtomicUsize, max: usize) -> Option<Self> {
+        counter
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < max).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(counter))
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// 재생성 락을 잡는다. 오염된 락(이전 재생성이 패닉)도 계속 쓴다 —
 /// 인덱스 재생성은 실패해도 다음 주기에 다시 하면 되는 작업이라,
 /// 락 오염 때문에 영구히 멈추는 쪽이 더 나쁘다.
@@ -198,8 +227,7 @@ fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
     let count = index.items.len();
     save_full_index_cache(&index);
     if let Ok(mut e) = engine.lock() {
-        e.set_kind_weights(config.launcher.kind_weights.clone());
-        e.load(index.items);
+        e.reload(&config.launcher.kind_weights, index.items);
     } else {
         tracing::warn!("인덱스 교체 실패: 검색 엔진 잠금 오염");
     }
@@ -460,12 +488,10 @@ pub fn run() -> color_eyre::Result<()> {
     let item_count = index.items.len();
     tracing::info!("{item_count}개 항목으로 검색 엔진 초기화");
 
-    let engine = Arc::new(Mutex::new({
-        let mut e = SearchEngine::new();
-        e.set_kind_weights(config.launcher.kind_weights.clone());
-        e.load(index.items);
-        e
-    }));
+    let engine = Arc::new(Mutex::new(SearchEngine::with_items(
+        &config.launcher.kind_weights,
+        index.items,
+    )));
 
     // 클립보드 히스토리 감시 (opt-in) — clip:N 붙여넣기의 데이터 소스
     crate::clipboard::spawn_watcher(
@@ -504,10 +530,19 @@ pub fn run() -> color_eyre::Result<()> {
             }
             match stream {
                 Ok(stream) => {
+                    let Some(slot) =
+                        ConnectionSlot::try_acquire(&ACTIVE_CONNECTIONS, MAX_CONNECTIONS)
+                    else {
+                        // 스트림을 drop하면 연결이 닫힌다 — 클라이언트는 즉시
+                        // 실패를 본다(무한 대기보다 낫다).
+                        tracing::warn!("IPC 동시 연결 상한({MAX_CONNECTIONS}) 초과 — 연결 거절");
+                        continue;
+                    };
                     let engine = engine.clone();
                     let conn_tx = accept_tx.clone();
                     let conn_token = accept_token.clone();
                     std::thread::spawn(move || {
+                        let _slot = slot;
                         if let Err(e) =
                             handle_client(stream, &engine, &conn_tx, started_at, &conn_token)
                         {
@@ -666,10 +701,7 @@ fn process_request(
             save_quick_index_cache(config.general.emoji_icons);
 
             match engine.lock() {
-                Ok(mut e) => {
-                    e.set_kind_weights(config.launcher.kind_weights.clone());
-                    e.load(index.items);
-                }
+                Ok(mut e) => e.reload(&config.launcher.kind_weights, index.items),
                 Err(_) => {
                     return Response::Error {
                         message: "엔진 잠금 실패".into(),
@@ -911,6 +943,42 @@ fn cleanup_runtime_files() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 연결_슬롯은_상한까지만_내주고_drop하면_반납한다() {
+        // 전역 카운터와 섞이지 않게 테스트 전용 카운터를 쓴다.
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+        let a = ConnectionSlot::try_acquire(&COUNTER, 2).expect("1번째");
+        let b = ConnectionSlot::try_acquire(&COUNTER, 2).expect("2번째");
+        assert!(
+            ConnectionSlot::try_acquire(&COUNTER, 2).is_none(),
+            "상한을 넘으면 거절"
+        );
+        assert_eq!(
+            COUNTER.load(Ordering::Acquire),
+            2,
+            "거절은 카운터를 올리지 않는다"
+        );
+
+        drop(a);
+        let c = ConnectionSlot::try_acquire(&COUNTER, 2).expect("반납 후 다시 받는다");
+        drop(b);
+        drop(c);
+        assert_eq!(COUNTER.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn 핸들러가_패닉해도_슬롯은_반납된다() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let slot = ConnectionSlot::try_acquire(&COUNTER, 1).unwrap();
+        let _ = std::thread::spawn(move || {
+            let _slot = slot;
+            panic!("핸들러 패닉 흉내");
+        })
+        .join();
+        assert_eq!(COUNTER.load(Ordering::Acquire), 0);
+    }
 
     // 프리셋·병합 시맨틱 테스트는 단일 소스인 kmd-core::keymap
     // (effective_keymap)의 테스트로 이동했다. 여기서는 daemon 고유 경로인

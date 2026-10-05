@@ -125,6 +125,26 @@ impl SearchEngine {
         }
     }
 
+    /// kind 가중치를 적용한 뒤 항목을 적재한 엔진을 만든다.
+    ///
+    /// 데몬·데스크톱·TUI가 각자 `new()` → `set_kind_weights()` → `load()`
+    /// 세 줄을 적고 있었다. 가중치 설정을 빠뜨려도 컴파일되므로 **한 곳에서만
+    /// 조용히 다르게 동작**할 수 있었다(docs/11 R3-3). 한 호출로 묶어 그
+    /// 가능성을 없앤다.
+    pub fn with_items(weights: &KindWeights, items: Vec<IndexItem>) -> Self {
+        let mut engine = Self::new();
+        engine.reload(weights, items);
+        engine
+    }
+
+    /// 이미 만들어진 엔진의 가중치·항목을 한 번에 교체한다.
+    ///
+    /// 인덱스 리빌드 경로용 — 엔진이 `Mutex` 안에 있어 새로 만들 수 없을 때 쓴다.
+    pub fn reload(&mut self, weights: &KindWeights, items: Vec<IndexItem>) {
+        self.set_kind_weights(weights.clone());
+        self.load(items);
+    }
+
     /// 로드된 아이템 수
     pub fn len(&self) -> usize {
         self.all_items.len()
@@ -591,6 +611,67 @@ mod tests {
         assert_eq!(mode, SearchMode::Fuzzy);
         assert!(!results.is_empty());
         assert_eq!(results[0].item.name, "Firefox");
+    }
+
+    #[test]
+    fn with_items_적용_가중치와_항목() {
+        use crate::index::{ItemKind, Source};
+
+        let weights = KindWeights {
+            app: 999, // 기본값과 확실히 다른 값
+            ..KindWeights::default()
+        };
+
+        let mut engine = SearchEngine::with_items(
+            &weights,
+            vec![IndexItem {
+                name: "Firefox".to_string(),
+                path: "/usr/bin/firefox".to_string(),
+                kind: ItemKind::App,
+                source: Source::Apps,
+                icon: String::new(),
+                keywords: "browser".to_string(),
+                icon_path: None,
+            }],
+        );
+
+        // 항목이 적재됐고, 가중치도 함께 적용됐다 — 둘 중 하나만 되는 일이
+        // 생기지 않게 하는 것이 이 API의 목적이다.
+        assert_eq!(engine.len(), 1);
+        assert_eq!(engine.kind_weights.app, 999);
+        let (_, results) = engine.search("firefox", 10);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn reload_가중치와_항목_동시_교체() {
+        use crate::index::{ItemKind, Source};
+
+        let item = |name: &str| IndexItem {
+            name: name.to_string(),
+            path: format!("/usr/bin/{name}"),
+            kind: ItemKind::App,
+            source: Source::Apps,
+            icon: String::new(),
+            keywords: String::new(),
+            icon_path: None,
+        };
+
+        let mut engine = SearchEngine::with_items(&KindWeights::default(), vec![item("Firefox")]);
+
+        let weights = KindWeights {
+            app: 42,
+            ..KindWeights::default()
+        };
+        engine.reload(&weights, vec![item("Chrome")]);
+
+        assert_eq!(engine.kind_weights.app, 42);
+        assert_eq!(engine.len(), 1);
+        let (_, results) = engine.search("firefox", 10);
+        assert!(
+            results.is_empty(),
+            "reload는 이전 항목을 비워야 한다 (load와 같은 보장)"
+        );
     }
 
     #[test]

@@ -223,18 +223,14 @@ const MAX_FOCUS_RETRIES: u8 = 3;
 const AUTOSTART_STATUS_REFRESH_MS: u64 = 1500;
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
-/// 비동기 엔진 로드 결과 — 10-tuple 대신 명확한 필드로 관리
+/// 비동기 엔진 로드 결과.
+///
+/// 엔진을 만들 때 읽은 config를 **그대로** 넘긴다. 예전에는 파생 필드 9개를
+/// 하나씩 복사해 넘기고, 받는 쪽에서 `runtime_config`를 위해 디스크를 한 번 더
+/// 읽었다 — 두 번 읽는 사이 파일이 바뀌면 엔진과 설정이 서로 다른 config를 보게 된다.
 struct EngineLoadResult {
     engine: kmd_core::SearchEngine,
-    use_emoji: bool,
-    llm_providers: Vec<String>,
-    multi_web_providers: Vec<String>,
-    llm_prefixes: Vec<String>,
-    multi_web_prefixes: Vec<String>,
-    spell_providers: Vec<String>,
-    spell_prefixes: Vec<String>,
-    translate_providers: Vec<String>,
-    translate_prefixes: Vec<String>,
+    config: kmd_core::Config,
 }
 
 type EngineSlot = Arc<Mutex<Option<EngineLoadResult>>>;
@@ -820,15 +816,7 @@ impl App {
                 if let Ok(mut guard) = slot.lock() {
                     *guard = Some(EngineLoadResult {
                         engine: eng,
-                        use_emoji: config.general.emoji_icons,
-                        llm_providers: config.launcher.multi_llm_providers.clone(),
-                        multi_web_providers: config.launcher.multi_web_providers.clone(),
-                        llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
-                        multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
-                        spell_providers: config.launcher.spell_providers.clone(),
-                        spell_prefixes: config.launcher.spell_prefixes.clone(),
-                        translate_providers: config.launcher.translate_providers.clone(),
-                        translate_prefixes: config.launcher.translate_prefixes.clone(),
+                        config,
                     });
                 } else {
                     tracing::error!("engine_slot mutex poisoned — 엔진 로드 결과 저장 실패");
@@ -1203,18 +1191,20 @@ impl App {
             .take();
 
         if let Some(res) = loaded {
-            self.engine = res.engine;
+            let EngineLoadResult { engine, config } = res;
+            let launcher = &config.launcher;
+            self.engine = engine;
             self.full_engine_loaded = true;
-            self.use_emoji = res.use_emoji;
-            self.selected_llm_providers = res.llm_providers;
-            self.selected_multi_web_providers = res.multi_web_providers;
-            self.multi_llm_prefixes = res.llm_prefixes;
-            self.multi_web_prefixes = res.multi_web_prefixes;
-            self.spell_providers = res.spell_providers;
-            self.spell_prefixes = res.spell_prefixes;
-            self.translate_providers = res.translate_providers;
-            self.translate_prefixes = res.translate_prefixes;
-            self.runtime_config = crate::engine::load_config();
+            self.use_emoji = config.general.emoji_icons;
+            self.selected_llm_providers = launcher.multi_llm_providers.clone();
+            self.selected_multi_web_providers = launcher.multi_web_providers.clone();
+            self.multi_llm_prefixes = launcher.multi_llm_prefixes.clone();
+            self.multi_web_prefixes = launcher.multi_web_prefixes.clone();
+            self.spell_providers = launcher.spell_providers.clone();
+            self.spell_prefixes = launcher.spell_prefixes.clone();
+            self.translate_providers = launcher.translate_providers.clone();
+            self.translate_prefixes = launcher.translate_prefixes.clone();
+            self.runtime_config = config;
             self.loading = false;
             tracing::info!("Search engine ready");
             if !self.query.trim().is_empty() {

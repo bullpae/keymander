@@ -116,6 +116,18 @@ pub struct AppState {
     /// `load_config()`로 config.toml을 읽었다 (데스크톱은 캐시를 쓴다).
     /// 설정을 바꾸는 경로는 이 값을 함께 갱신해 캐시가 어긋나지 않게 한다.
     pub config: kmd_core::Config,
+    /// frecency 부스트 맵 — **키 입력마다 DB를 조회하지 않기 위한 캐시**.
+    /// 예전에는 검색마다 `history::boost_results`가 `query_history(500)` +
+    /// 맵 구축을 돌았다(데스크톱은 같은 자리에서 미리 로드한 맵을 쓴다).
+    /// 시작 시 1회 로드하고, 실행을 기록한 직후에만 다시 읽는다.
+    frecency: kmd_core::history::FrecencyMap,
+    /// 실행 중인 quick action의 결과 채널 (REF-05).
+    ///
+    /// quick action은 최대 10초(+읽기 유예 2초) 걸릴 수 있다. 예전에는 이벤트
+    /// 루프 안에서 동기로 기다려 그동안 **키 입력도 화면 갱신도 멈췄다**.
+    /// 이제 워커 스레드에서 돌리고, Tick마다 `poll_pending_shell`이 확인한다
+    /// (데스크톱은 같은 작업을 워커 + `handle_shell_done`으로 처리한다).
+    pending_shell: Option<std::sync::mpsc::Receiver<kmd_core::plugin::ExtensionAction>>,
     /// Cached effective query (query + composing char), updated on every input change
     cached_effective_query: String,
     /// Whether the UI needs to be redrawn
@@ -223,11 +235,8 @@ pub fn run_app(
     let index = crate::cmd::load_or_build_index(&config.launcher, config.general.emoji_icons);
     let db = crate::cmd::open_db().ok();
 
-    // Initialize search engine with kind weights
-    let mut engine = SearchEngine::new();
-    engine.set_kind_weights(config.launcher.kind_weights.clone());
     let total_items = index.items.len();
-    engine.load(index.items);
+    let mut engine = SearchEngine::with_items(&config.launcher.kind_weights, index.items);
 
     // Initialize state — config 파생 필드는 sync_config_mirrors가 채운다.
     let mut state = AppState {
@@ -260,6 +269,11 @@ pub fn run_app(
         translate_providers: Vec::new(),
         translate_prefixes: Vec::new(),
         config: config.clone(),
+        frecency: db
+            .as_ref()
+            .map(kmd_core::history::load_boost_map)
+            .unwrap_or_default(),
+        pending_shell: None,
         cached_effective_query: String::new(),
         dirty: true,
     };
@@ -343,6 +357,7 @@ pub fn run_app(
                         state.mark_dirty();
                     }
                 }
+                poll_pending_shell(&mut state);
                 // Re-render on tick only when status_message is set (for auto-clear)
                 if state.status_message.is_some() {
                     state.mark_dirty();
@@ -729,6 +744,58 @@ fn save_config_change(
 /// 예전에는 호출부마다 `let _ = clipboard.set_text(..)`로 결과를 버리고 무조건
 /// "Copied"라고 표시했다 — 클립보드가 막힌 환경(원격 세션·권한 제한)에서
 /// 복사된 줄 알고 붙여넣다 낭패를 본다.
+/// quick action을 워커 스레드에서 시작한다. 결과는 `poll_pending_shell`이 받는다.
+fn start_quick_action(state: &mut AppState, item: kmd_core::IndexItem) {
+    // 겹쳐 실행하지 않는다 — 두 결과가 클립보드를 번갈아 덮어쓰면 사용자는
+    // 무엇이 복사됐는지 알 수 없다.
+    if state.pending_shell.is_some() {
+        state.status_message = Some("\u{23F3} 이전 실행이 아직 끝나지 않았습니다".into()); // ⏳
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    state.status_message = Some(format!("\u{23F3} 실행 중: {}", item.path)); // ⏳
+    std::thread::spawn(move || {
+        let action = builtin_shell::ShellExtension.execute(&item);
+        // 받는 쪽이 사라졌으면(TUI 종료) 결과를 버린다.
+        let _ = tx.send(action);
+    });
+    state.pending_shell = Some(rx);
+}
+
+/// 실행 중인 quick action이 끝났으면 결과를 반영한다 — Tick마다 호출.
+fn poll_pending_shell(state: &mut AppState) {
+    let Some(rx) = &state.pending_shell else {
+        return;
+    };
+    let action = match rx.try_recv() {
+        Ok(action) => action,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            // 워커가 결과 없이 끝났다(패닉) — 조용히 "실행 중"에 머물지 않는다.
+            kmd_core::plugin::ExtensionAction::Display("실행이 비정상 종료됐습니다".into())
+        }
+    };
+    state.pending_shell = None;
+    apply_quick_action_result(state, action);
+    state.mark_dirty();
+}
+
+fn apply_quick_action_result(state: &mut AppState, action: kmd_core::plugin::ExtensionAction) {
+    match action {
+        kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
+            let first_line = output.lines().next().unwrap_or("(no output)").to_string();
+            state.status_message = Some(match copy_to_clipboard(&output) {
+                Ok(()) => format!("\u{2705} {first_line}"),
+                Err(e) => format!("\u{274C} 실행은 됐으나 복사 실패: {e}"),
+            });
+        }
+        kmd_core::plugin::ExtensionAction::Display(msg) => {
+            state.status_message = Some(format!("\u{274C} {}", msg)); // ❌
+        }
+        _ => {}
+    }
+}
+
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     clipboard
@@ -959,20 +1026,7 @@ fn execute_selected(
     // `>winget upgrade --all` 같은 장시간 명령을 중간에 죽이지 않는다.
     if result.item.kind == ItemKind::Shell {
         if builtin_shell::ShellExtension::is_quick_action(&result.item.path) {
-            let shell_ext = builtin_shell::ShellExtension;
-            match shell_ext.execute(&result.item) {
-                kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
-                    let first_line = output.lines().next().unwrap_or("(no output)").to_string();
-                    state.status_message = Some(match copy_to_clipboard(&output) {
-                        Ok(()) => format!("\u{2705} {first_line}"),
-                        Err(e) => format!("\u{274C} 실행은 됐으나 복사 실패: {e}"),
-                    });
-                }
-                kmd_core::plugin::ExtensionAction::Display(msg) => {
-                    state.status_message = Some(format!("\u{274C} {}", msg)); // ❌
-                }
-                _ => {}
-            }
+            start_quick_action(state, result.item.clone());
         } else {
             match builtin_shell::launch_in_terminal(&result.item.path) {
                 Ok(()) => {
@@ -1075,6 +1129,9 @@ fn execute_selected(
                     &result.item.path,
                     Some(&result.item.name),
                 );
+                // 창이 계속 떠 있으면 방금 연 항목이 다음 검색에 반영돼야 한다.
+                // 실행은 드물어 여기서 다시 읽는 비용은 무시할 만하다.
+                state.frecency = kmd_core::history::load_boost_map(db);
             }
             if state.quit_on_launch {
                 state.should_quit = true;
@@ -1156,9 +1213,9 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         QueryPrefix::ContentSearch => handle_content_search(&query, state, db),
         // 클립보드 히스토리는 데몬+데스크톱 기능이다 (TUI는 상주 감시가 없음).
         // TUI에서는 일반 검색으로 흘려보낸다.
-        QueryPrefix::Clipboard => handle_main_search(&query, state, engine, db),
+        QueryPrefix::Clipboard => handle_main_search(&query, state, engine),
         QueryPrefix::General => {
-            handle_main_search(&query, state, engine, db);
+            handle_main_search(&query, state, engine);
             // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
             if let Some(hint) =
                 kmd_core::query_prefix::unknown_command_hint(&query, state.use_emoji)
@@ -1508,12 +1565,7 @@ fn handle_shell_query(query: &str, state: &mut AppState) {
 }
 
 /// Main fuzzy search with optional inline calculator and history boost
-fn handle_main_search(
-    query: &str,
-    state: &mut AppState,
-    engine: &mut SearchEngine,
-    db: Option<&kmd_core::Database>,
-) {
+fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngine) {
     let (mode, mut results) = engine.search(query, SEARCH_RESULT_LIMIT);
     state.search_mode = mode;
 
@@ -1541,10 +1593,8 @@ fn handle_main_search(
         results.splice(0..0, calc_results);
     }
 
-    // Apply history boost
-    if let Some(db) = db {
-        kmd_core::history::boost_results(&mut results, db);
-    }
+    // Apply history boost — 캐시된 맵으로 (키 입력마다 DB 조회 없음)
+    kmd_core::history::boost_results_with_map(&mut results, &state.frecency);
 
     // 결과가 없으면 "검색 범위 밖 폴더" 제안을 보여준다. 빈 화면만 내놓으면
     // 사용자는 왜 안 나오는지 알 수 없다 — 가장 흔한 원인이 범위 누락이다.
@@ -1757,9 +1807,69 @@ mod tests {
             translate_providers: Vec::new(),
             translate_prefixes: Vec::new(),
             config: kmd_core::Config::default(),
+            frecency: Default::default(),
+            pending_shell: None,
             cached_effective_query: String::new(),
             dirty: true,
         }
+    }
+
+    // ── quick action은 이벤트 루프를 막지 않는다 (REF-05) ────────────────
+
+    #[test]
+    fn quick_action_결과는_도착하기_전까지_기다리고_도착하면_반영한다() {
+        use kmd_core::plugin::ExtensionAction;
+        let mut state = test_state();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.pending_shell = Some(rx);
+
+        poll_pending_shell(&mut state);
+        assert!(
+            state.pending_shell.is_some(),
+            "아직 안 끝났으면 계속 기다린다"
+        );
+
+        tx.send(ExtensionAction::Display("boom".into())).unwrap();
+        poll_pending_shell(&mut state);
+        assert!(state.pending_shell.is_none());
+        assert_eq!(state.status_message.as_deref(), Some("\u{274C} boom"));
+    }
+
+    #[test]
+    fn quick_action_워커가_결과없이_죽으면_실행중에_머물지_않는다() {
+        let mut state = test_state();
+        let (tx, rx) = std::sync::mpsc::channel::<kmd_core::plugin::ExtensionAction>();
+        state.pending_shell = Some(rx);
+        drop(tx); // 워커 패닉 흉내
+
+        poll_pending_shell(&mut state);
+        assert!(state.pending_shell.is_none());
+        assert!(state
+            .status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("비정상 종료")));
+    }
+
+    #[test]
+    fn quick_action_실행중에는_겹쳐_시작하지_않는다() {
+        let mut state = test_state();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        state.pending_shell = Some(rx);
+
+        let item = kmd_core::IndexItem {
+            name: "x".into(),
+            path: "echo hi".into(),
+            kind: ItemKind::Shell,
+            source: kmd_core::index::Source::Plugin,
+            icon: String::new(),
+            keywords: String::new(),
+            icon_path: None,
+        };
+        start_quick_action(&mut state, item);
+        assert!(state
+            .status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("아직 끝나지 않았습니다")));
     }
 
     // ── 설정 저장은 성공한 뒤에만 상태를 바꾼다 (REF-01) ────────────────
