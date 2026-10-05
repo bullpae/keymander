@@ -15,7 +15,7 @@ keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 �
 | Homebrew | `brew install bullpae/tap/keymander` | ✅ 설치·갱신 자동 | 없음 |
 | apt (Debian/Ubuntu) | `apt install keymander` | ✅ 설치·갱신 자동 | 없음 |
 | yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
-| winget (Windows) | `winget install keymander` | 🔶 등록 PR 검증·승인 대기 | 없음 — CLA 서명 완료(2026-08-08), 모더레이터 승인 대기 |
+| winget (Windows) | `winget install keymander` | ✅ 등록 완료 (v0.16.2, 2026-09-10) | 🔶 **갱신 PR은 수동** — §2.2 |
 
 사용자 관점의 채널별 설치 배치(바이너리·예시 config 경로, 포터블/표준 모드,
 런타임 파일 위치)는 README의 **"Install layout by channel"** 절이 정본이다.
@@ -72,7 +72,7 @@ keymander.repo                        # dnf/yum 설정 파일
 
 ## 2. 직접 해야 하는 작업 (1회성)
 
-### 2.1 winget 최초 등록 — CLA 서명 ✅ 완료 (승인 대기 중)
+### 2.1 winget 최초 등록 ✅ 머지 완료 (2026-09-10)
 
 등록 PR: **[winget-pkgs#413755](https://github.com/microsoft/winget-pkgs/pull/413755)**
 (`bullpae.keymander` 0.12.0). 2026-08-08에 CLA 서명이 확인됐다
@@ -84,11 +84,11 @@ CLA는 **PR 본인 계정으로** 아래 코멘트를 다는 것이다. 법적 �
 @microsoft-github-policy-service agree
 ```
 
-계정당 1회면 되고 이후 모든 PR(자동 갱신 포함)에 적용된다. 그다음:
+계정당 1회면 되고 이후 모든 PR(자동 갱신 포함)에 적용된다.
 
-1. 자동 검증(Azure) → `Validation-Completed` 라벨
-2. 모더레이터 승인 대기 (신규 패키지는 보통 며칠)
-3. 머지 확인: Windows에서 `winget search keymander` → `winget install keymander`
+**결과**: 자동 검증(Azure) 통과 → 모더레이터 머지. **v0.16.2(2026-09-10)부터
+`winget install keymander`가 동작한다.** 머지 직후 저장소 개명(`keymander-cli`
+→ `keymander`)도 함께 수행했다(§6).
 
 문제가 생기면 PR에 봇이 라벨/코멘트로 원인을 남긴다
 (예: `Validation-Installation-Error`, `Manifest-Validation-Error`).
@@ -108,10 +108,22 @@ scripts/gen-winget-manifests.sh <버전> /tmp/winget
 저장소가 거대해서 clone보다 GitHub contents API로 올리는 게 훨씬 빠르다.
 PR 제목 관례: `New package: bullpae.keymander version X.Y.Z`
 
-### 2.2 winget 자동 갱신용 PAT
+### 2.2 winget 자동 갱신용 PAT — 🔶 아직 동작하지 않는다
 
-최초 등록이 머지된 **뒤에야** 의미가 있다. winget-releaser는 winget-pkgs를
-fork하고 PR을 내야 하므로 deploy key로는 안 되고 사용자 PAT가 필요하다.
+winget-releaser는 winget-pkgs를 fork하고 PR을 내야 하므로 deploy key로는 안 되고
+사용자 PAT가 필요하다.
+
+**현재 상태**: `WINGET_GITHUB_TOKEN`은 등록돼 있지만 릴리스 워크플로의 winget 잡이
+**`CreateRef` 권한 오류로 실패**한다. fine-grained PAT으로는 포크에 브랜치를
+만들 수 없다 — 아래 **classic** PAT가 맞다. 그때까지는 릴리스 후 로컬에서
+수동 제출한다 (PR #432626·#433987·#437988을 이렇게 올렸다):
+
+```bash
+komac update bullpae.keymander --version <VER> \
+  --urls <설치파일 URL들> --submit --token "$(gh auth token)"
+```
+
+**발행 절차 (classic PAT)**:
 
 1. GitHub → Settings → Developer settings → Personal access tokens →
    **Tokens (classic)** → Generate new token (classic)

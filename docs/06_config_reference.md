@@ -300,11 +300,18 @@ history_size = 50         # 링 버퍼 상한 (초과 시 오래된 것부터 �
 
 | 키 | 기본값 | 설명 |
 |----|--------|------|
-| history_enabled | false | 히스토리 수집. **기본 off** — 비밀번호 관리자의 Concealed 마크 제외가 아직 없어(추후 지원) 명시적 opt-in |
+| history_enabled | false | 히스토리 수집. **기본 off** — 클립보드는 비밀번호·토큰이 지나가는 통로라 수집 자체를 사용자가 켜게 한다(opt-in). Concealed 마크 제외는 **구현돼 있다**(아래) |
 | history_size | 50 | 저장 개수 (1~1000) |
 
 **프라이버시**: 히스토리는 **메모리에만** 산다(디스크 비저장). 1MB 초과 텍스트는
 수집하지 않고, 내용은 로그에 남기지 않는다.
+
+비밀번호 관리자가 "민감"으로 표시한 항목은 **수집 단계에서 건너뛴다** —
+macOS는 `org.nspasteboard.ConcealedType`, Windows는
+`ExcludeClipboardContentFromMonitorProcessing`을 본다
+(`crates/kmd-daemon/src/clipboard.rs`). **Linux만 아직 stub**이라 이 보호가 없다.
+그래도 기본 off를 유지하는 이유는 플랫폼 마크를 **붙이지 않는** 앱이 있어
+제외가 완전할 수 없기 때문이다.
 
 **`clip:N` 매핑은 기본 프리셋에 없다** — 켜면 Alt+숫자를 가로채 Windows
 브라우저의 탭 전환과 충돌하고, 히스토리가 opt-in이라 기본 매핑은 부적절하다.

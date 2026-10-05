@@ -32,15 +32,16 @@
 | [09_llm_autopilot_plan.md](09_llm_autopilot_plan.md) | ✅ v0.10.0 (Windows 전용) | `crates/kmd-daemon/src/autopilot.rs` |
 | [13_capslock_trigger.md](13_capslock_trigger.md) | ✅ v0.13.0부터 **기본 트리거** | `crates/kmd-core/src/keymap.rs`, `keybind/macos.rs` |
 | [15_content_search_plan.md](15_content_search_plan.md) | ✅ v0.15.0 (P1+P3) | `crates/kmd-core/src/content_index.rs` |
+| [12_clipboard_plan.md](12_clipboard_plan.md) | ✅ v0.13.x (P1–P3) | `crates/kmd-daemon/src/clipboard.rs` |
+| [14_testing_plan.md](14_testing_plan.md) | ✅ Tier 1 + Tier 2(E2E 키 주입) | `crates/kmd-daemon/tests/`, `.github/workflows/ci.yml` |
 
 ## 계획 — 아직 구현되지 않음
 
 | 문서 | 상태 |
 |---|---|
-| [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-08-08 확인) |
-| [11_refactor_backlog.md](11_refactor_backlog.md) | 리팩토링·개선 백로그 (2026-08-08 전수 감사 기반, 진행 중) |
-| [12_clipboard_plan.md](12_clipboard_plan.md) | 클립보드 히스토리 — 다중 버퍼 붙여넣기 설계 (레이어 즉시 + 런처 탐색) |
-| [14_testing_plan.md](14_testing_plan.md) | Tier 1 완료, Tier 2(E2E 키 주입)는 v0.13.3에서 착수 — 나머지 진행 중 |
+| [17_feature_backlog.md](17_feature_backlog.md) | **기능 백로그** — 계획·누락 기능 전수 조사(2026-10-05, v0.16.8). 어떤 "향후"가 진짜 미구현이고 어떤 게 이미 됐는지, 무엇을 영구 보류할지 |
+| [11_refactor_backlog.md](11_refactor_backlog.md) | **리팩토링·코드건강 백로그** — 코드 모양·블로킹 지점 (2026-10-05 재점검 반영, 진행 중) |
+| [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-10-05 / v0.16.8 재확인 — 코드 0건) |
 | [deferred-ideas.md](deferred-ideas.md) | v0.3 로드맵에서 보류한 아이디어 모음 — 재검토용 |
 
 ## 변경 이력
@@ -49,6 +50,10 @@
 - [v03-changelog.md](v03-changelog.md) — 0.3.x 상세 (CHANGELOG의 `[0.3.x] and earlier`가 가리킨다)
 
 ---
+
+**두 백로그의 차이**: [17](17_feature_backlog.md)은 *"약속했는데 없는 기능"*,
+[11](11_refactor_backlog.md)은 *"있는데 모양이 나쁜 코드"*. 새 항목을 적을 때
+어느 쪽인지 먼저 정한다.
 
 **문서를 추가하거나 기능을 릴리스할 때**: 계획 문서가 구현되면 이 표에서 "계획"
 → "설계 이력"으로 옮기고 문서 상단에 상태 배너를 단다. 그대로 두면 다음 사람이

@@ -119,24 +119,35 @@ flowchart TD
     Migrate1 --> SetV1["SET user_version = 1"]
     SetV1 --> Check2{"version < 2?"}
     Check -- No --> Check2
-    Check2 -- Yes --> Migrate2["Migration 002:<br/>(향후 예정)"]
+    Check2 -- Yes --> Migrate2["Migration 002:<br/>idx_history_executed_at"]
     Migrate2 --> SetV2["SET user_version = 2"]
-    Check2 -- No --> Done["마이그레이션 완료"]
-    SetV2 --> Done
+    Check2 -- No --> Check3{"version < 3?"}
+    SetV2 --> Check3
+    Check3 -- Yes --> Migrate3["Migration 003:<br/>content_files, content_fts"]
+    Migrate3 --> SetV3["SET user_version = 3"]
+    Check3 -- No --> Done["마이그레이션 완료"]
+    SetV3 --> Done
 ```
 
 ### 4.2 버전 이력
 
-| 버전 | 내용 |
-|------|------|
-| 0 | 초기 상태 (빈 DB) |
-| 1 | history, bookmarks, kv_store 테이블 생성 |
+| 버전 | 내용 | 도입 |
+|------|------|------|
+| 0 | 초기 상태 (빈 DB) | — |
+| 1 | history, bookmarks, kv_store 테이블 생성 | v0.1 |
+| 2 | `idx_history_executed_at` — frecency 쿼리 성능 | — |
+| 3 | `content_files` + `content_fts`(FTS5) — 문서 본문 검색([15](15_content_search_plan.md)) | v0.15.0 |
 
-### 4.3 향후 마이그레이션 예시
+**현재 `user_version`은 3이다** (`crates/kmd-core/src/db.rs`). 이 표를 고칠 때는
+`db.rs`의 `migrate()`와 함께 고친다.
+
+### 4.3 다음 마이그레이션 작성법 (예시)
 
 ```rust
-// Version 2: 플러그인 데이터 테이블
-if version < 2 {
+// Version 4: 플러그인 데이터 테이블 (예시 — 아직 없다)
+// 번호는 반드시 "현재 최대 + 1"이다. 이미 배포된 번호를 재사용하면
+// 먼저 올린 사용자의 DB가 그 블록을 건너뛴다.
+if version < 4 {
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS plugin_data (
             plugin_name TEXT NOT NULL,
@@ -146,7 +157,7 @@ if version < 2 {
             PRIMARY KEY (plugin_name, key)
         );
     ")?;
-    conn.pragma_update(None, "user_version", 2)?;
+    conn.pragma_update(None, "user_version", 4)?;
 }
 ```
 

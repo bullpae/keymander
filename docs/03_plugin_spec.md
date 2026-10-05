@@ -74,6 +74,19 @@ flowchart LR
 
 ## 3. Script Plugin (외부 플러그인)
 
+> ⚠️ **이 절은 스펙이며, 아직 배선되지 않았다** (2026-10-05, v0.16.8 확인).
+> `crates/kmd-core/src/plugin/protocol.rs`에 타입만 정의돼 있고 **`protocol::`
+> 참조가 0건**이다 — spawn·search·execute 어디에도 연결돼 있지 않다.
+> `loader.rs`도 `discover_plugins`/`default_plugin_dir` 두 함수뿐이고,
+> `kmd plugin`은 `list` 서브커맨드만 있다.
+>
+> 즉 **플러그인을 만들어 넣어도 로드되지 않는다.** 아래 내용은 "이렇게 하기로
+> 정했다"는 설계이지 현재 동작이 아니다.
+>
+> 배선 여부는 **의도적 보류** 상태다 — 사용자 기반이 없는데 프로세스 격리·
+> 타임아웃 유지비만 남는다는 판단. 사유는
+> [17_feature_backlog.md](17_feature_backlog.md) §3.
+
 ### 3.1 디렉토리 구조
 
 ```mermaid

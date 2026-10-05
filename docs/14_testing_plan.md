@@ -1,19 +1,22 @@
 # 테스트 전략 — E2E 자동화 계획 + 테스트 정리 계획
 
-> 상태: 2026-08-11 수립. Tier 1은 이 문서와 함께 구현됨.
-> Tier 2는 진행 중인 Windows 안정화 브랜치들(macos.rs·engine.rs·server.rs를
-> 공유)이 main에 합류한 뒤 착수한다 — 충돌 회피 시퀀싱.
+> 상태: 2026-08-11 수립. **Tier 1·Tier 2 모두 구현 완료** (Tier 2는 2026-08-11).
+> 남은 것은 Tier 2의 Windows CI 편입(`KMD_DATA_DIR` 선행 필요)과
+> Tier 3(보류). → [17_feature_backlog.md](17_feature_backlog.md) F9·F11
 
-## 현황 (2026-08-11)
+## 현황 (2026-10-05 갱신)
+
+**규모 수치는 적지 않는다** — 손으로 적으면 며칠 만에 낡는다.
+현재 값은 `./scripts/code-metrics.sh`.
 
 | 층 | 수단 | 규모 | CI |
 |---|---|---|---|
-| 단위 (로직) | `#[test]` 인라인 | 339개 / 전체 ~4초 | ✅ 3-OS 매트릭스 |
-| 엔진 시뮬레이션 | engine.rs 키 시퀀스 테스트 | 53개 (탭홀드·더블탭·chord·리피트) | ✅ |
-| 통합 | kmd-core `tests/audit_no_window.rs` | 1개 | ✅ |
-| 데몬 프로세스 E2E | **Tier 1 (이 계획으로 추가)** | `tests/e2e_daemon.rs` | ✅ unix |
-| 키 주입 진짜 E2E | 수동 — `paste-test`/`clip-test` CLI + docs/08·12·13 체크리스트 | — | ❌ |
-| GUI (iced) | 앱 모델 단위 테스트만 | — | ❌ |
+| 단위 (로직) | `#[test]` 인라인 | 전 크레이트 | ✅ 3-OS 매트릭스 |
+| 엔진 시뮬레이션 | engine.rs 키 시퀀스 테스트 | 탭홀드·더블탭·chord·리피트 | ✅ |
+| 통합 | kmd-core `tests/audit_no_window.rs` | — | ✅ |
+| 데몬 프로세스 E2E | **Tier 1** | `tests/e2e_daemon.rs` | ✅ unix (Windows는 F9 대기) |
+| 키 주입 진짜 E2E | **Tier 2** — `kmd daemon e2e` (아래 §Tier 2) | — | 🔶 로컬·릴리스 게이트. CI 편입은 F11 |
+| GUI (iced) | 앱 모델 단위 테스트만 | — | ❌ 🧊 Tier 3 보류(유지비 > 효용) |
 
 교훈(2026-08-10 키보드 먹통 사고): 엔진 단위 테스트는 **OS와의 상호작용**
 (Ctrl+Space 홀드가 입력 소스 피커를 여는 것 같은)을 잡지 못한다. 그 빈틈을

@@ -1,6 +1,9 @@
 # kmd dojo — 인터랙티브 키맵 트레이너 구현 계획
 
-> **상태: 미구현 계획** (2026-08-08 확인 — 현재 v0.12.0, 관련 코드 없음) ·
+> **상태: 미구현 계획** (2026-10-05 재확인 — v0.16.8, `dojo` 관련 코드 0건:
+> 서브커맨드·`src/tui/dojo/`·`dojo_runs` 마이그레이션 전부 없음) ·
+> 착수 우선순위는 [17_feature_backlog.md](17_feature_backlog.md) F18 —
+> 규모가 가장 크고(M1~M4) 마우스 레이어 실기기 검증이 선행 조건이다 ·
 > 관련: README "Missions" 섹션, [08_layer_passthrough_plan.md](08_layer_passthrough_plan.md)
 
 ## 1. 목표와 컨셉

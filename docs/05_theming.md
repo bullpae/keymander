@@ -2,8 +2,21 @@
 
 ## 1. 개요
 
-keymander TUI의 색상과 스타일을 커스터마이즈하는 시스템.
-현재는 코드 내장 테마를 사용하며, 향후 TOML 기반 외부 테마 파일을 지원할 예정.
+> ⚠️ **현재 동작 (2026-10-05, v0.16.8 확인) — 문서와 코드가 갈려 있다.**
+>
+> | | 테마 선택 | `general.theme` 설정 |
+> |---|---|---|
+> | **데스크톱** (iced) | 내장 **5종** — Keymander/Midnight, Obsidian, Snow, Rose Pine, Nord | ✅ 읽는다 (`kmd-desktop/src/main.rs`의 `theme::from_name`) |
+> | **TUI** (ratatui) | 단일 하드코딩 테마 | ❌ **읽지 않는다** — `src/tui/app.rs`가 `Theme::default()`를 쓴다 |
+>
+> 즉 **TUI에서 `general.theme`를 바꿔도 아무 일이 일어나지 않는다.**
+> 설정 항목은 존재하고 저장도 되는데 소비되지 않는 **거짓 설정**이다.
+> 아래 §2·§3은 TUI 테마를 전제로 쓰였으나, 그 전제가 아직 성립하지 않는다.
+>
+> 수정 우선순위: [17_feature_backlog.md](17_feature_backlog.md) **F15**(TUI가
+> 설정을 읽게 하기) → **F16**(TOML 외부 테마 + 핫 리로드) → **F17**(저색상 폴백).
+
+keymander의 색상과 스타일을 커스터마이즈하는 시스템.
 
 ---
 
@@ -82,7 +95,10 @@ block-beta
 
 ---
 
-## 3. 향후 계획 (v0.3+)
+## 3. 향후 계획 — ⬜ 미구현
+
+이 절 전체가 **설계이지 현재 동작이 아니다.** `themes/` 디렉터리 로드,
+`load_theme`, `COLORTERM` 감지, 핫 리로드 모두 코드에 없다(grep 0건).
 
 ### 3.1 TOML 테마 파일
 
@@ -125,17 +141,32 @@ flowchart TD
     Fallback --> Render
 ```
 
-### 3.3 예정 테마
+### 3.3 테마 목록 — 내장된 것 vs 예정
+
+**데스크톱에 이미 내장된 5종** (`crates/kmd-desktop/src/theme.rs`,
+`general.theme` 값으로 선택):
+
+| 값 | 설명 | 계열 |
+|------|------|------|
+| `keymander` \| `default` \| `midnight` | 기본 — 딥 네이비 + 일렉트릭 시안 | Dark |
+| `obsidian` | 무채색 고대비 | Dark |
+| `snow` \| `light` | 라이트 | Light |
+| `rose_pine` | 뮤트 로즈 | Dark |
+| `nord` | 차가운 파란 계열 | Dark |
+
+알 수 없는 값은 조용히 `midnight`으로 폴백한다(`from_name`).
+
+**예정** — 아직 없다:
 
 | 이름 | 설명 | 계열 |
 |------|------|------|
-| default | 터미널 기본 색상 활용 | 범용 |
 | catppuccin-mocha | 따뜻한 다크 테마 | Dark |
 | catppuccin-latte | 밝은 라이트 테마 | Light |
-| nord | 차가운 파란 계열 | Dark |
 | tokyo-night | VS Code 인기 테마 포트 | Dark |
 | gruvbox | 레트로 컬러 | Dark |
 | solarized-dark | 클래식 다크 테마 | Dark |
+
+**TUI는 이 목록 전체와 무관하다** — §1 참조. F15가 먼저다.
 
 ### 3.4 색상 시스템
 

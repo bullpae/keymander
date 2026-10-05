@@ -289,10 +289,11 @@ gantt
     README, CI/CD, 릴리스         :done, p5, after p4, 5d
 
     section Phase 6 - Future
-    글로벌 핫키 네이티브          :future1, after p5, 14d
+    글로벌 핫키 네이티브          :done, future1, after p5, 14d
+    FTS 본문 검색                 :done, future1b, after p5, 14d
     테마 핫 리로드                :future2, after p5, 7d
+    export/import                 :future2b, after p5, 7d
     공식 플러그인 (todo/memo)     :future3, after future1, 14d
-    플러그인 레지스트리           :future4, after future3, 14d
 ```
 
 ### Phase 1: Core + CLI ✅
@@ -314,17 +315,26 @@ gantt
 ### Phase 4: Daemon (Infrastructure) ✅
 - CLI 스텁 구현 (kmd daemon start/stop/status)
 - OS별 바인딩 가이드 제공
-- 향후: 글로벌 핫키 등록 (RegisterHotKey / CGEventTap / XGrabKey)
+- 글로벌 핫키 네이티브 등록 ✅ 완료 — `keybind/macos.rs`(CGEventTap)·
+  `keybind/windows.rs`(LL 훅), 콤보 등록은 `kmd-daemon/src/server.rs`
 
 ### Phase 5: Polish ✅
 - README, LICENSE
 - CI/CD (GitHub Actions: check, test, clippy, fmt, release)
 - 크로스플랫폼 릴리스 빌드
 
-### Phase 6: Future
-- 글로벌 핫키 데몬 네이티브 구현
-- 테마 핫 리로드
-- export/import (설정+DB 아카이브)
-- 공식 플러그인: kmd-todo, kmd-memo, kmd-clipboard
-- FTS (Full-Text Search) for file contents
-- 플러그인 레지스트리/마켓플레이스
+### Phase 6 ✅ 완료된 것
+- 글로벌 핫키 데몬 네이티브 구현 — Phase 4 참조
+- FTS (파일 본문 검색) — v0.15.0, `crates/kmd-core/src/content_index.rs`
+- 클립보드 — 플러그인이 아니라 **네이티브로** 구현(`;`/`:clip`,
+  `crates/kmd-daemon/src/clipboard.rs`). 아래 "공식 플러그인"에서 제외
+
+### Phase 6 남은 것
+
+**정본은 [17_feature_backlog.md](17_feature_backlog.md)다.** 여기 목록은 요약이다.
+
+- 테마 핫 리로드 + TOML 외부 테마 (F15~F17) — 먼저 **TUI가 `general.theme`를
+  읽게** 해야 한다. 현재는 설정만 있고 읽지 않는다
+- export/import (설정+DB 아카이브) (F10)
+- 공식 플러그인 kmd-todo / kmd-memo (F20) — Script Plugin 배선 결정에 종속
+- 플러그인 레지스트리/마켓플레이스 — 🧊 **보류**(docs/17 §3)

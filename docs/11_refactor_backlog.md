@@ -16,7 +16,7 @@
 - 키 입력·검색어를 로그에 남기는 코드 없음 (키로거화 방지).
 - 검색: Nucleo + 사전 소문자화 — 이미 성능 지향.
 - 자체 코드에 TODO/FIXME 마커 0건 (전부 vendor/).
-- 테스트: kmd-core 171 · kmd-daemon 71 · kmd-desktop 77.
+- 테스트: 전 크레이트에 촘촘하다. **수치는 적지 않는다**(위 규칙) — `./scripts/code-metrics.sh`.
 
 ## 1. 신뢰성·안전 ✅ 대부분 완료
 
@@ -37,8 +37,8 @@
 | 항목 | 내용 |
 |---|---|
 | **R2-1. clippy 정리** | ✅ 유지 중 — 경고 0건. 주의: `VKey::ALL`·`DelayedRefocus`는 죽은 코드가 아니라 **cfg(windows) 전용 코드의 사용처**였다(macOS 빌드에서만 미사용으로 보임) — 삭제 대신 `cfg_attr(not(windows), allow(dead_code))` 처리. 삭제했으면 Windows가 깨졌다 |
-| **R2-2. 대형 파일** | ✅ 주요 대상 완료. **줄 수는 여기 적지 않는다** — 손으로 적으면 며칠 만에 낡는다. 현재 값은 `./scripts/code-metrics.sh`.<br>· `keybind/engine.rs`의 `process_key` 451줄 → 진입점 43줄 + 12스텝 (2026-08-27). `process_key_동작_스냅샷` characterization 테스트가 의미 보존을 지킨다<br>· `kmd-desktop/app.rs`의 `update_inner` 359줄 → **84줄** (2026-08-28). 인라인 arm 11개를 파일의 기존 관례(`Message::X => self.handle_x()`)대로 핸들러 메서드로 추출. 이제 이 파일에 60줄 넘는 함수가 없다<br>· 남은 것: `app/view.rs`의 `view`(223줄)·`view_detail_panel`(231줄). iced 레이아웃 빌더라 분해 이득이 작아 **보류** — 조건부 표시가 늘어 읽기 어려워지면 그때 |
-| **R2-3. CLI/TUI 테스트 공백** | ✅ 대부분 해결 (2026-08-28) — `src/` 테스트 4개 → **24개**. 프리픽스 디스패치 테이블, 선택 상태 전이, 설정 항목 왕복·거부, `execute_selected`의 상태 분기(도움말 시드 전환·bang 힌트·미지 명령→:help·설정 모달), 드릴다운 진입/복귀를 덮었다.<br>의도적 제외: 셸 실행·클립보드·브라우저 열기·config 저장처럼 **부작용이 상태 밖으로 나가는 분기**는 단위 테스트 대상이 아니다 |
+| **R2-2. 대형 파일** | ✅ 주요 대상 완료. **줄 수는 여기 적지 않는다** — 손으로 적으면 며칠 만에 낡는다. 현재 값은 `./scripts/code-metrics.sh`.<br>· `keybind/engine.rs`의 `process_key` 451줄 → 진입점 43줄 + 12스텝 (2026-08-27). `process_key_동작_스냅샷` characterization 테스트가 의미 보존을 지킨다<br>· `kmd-desktop/app.rs`의 `update_inner` 359줄 → **84줄** (2026-08-28). 인라인 arm 11개를 파일의 기존 관례(`Message::X => self.handle_x()`)대로 핸들러 메서드로 추출. 이제 이 파일에 60줄 넘는 함수가 없다<br>· 남은 것: `app/view.rs`의 `view`·`view_detail_panel`. iced 레이아웃 빌더라 분해 이득이 작아 **보류** — 조건부 표시가 늘어 읽기 어려워지면 그때 |
+| **R2-3. CLI/TUI 테스트 공백** | ✅ 대부분 해결 (2026-08-28) — `src/` 테스트를 대폭 보강했다. 프리픽스 디스패치 테이블, 선택 상태 전이, 설정 항목 왕복·거부, `execute_selected`의 상태 분기(도움말 시드 전환·bang 힌트·미지 명령→:help·설정 모달), 드릴다운 진입/복귀를 덮었다.<br>의도적 제외: 셸 실행·클립보드·브라우저 열기·config 저장처럼 **부작용이 상태 밖으로 나가는 분기**는 단위 테스트 대상이 아니다 |
 | **R2-4. cargo-deb 한글 재발 방지** | ✅ 완료 (2026-08-28) — `scripts/check-encoding.sh` + CI 잡. UTF-8 유효성(CP949 혼입)과 BOM 규칙을 본다. **`.ps1`은 BOM이 필수**(PS 5.1이 없으면 ANSI로 읽어 한글을 깨뜨림), 나머지는 금지. 도입하자마자 `assemble-config.ps1`에 BOM이 빠져 있던 것을 잡았다. 대상 파일이 0개면 "통과"가 아니라 실패(exit 2)로 본다 — 조용한 통과가 가장 위험하다 |
 | **R2-5. 설정 키 4중 열거** | ✅ 대부분 해결 (2026-08-28) — `config_registry!` 매크로가 **한 줄 선언에서 get/set 양쪽을 생성**한다. 단순 키 27개(숫자·불리언·문자열)는 비대칭이 원천적으로 불가능해졌고 `get_value`/`set_value`의 중복 arm 54개가 사라졌다. 리스트 정규화·읽기 전용 의사 키 등 16개는 여전히 명시적 arm(정당함). 테스트가 레지스트리↔명시적 arm 중복까지 막는다.<br>남은 것: **UI 목록(`items.rs`)은 여전히 별도 열거** — 라벨·위젯·설명이 붙어 있어 합칠 수 없고, 왕복 테스트가 누락을 막는다 |
 | **R2-6. 프리픽스 라우팅 이중화** | ✅ 부분 완료 (2026-08-27) — 두 UI가 각자 벗겨내던 프리픽스 문자열(`:emoji`\|`:e`, `!`\|`>`, `:keymap`\|`:km`)을 `kmd_core::query_prefix`의 순수 함수로 모았다. **나머지는 의도적으로 통합하지 않았다** — `transform`(데스크톱=결과 항목/TUI=상태 메시지), `prompt`·`keys`(캐시된 config vs 매번 디스크 로드), `web`(점수 부여 상이)는 실제로 갈라진 동작이다. 통합하려면 먼저 어느 쪽이 옳은지 정해야 한다 |
@@ -62,7 +62,9 @@
 
 ## 4. 외부 대기
 
-- **winget**: PR #413755 검증 통과, 모더레이터 머지 대기 → 머지 후 `WINGET_GITHUB_TOKEN` 등록 + 저장소 개명(`docs/07 §6` 런북)
+- ~~**winget**: 모더레이터 머지 대기~~ ✅ **머지 완료** (v0.16.2, 2026-09-10) — 저장소 개명·토큰 등록까지 수행.
+  단 CI 자동 제출 잡은 여전히 권한 오류(CreateRef)로 실패하며, `komac update --submit`
+  로컬 수동 제출로 우회 중이다. classic PAT(`repo` 스코프)가 필요하다
 - **Windows 창 문제**: R1-1 진단값 (사용자 Windows 머신)
 
 ## R2-6 / R3-3 결론 (2026-09-13, 설계 결정 후 실행)
@@ -143,8 +145,9 @@ IPC 연결 상한. 아래 착수 순서에 반영했다.
 2. **R3-4 `ExtensionAction` 확장** — `Paste`/`Inject` 추가 + 순수형(클라이언트)/
    능력형(데몬 IPC) 경계 도입. R3-3의 남은 절반과 묶어서 판단하는 게 자연스럽다
 3. ~~R2-6 / R3-3 잔여~~ ✅ 위 「R2-6 / R3-3 결론」 참조 (2026-09-13 완료)
-4. `src/tui/settings/items.rs`의 `items_for_tab`(254줄), `src/tui/app.rs`의
-   `execute_selected`(250줄) — 다음 R2-2급 후보. 순수 데이터/분기라 분해는 쉽다
+4. `src/tui/settings/items.rs`의 `items_for_tab`, `src/tui/app.rs`의
+   `execute_selected` — 다음 R2-2급 후보. 순수 데이터/분기라 분해는 쉽다.
+   (둘 다 백로그 작성 시점보다 **더 길어졌다** — 방치하면 계속 자란다)
 5. 보류 유지: `app/view.rs`의 `view`·`view_detail_panel`(iced 레이아웃 빌더),
    `ipc::Response::status_lines`의 표시 문구(새 소비자가 생기면 presenter 분리)
 
@@ -154,3 +157,112 @@ IPC 연결 상한. 아래 착수 순서에 반영했다.
   생길 때 `StatusView` + presenter로 나누는 게 맞다
 - 프리픽스 핸들러 중 갈라진 것들(R2-6) — 통합하려면 먼저 어느 동작이 옳은지
   정해야 한다
+
+## 코드 건강 재점검 (2026-10-05, v0.16.8)
+
+기능 백로그([17_feature_backlog.md](17_feature_backlog.md))와 함께 수행한 전수
+점검. **REF-05~08은 전부 미완**이고, 백로그에 없던 항목 몇 개가 더 나왔다.
+
+### 이 점검에서 새로 드러난 것
+
+**1. `folder_search`에 항목 수 상한이 없다 — 같은 교훈을 두 번 안 배웠다.**
+
+`crates/kmd-core/src/folder_search.rs:36,44`가 키 입력마다 `read_dir`를 **전수
+열거**한다. 상한이 없다. 그런데 바로 옆 `folder_suggest.rs:300-306`의 주석은
+이미 이렇게 적혀 있다 — *"외장·네트워크 볼륨이 들어가면 검색 한 번이 14초까지
+늘어졌다."* 폴더 **제안**은 그 교훈으로 예산(`ENTRY_BUDGET`)을 넣었는데, 폴더
+**검색**(`:f`)은 안 넣었다. 비응답 마운트면 `is_dir()` stat 하나가 마운트
+타임아웃까지 멈춘다.
+
+→ 비동기화(REF-05) 없이 **상한만 넣어도** 최악 수 초 → 수십 ms다. 먼저 한다.
+
+**2. TUI가 키 입력마다 frecency SQL을 돈다.**
+
+`src/tui/app.rs:1546`가 키마다 `history::boost_results(.., db)` → `query_history(500)`
++ 500개 HashMap 구축. 데스크톱은 **같은 자리**에서 사전 로드 맵
+(`search_routing.rs:403` `boost_results_with_map`)을 쓴다. 비대칭 자체가 어느
+쪽이 옳은지를 알려준다 — 데스크톱 패턴으로 바꾸면 끝이다.
+
+**3. TUI quick action이 최대 12초간 완전 무응답.**
+
+`src/tui/app.rs:963` `shell_ext.execute`가 `COMMAND_TIMEOUT = 10s`(+ READER_GRACE
+2s)를 **이벤트 루프 안에서 동기 대기**한다. 키 입력도 리드로우도 멈춘다.
+데스크톱은 같은 작업을 워커 + `handle_shell_done`으로 처리한다. 또 하나의 비대칭.
+
+**4. `handle_prompt_query`의 분기 사유가 소멸했다.**
+
+`search_routing.rs:156-306` ↔ `tui/app.rs:1286-1400`에 add/remove 검증 분기가
+40줄 이상 거의 동일하게 중복돼 있다. R2-6에서 "캐시 vs 매번 디스크 로드"라는
+**갈라진 동작**으로 분류해 통합을 보류했는데, **R2-7 이후 둘 다 캐시를 쓴다.**
+보류 사유가 사라졌으므로 통합 가능하다.
+
+**5. 무근거 `allow(dead_code)` 1건.**
+
+`allow(dead_code)` 12건 중 9건은 `cfg_attr(not(<os>), ...)` 플랫폼 조건부로
+R2-1 결론에 부합하고, 2건은 사유 주석이 있다. 남은 1건
+`crates/kmd-daemon/src/keybind/macos.rs:60`은 **`extern "C"` 블록 전체**에 걸려
+미사용 FFI 선언을 전부 가린다. 사유 주석도 없다 — R2-1이 "삭제했으면 Windows가
+깨졌다"고 배운 자리이므로 **삭제가 아니라 범위를 좁히거나 사유를 적는다.**
+
+**6. `#[ignore]` 1건은 정당.** `builtin_shell.rs:632` — "실제 터미널 창을 연다,
+수동 실행 전용". TODO/FIXME/HACK/XXX는 여전히 **0건**(§0 유지).
+
+### REF-05 블로킹 지점 전수 (착수 근거)
+
+REF-05를 "UI 비동기화"로만 적어두면 어디부터 할지 모른다. 실제 지점과 체감 비용:
+
+| 사용자 동작 | 블로킹 지점 | 추정 멈춤 |
+|---|---|---|
+| **TUI quick action(`>` Enter)** | `src/tui/app.rs:963` → `builtin_shell.rs:15,420` | **최대 12초 완전 무응답** |
+| **데스크톱/TUI `:f` 타이핑** | `folder_search.rs:36,44` (상한 없음) | 로컬 1~10ms / 수만 항목 100~500ms / **네트워크·외장 수 초** |
+| **TUI 일반 검색 매 키** | `src/tui/app.rs:1546` frecency DB | 5~30ms **매 키** |
+| 데스크톱/TUI `?질의` 매 키 | `content_index.rs:376-420` FTS5 MATCH+bm25+snippet | 수천 문서 10~80ms / 수만 수백 ms |
+| 데스크톱 `?질의` 첫 키 | `search_routing.rs:461-465` `Database::open` | 5~50ms (콜드 100ms+) |
+| TUI 폴더 드릴다운 | `src/tui/app.rs:1615` `list_directory_contents` | 로컬 1~20ms / 네트워크 수 초 |
+| TUI 설정 저장·폴더 제안 추가 | `src/tui/app.rs:438,717` `update_and_save` | 5~50ms (재읽기+쓰기+fsync) |
+| 데스크톱 설정 "config 열기" | `app/settings.rs:474-487` | 50~300ms (`open::that` 동기 반환) |
+| 데스크톱 엔진 교체 직후 | `app.rs:1217` `engine::load_config()` | 2~15ms, 1회성 — **바로 위 `app.rs:817`은 같은 호출을 `spawn_blocking`에 넣었다**(한 쪽만 비동기) |
+| 데스크톱 실행(Enter) | `app/launch.rs:372,383` | 10~100ms, 창 닫히기 직전 — 체감 피해 작음 |
+
+`6a59437`(폴더 제안 비블로킹화)이 REF-05의 **첫 조각**이다. 나머지는 위 순서.
+
+### 미완 항목 현황
+
+| ID | 상태 | 설계 결정 필요? |
+|---|---|---|
+| REF-05 UI 비동기화 | 🔶 폴더 제안만 완료(`folder_suggest.rs:307`) | 아니오 — 패턴 기정 |
+| REF-06 실행 액션 타입화 | ⬜ `LauncherAction` 부재. `kmd:*` 마커 10종 이상을 두 UI가 각자 재파싱(`tui/app.rs:842~890` ↔ `app/launch.rs:188~316`), 한쪽 전용 마커도 섞여 있다 | **예** — 마커 집합의 정본 + 크레이트 배치 |
+| REF-07 데스크톱 App 상태 분리 | ⬜ `app.rs:248` `struct App` 필드 **59개**(검색·엔진·창·포커스·부팅·설정·클립보드 혼재). 파일은 R2-2 작성 시점보다 **더 커졌다** | **예** — 경계를 어디에 그을지 |
+| REF-08 IPC 연결 상한 | ⬜ `server.rs:501-517` accept 루프가 연결마다 `thread::spawn`, 카운터 없음. 방어는 요청 바이트 상한만(`:559` 64KB) | 아니오 |
+| R3-3 엔진 생성 3곳 | ⬜ `kmd-desktop/src/engine.rs:33`·`src/tui/app.rs:227`·`kmd-daemon/src/server.rs:463`(+`:200`) 전부 동일 3줄. `kind_weights` 누락이 한 곳에서만 생길 수 있는 형태 | 아니오 — 순수 중복 |
+| R3-3 프리픽스 디스패치 2벌 | ⬜ 16-arm match 중복(`search_routing.rs:38-57` ↔ `tui/app.rs:1144-1160`). arm 이름은 같고 구현이 블로킹/비블로킹으로 갈림 | 일부 — `Clipboard`가 TUI에선 일반 검색으로 흐름(`tui/app.rs:1159`) |
+| R3-4 `ExtensionAction` 확장 | ⬜ docs/17 F14와 동일 작업 | 예 |
+| R1-4 데몬 `.app` 번들화 | ⬜ | 예 — 할지 말지부터 |
+
+### 즉시 할 수 있는 저비용 정리 (설계 결정 불필요)
+
+착수 순서다. 1~3은 **사용자 체감 개선**이고 나머지는 위생이다.
+
+1. **`folder_search.rs:44` 열거에 항목 수 상한**(예: 5000) — 최악 수 초 → 수십 ms.
+   비동기화 없이 가능. 위 발견 1
+2. **`src/tui/app.rs:1546`를 `boost_results_with_map` + 시작 시 1회 로드로** —
+   키 입력당 SQL 제거. 데스크톱과 동일 패턴이라 정답이 이미 정해져 있다. 발견 2
+3. **TUI quick action을 워커로** — 12초 무응답 제거. 데스크톱 `handle_shell_done`
+   패턴을 그대로. 발견 3
+4. 엔진 생성 3줄을 `kmd_core`에 `SearchEngine::with_config(&LauncherConfig, items)`로 —
+   호출부 3곳만 수정
+5. REF-08: accept 루프에 `AtomicUsize` 카운터 + 상한(예: 64) — 10줄 수준
+6. `app.rs:1217`의 `load_config()`를 이미 `spawn_blocking`에서 읽은
+   `EngineLoadResult`에 실어 보내 중복 파싱 제거
+7. `keybind/macos.rs:60` 무근거 `allow(dead_code)` 범위 축소 또는 사유 주석
+8. `handle_prompt_query` 통합 — 발견 4 (보류 사유 소멸)
+9. **`scripts/check-encoding.sh`가 macOS에서 안 돈다** (이 점검 중 발견) —
+   `mapfile`은 bash 4+ 전용인데 macOS 기본 `/bin/bash`는 3.2다
+   (`mapfile: command not found` → `FILES: unbound variable` → exit 1).
+   CI는 ubuntu라 통과하므로 **개발자가 로컬에서 미리 돌릴 수 없는 상태**다.
+   `while IFS= read -r` 루프로 바꾸면 3.2에서도 돈다. R2-4가 "조용한 통과가
+   가장 위험하다"며 만든 스크립트인데, 정작 로컬에선 조용히 못 돌고 있다
+
+**교훈 3**: 같은 교훈을 옆 파일에 주석으로 적어두고 이 파일엔 적용하지 않았다
+(발견 1). 그리고 "수치를 적지 말 것"을 못박은 문서가 §0에 테스트 수를 남겨
+낡혔다 — 규칙은 자기 자신에게도 적용해야 한다.

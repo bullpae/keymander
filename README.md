@@ -246,8 +246,9 @@ recent stable releases.
 winget install keymander
 ```
 
-> Pending initial registration in `microsoft/winget-pkgs`. Until it lands, use
-> the portable zip from [Releases](https://github.com/bullpae/keymander/releases).
+> Available since v0.16.2. A portable zip is also on
+> [Releases](https://github.com/bullpae/keymander/releases) if you prefer not to
+> install system-wide.
 
 ### From source
 
