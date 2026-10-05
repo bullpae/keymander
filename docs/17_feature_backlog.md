@@ -112,13 +112,17 @@
 | D10 | `docs/05_theming.md:128-138` + §3 전체 | "예정 테마 7종(catppuccin×2/nord/tokyo-night/gruvbox/solarized)" | 실제 내장은 **데스크톱 5종**(`kmd-desktop/src/theme.rs:66-166` midnight/obsidian/snow/rose_pine/nord). 문서 목록과 전혀 다르다. 또한 §3이 "TUI 테마"를 전제하는데 **TUI는 `general.theme`를 읽지 않는다**(F15) |
 | D11 | `docs/01_prd.md:328` | 공식 플러그인 kmd-todo/memo/clipboard | clipboard만 **네이티브로** 구현(`;`/`:clip`), 플러그인 형태 아님. todo/memo는 0건 |
 
-## 5. 다음 릴리스 묶음 제안
+## 5. 다음 릴리스 묶음 (2026-10-05 현재)
 
-`main`에 들어갔으나 아직 릴리스되지 않은 것 + 위 목록의 저비용 항목.
+`main`에 들어갔고 아직 릴리스되지 않은 것 — `CHANGELOG.md`의 `[Unreleased]`가 정본:
 
-- (커밋됨) 폴더 제안 신호 ② — 실행 이력 기반 (`6a59437`)
-- **D1~D11 문서 수정** — 전부 합쳐 한 커밋. 코드 위험 0
-- **F3** 기본 프리셋 passthrough — 주석 해제 + 테스트
-- **F9** `KMD_CONFIG_DIR`/`KMD_DATA_DIR` — F10·F11을 푸는 선행 작업
+- 폴더 제안 신호 ② — 실행 이력 기반 (`6a59437`)
+- 문서 정합 D1~D11 (`48fd449`)
+- 리팩토링 저비용 묶음 — TUI quick action 무응답 제거, `:f` 열거 상한,
+  TUI frecency 캐시, IPC 연결 상한, 엔진 생성 통합 ([11](11_refactor_backlog.md)
+  「코드 건강 재점검」)
+
+그다음 릴리스 후보: **F3**(기본 프리셋 passthrough — 주석 해제 + 테스트),
+**F9**(`KMD_CONFIG_DIR`/`KMD_DATA_DIR` — F10·F11을 푸는 선행 작업).
 
 F1·F2·F4는 엔진을 건드리므로 **실기기 검증이 붙는 별도 릴리스**가 맞다.
