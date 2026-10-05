@@ -15,7 +15,7 @@ keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 �
 | Homebrew | `brew install bullpae/tap/keymander` | ✅ 설치·갱신 자동 | 없음 |
 | apt (Debian/Ubuntu) | `apt install keymander` | ✅ 설치·갱신 자동 | 없음 |
 | yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
-| winget (Windows) | `winget install keymander` | ✅ 등록 완료 (v0.16.2, 2026-09-10) | 🔶 **갱신 자동화는 토큰에 `workflow` 스코프 필요** — §2.2 |
+| winget (Windows) | `winget install keymander` | ✅ 등록 완료 (v0.16.2, 2026-09-10) | ✅ 갱신 자동 — 토큰에 `workflow` 스코프 추가(2026-10-05), 다음 릴리스에서 검증 · 토큰 만료 2026-12-09 — §2.2 |
 
 사용자 관점의 채널별 설치 배치(바이너리·예시 config 경로, 포터블/표준 모드,
 런타임 파일 위치)는 README의 **"Install layout by channel"** 절이 정본이다.
@@ -108,7 +108,7 @@ scripts/gen-winget-manifests.sh <버전> /tmp/winget
 저장소가 거대해서 clone보다 GitHub contents API로 올리는 게 훨씬 빠르다.
 PR 제목 관례: `New package: bullpae.keymander version X.Y.Z`
 
-### 2.2 winget 자동 갱신용 PAT — 🔶 `workflow` 스코프가 필요하다
+### 2.2 winget 자동 갱신용 PAT — ✅ `workflow` 스코프 추가됨 (다음 릴리스에서 검증)
 
 winget-releaser(내부적으로 komac)는 winget-pkgs 포크에 브랜치를 만들고 PR을 내야
 하므로 deploy key로는 안 되고 사용자 PAT가 필요하다.
@@ -142,6 +142,14 @@ gh api -X POST repos/bullpae/winget-pkgs/merge-upstream -f branch=master
 **동기화 자체가 워크플로 파일을 갱신하므로 같은 스코프가 필요**해 해결이 안 된다.
 
 **근본 해결 — `workflow` 스코프를 포함한 classic PAT**:
+
+> ✅ **2026-10-05 적용** — 기존 토큰(만료 2026-12-09)에 `workflow` 스코프를
+> 추가했다. classic PAT은 스코프를 바꿔도 **토큰 값이 그대로**라 시크릿 재등록이
+> 필요 없다. 검증은 다음 릴리스의 `Update winget package` 잡 통과로 한다(실패한
+> 0.16.9 잡을 재실행하면 수동 제출한 PR #446932와 중복 PR이 생기므로 하지 않음).
+> **2026-12-09 만료 전에** 같은 스코프로 재발급 → `gh secret set`.
+
+새로 발급할 때:
 
 1. 발급 링크(스코프 미리 선택됨):
    <https://github.com/settings/tokens/new?scopes=public_repo,workflow&description=keymander-winget>
