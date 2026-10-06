@@ -18,6 +18,26 @@ All notable changes to keymander are documented here.
     형식으로 설정해 둔 Windows에서는 `~`로 시작하는 경로가 전부 없는 폴더가
     됐다. 폴더 제안의 홈 탐색도 같은 문제가 있었다.
 - 폴더를 찾지 못했을 때 없는 기능(Tab 자동완성)을 안내하던 문구를 바로잡았다.
+- **macOS에서 quick action 8개 중 4개가 동작하지 않던 문제.** Uptime·Disk
+  Usage·Memory Usage는 오류로 끝났고 IP Address는 빈 결과였다(macOS에 없는
+  Linux 명령을 실행하고 있었다). 이제 OS마다 맞는 명령을 쓴다. OS Version은
+  커널 버전(Darwin 25.x) 대신 macOS 버전을 보여준다.
+- **Windows quick action 출력의 한글이 깨지던 문제.** 사용자 이름·PC 이름·오류
+  메시지 등에 한글이 있으면 `�`로 나왔다.
+- **Windows 검색 결과에 `desktop.ini`·`Thumbs.db`·`NTUSER.DAT` 같은 숨김 파일이
+  섞이던 문제.** 이제 탐색기처럼 숨김 속성이 붙은 파일·폴더를 제외한다(색인,
+  `:f`, TUI 폴더 탐색, 문서 본문 검색, 폴더 제안 모두).
+- **Windows에서 기본 검색 폴더가 실제 바탕 화면·문서를 놓치던 문제.** OneDrive
+  백업을 켜면 이 폴더들이 OneDrive 안으로 옮겨지는데, 예전 위치만 봤다. 회사
+  OneDrive(`OneDrive - 회사명`)도 찾지 못했다. Linux의 지역화된 폴더
+  (`~/바탕화면`)도 마찬가지였다. 설정에 검색 폴더를 직접 적어 둔 경우는 영향이
+  없고, 빠진 폴더는 폴더 제안이 알려준다.
+- Windows에서 설정의 검색 폴더를 config와 다른 대소문자로 적으면, 이미 검색 중인
+  폴더를 다시 추가하라고 제안할 수 있던 문제.
+
+### Changed
+- TUI 폴더 탐색이 `:f`와 같은 폴더 읽기 코드를 쓴다 — 항목이 아주 많으면 앞의
+  5,000개만 보고 잘렸다고 알린다.
 
 ## [0.16.9] — 2026-10-05
 

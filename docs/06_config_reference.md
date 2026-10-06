@@ -107,7 +107,7 @@ toggle_preview = "ctrl+p"
 |----|------|--------|------|
 | file_search_provider | String | "auto" | 파일 검색 백엔드 |
 | everything_path | Path? | None | es.exe 경로 (Windows) |
-| search_paths | Vec\<Path\> | 플랫폼별 | 검색 대상 디렉토리 (기본: Desktop, Documents, Downloads 등) |
+| search_paths | Vec\<Path\> | 플랫폼별 | 검색 대상 디렉토리. 기본값은 **OS가 알려주는 실제** 바탕 화면·문서·다운로드 위치(Windows는 OneDrive 백업으로 옮겨진 위치 포함) + Windows OneDrive 루트(개인·회사). 키를 적지 않았을 때만 기본값을 쓴다 |
 | max_results | usize | 5000 | 최대 인덱스 항목 수 |
 | search_depth | usize | 4 | 최대 재귀 디렉토리 탐색 깊이 |
 | ignore_patterns | Vec\<String\> | [".git", ...] | 무시 패턴 |

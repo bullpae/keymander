@@ -275,3 +275,41 @@ REF-05를 "UI 비동기화"로만 적어두면 어디부터 할지 모른다. �
 **교훈 3**: 같은 교훈을 옆 파일에 주석으로 적어두고 이 파일엔 적용하지 않았다
 (발견 1). 그리고 "수치를 적지 말 것"을 못박은 문서가 §0에 테스트 수를 남겨
 낡혔다 — 규칙은 자기 자신에게도 적용해야 한다.
+
+## 플랫폼 차이 점검 (2026-10-06)
+
+Windows `:f` 버그(결과마다 같은 폴더가 열림 · 있는 폴더를 못 찾음)를 계기로
+"OS마다 다른 규칙"을 공유 코드(kmd-core·TUI·데스크톱) 전체에서 점검했다.
+데몬의 키 훅(`keybind/{macos,windows}.rs`)은 원래 OS별 모듈이라 대상에서 뺐다.
+
+| # | 결함 | 원인 패턴 | 조치 |
+|---|---|---|---|
+| 0 | `:f` 결과가 전부 같은 폴더로 열림 (Windows) | `~` 확장이 `/`·`\` 섞인 경로를 만들고, `explorer.exe`는 그런 경로면 **조용히 기본 폴더를 연다** | `:f` 경로 구분자 통일 + `action::explorer_path`(여는 쪽에서도 정리) — `90fd718` |
+| 0' | 있는 폴더를 못 찾음 (Windows) | 첫 공백에서 경로 절단(`D:\My Projects`) · `HOME` 우선(MSYS 형식 `/c/Users/..`) | 최장 존재 경로 + 따옴표, `dirs::home_dir()` — `90fd718` |
+| 1 | macOS quick action 8개 중 4개 고장 | `cfg(not(windows))`가 **macOS와 Linux를 한 덩어리로** 봤다 | OS 3갈래 표(`QuickCmd`) + 현재 OS에서 실제 실행하는 테스트 — `f10c220` |
+| 2 | Windows quick action 한글 깨짐 | 콘솔 코드페이지(CP949) 출력을 UTF-8로만 읽음 | PowerShell + UTF-8 출력, `textenc` 안전망 — `f10c220` |
+| 3 | `desktop.ini`·`NTUSER.DAT` 등이 검색에 섞임 | 숨김 판정 6곳이 `.` 이름만 봄(Windows는 속성) | `fsutil::is_hidden_*` 단일화 — `f10c220` |
+| 4 | 기본 검색 폴더가 실제 위치를 놓침 | 홈 아래 고정 이름(OneDrive 리디렉션·회사 OneDrive·지역화 폴더 미반영) | `dirs::*_dir()` + OneDrive 환경 값, 옛 후보는 상위 집합으로 유지 — `0f4072d` |
+| 5 | 범위 판정 대소문자 구분 (Windows) | `Path::starts_with` | `fsutil::path_within` — `f10c220` |
+| 6 | TUI 드릴다운이 `:f` 나열의 복사본 | 중복 코드에 개선이 한쪽만 | `folder_search::list_dir` 공유 — `f10c220` |
+
+**교훈 4**: `cfg(not(windows))`는 "macOS와 Linux는 같다"는 가정이다. 명령줄
+도구(`uptime`·`df`·`free`·`grep`)는 GNU와 BSD가 다르다 — OS별 표에는 3갈래를
+두고, **현재 OS에서 실제로 실행하는 테스트**를 붙여 CI의 3개 OS가 각자 검증하게
+한다. 문자열을 비교하는 테스트로는 이런 고장을 못 잡는다.
+
+**교훈 5**: Windows의 실패는 에러가 아니라 **엉뚱한 결과**로 나타나는 경우가
+많다 — 탐색기는 잘못된 경로에 기본 폴더를, 콘솔은 잘못된 인코딩에 `�`를 낸다.
+"에러가 안 났으니 동작한다"고 보면 안 된다.
+
+### 남은 것 (이번에 고치지 않음)
+
+- **무시 패턴(`ignore_patterns`)이 폴더 이름에만, 대소문자 구분으로 적용된다.**
+  `NTUSER.DAT` 항목은 파일이라 원래 동작하지 않았다(이제 숨김 속성으로 걸러짐).
+  파일에도 적용할지·Windows에서 대소문자를 무시할지는 기존 사용자 설정의 의미가
+  바뀌는 결정이라 보류
+- `ShellExtension::execute_command`가 `cmd /c`에 `args()`를 쓴다(MSVC 따옴표
+  규칙 — cmd.exe는 모른다). 현재 UI에서 닿지 않는 경로(일반 `>` 명령은
+  `launch_in_terminal`의 `raw_arg`)라 실제 피해는 없지만, 쓰게 되면 `raw_arg`로 바꿀 것
+- Windows 실기기 확인: quick action 출력 한글, 숨김 파일 제외, OneDrive 백업
+  환경의 기본 폴더 — CI는 영문 Windows라 CP949·OneDrive 경로는 실기기에서만 보인다
