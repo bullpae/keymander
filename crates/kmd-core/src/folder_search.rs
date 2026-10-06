@@ -33,23 +33,9 @@ fn folder_search_with_budget(
         return vec![help_item()];
     }
 
-    // 첫 번째 토큰을 경로로, 나머지를 검색어로 사용
-    let (dir_part, name_query) = match after_prefix.find(' ') {
-        Some(pos) => (after_prefix[..pos].trim(), after_prefix[pos + 1..].trim()),
-        None => (after_prefix, ""),
-    };
-
-    // ~ 확장 (HOME, Windows는 USERPROFILE 폴백)
-    let dir_str = if dir_part.starts_with('~') {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_default();
-        dir_part.replacen('~', &home, 1)
-    } else {
-        dir_part.to_string()
-    };
-
-    let dir = std::path::Path::new(&dir_str);
+    let (dir_part, name_query) = split_dir_and_query(after_prefix, |p| resolve_dir(p).is_dir());
+    let dir_buf = resolve_dir(dir_part);
+    let dir = dir_buf.as_path();
     if !dir.is_dir() {
         return vec![not_found_item(dir_part)];
     }
@@ -176,6 +162,73 @@ fn truncated_item(dir: &str, max_entries: usize) -> SearchResult {
     }
 }
 
+/// 공백 경계를 몇 군데까지 경로 후보로 시험할지 — 키 입력마다 stat이 이 수만큼 돈다.
+const MAX_PATH_CANDIDATES: usize = 8;
+
+/// `:f` 뒤의 입력을 (폴더, 검색어)로 나눈다.
+///
+/// 예전에는 **첫 공백**에서 잘랐다. Windows에선 `D:\My Projects`,
+/// `OneDrive - 회사`처럼 공백 있는 폴더가 흔해 `D:\My`만 보고 "없는 폴더"가 됐다.
+/// - `"..."`로 감싸면 따옴표 안이 경로다(닫는 따옴표 전이면 끝까지 — 타이핑 중).
+/// - 아니면 공백 경계 중 **가장 긴, 실제로 존재하는 폴더**를 경로로 본다.
+///   `D:\My`와 `D:\My Projects`가 둘 다 있으면 긴 쪽이 이긴다.
+/// - 어느 것도 없으면 첫 토큰을 경로로 돌려준다 — "찾을 수 없음"에 그 값이 뜬다.
+fn split_dir_and_query(input: &str, is_dir: impl Fn(&str) -> bool) -> (&str, &str) {
+    let input = input.trim();
+    if let Some(rest) = input.strip_prefix('"') {
+        return match rest.find('"') {
+            Some(end) => (&rest[..end], rest[end + 1..].trim()),
+            None => (rest, ""),
+        };
+    }
+
+    // 후보: 입력 전체, 그다음 공백 경계를 뒤에서부터.
+    let mut cuts: Vec<usize> = input.match_indices(' ').map(|(i, _)| i).collect();
+    cuts.push(input.len());
+    for &cut in cuts.iter().rev().take(MAX_PATH_CANDIDATES) {
+        let candidate = input[..cut].trim_end();
+        if !candidate.is_empty() && is_dir(candidate) {
+            return (candidate, input[cut..].trim());
+        }
+    }
+
+    match input.find(' ') {
+        Some(pos) => (&input[..pos], input[pos + 1..].trim()),
+        None => (input, ""),
+    }
+}
+
+/// 사용자가 친 폴더 문자열을 실제 경로로 바꾼다 (`~` 확장 + 구분자 정리).
+fn resolve_dir(part: &str) -> std::path::PathBuf {
+    let expanded = match part.strip_prefix('~') {
+        // `~`, `~/x`, `~\x`만 홈으로 본다 (`~user`는 건드리지 않는다).
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => match dirs::home_dir() {
+            Some(home) => format!("{}{rest}", home.display()),
+            None => part.to_string(),
+        },
+        _ => part.to_string(),
+    };
+    std::path::PathBuf::from(native_separators(&expanded))
+}
+
+/// Windows에선 `/`를 `\`로 바꾼다.
+///
+/// 결과 항목의 경로는 이 폴더를 기준으로 만들어진다. `~/Documents`가
+/// `C:\Users\me/Documents`처럼 섞인 채로 들어가면, 탐색기(`explorer.exe`)는
+/// 그런 경로를 알아보지 못하고 **기본 폴더를 연다** — 어떤 항목을 골라도 같은
+/// 창이 뜨던 원인이다. 다른 OS에서는 `\`가 파일명 문자일 수 있어 건드리지 않는다.
+fn native_separators(s: &str) -> String {
+    if cfg!(windows) {
+        to_windows_separators(s)
+    } else {
+        s.to_string()
+    }
+}
+
+fn to_windows_separators(s: &str) -> String {
+    s.replace('/', "\\")
+}
+
 fn help_item() -> SearchResult {
     SearchResult {
         item: IndexItem {
@@ -195,7 +248,8 @@ fn not_found_item(dir: &str) -> SearchResult {
     SearchResult {
         item: IndexItem {
             name: format!("폴더를 찾을 수 없음: {dir}"),
-            path: "경로가 올바른지 확인하거나 Tab으로 경로를 완성해 보세요".to_string(),
+            path: "경로를 확인하세요 — 공백이 있으면 따옴표로 감싸도 됩니다: :f \"D:\\My Folder\" 검색어"
+                .to_string(),
             kind: ItemKind::SystemCommand,
             source: Source::Plugin,
             icon: "\u{26A0}\u{FE0F}".to_string(),
@@ -242,6 +296,87 @@ mod tests {
 
     fn is_marker(r: &SearchResult, marker: &str) -> bool {
         r.item.keywords == format!("kmd:folder_search:{marker}")
+    }
+
+    // ── 경로/검색어 분리 (Windows에서 "있는 폴더를 없다고" 하던 문제) ─────
+
+    fn exists_in<'a>(dirs: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
+        move |p| dirs.contains(&p)
+    }
+
+    #[test]
+    fn 공백있는_폴더는_가장_긴_존재하는_경로로_본다() {
+        let is_dir = exists_in(&[r"D:\My", r"D:\My Projects"]);
+        assert_eq!(
+            split_dir_and_query(r"D:\My Projects report", &is_dir),
+            (r"D:\My Projects", "report")
+        );
+        assert_eq!(
+            split_dir_and_query(r"D:\My Projects", &is_dir),
+            (r"D:\My Projects", "")
+        );
+        // 짧은 쪽만 맞으면 짧은 쪽 + 나머지가 검색어
+        assert_eq!(
+            split_dir_and_query(r"D:\My notes", &is_dir),
+            (r"D:\My", "notes")
+        );
+    }
+
+    #[test]
+    fn 따옴표로_감싼_경로() {
+        let never = |_: &str| false;
+        assert_eq!(
+            split_dir_and_query(r#""C:\My Folder" rep"#, never),
+            (r"C:\My Folder", "rep")
+        );
+        // 닫는 따옴표 전(타이핑 중)이면 끝까지가 경로
+        assert_eq!(
+            split_dir_and_query(r#""C:\My Fo"#, never),
+            (r"C:\My Fo", "")
+        );
+    }
+
+    #[test]
+    fn 어떤_후보도_없으면_첫_토큰을_경로로() {
+        let never = |_: &str| false;
+        assert_eq!(
+            split_dir_and_query("/no/such report x", never),
+            ("/no/such", "report x")
+        );
+    }
+
+    #[test]
+    fn 실제_공백폴더를_찾는다() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("my projects");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::write(spaced.join("report.txt"), b"").unwrap();
+
+        let q = format!(":f {} report", spaced.display());
+        let results = folder_search_with_budget(&q, false, 100);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].item.name, "report.txt");
+    }
+
+    #[test]
+    fn 윈도우_구분자_변환() {
+        // explorer.exe는 섞인 경로를 알아보지 못해 기본 폴더를 연다.
+        assert_eq!(
+            to_windows_separators(r"C:\Users\me/Documents/x"),
+            r"C:\Users\me\Documents\x"
+        );
+    }
+
+    #[test]
+    fn 물결표는_홈으로_펼친다() {
+        let home = dirs::home_dir().expect("테스트 환경에 홈이 있어야 한다");
+        assert_eq!(resolve_dir("~"), home);
+        assert_eq!(
+            resolve_dir("~/sub"),
+            std::path::PathBuf::from(native_separators(&format!("{}/sub", home.display())))
+        );
+        // `~user`는 다른 사용자의 홈이라는 뜻일 수 있어 건드리지 않는다
+        assert_eq!(resolve_dir("~other"), std::path::PathBuf::from("~other"));
     }
 
     #[test]

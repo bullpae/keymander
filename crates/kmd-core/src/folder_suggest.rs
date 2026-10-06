@@ -67,13 +67,13 @@ impl FolderSuggestion {
     }
 }
 
-/// 홈 디렉터리 (HOME → USERPROFILE 폴백).
+/// 홈 디렉터리 — `dirs::home_dir()` (Windows는 Known Folder API).
+///
+/// 예전에는 `HOME`을 먼저 봤다. Windows에서 Git 등이 `HOME=/c/Users/me` 같은
+/// MSYS 형식을 설정해 두면 그 경로가 없는 폴더라 `is_dir` 필터에 걸려 **홈 자체가
+/// 사라졌다**(USERPROFILE 폴백도 타지 않음).
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
+    dirs::home_dir().filter(|p| p.is_dir())
 }
 
 /// 제안 후보를 찾을 루트 목록.

@@ -92,7 +92,7 @@ fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
                 .spawn()
         } else {
             Command::new("explorer.exe")
-                .arg(target)
+                .arg(&*explorer_path(t))
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
         }
@@ -106,6 +106,28 @@ fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Command::new("xdg-open").arg(target).spawn()
+    }
+}
+
+/// 탐색기에 넘길 경로 — 로컬 파일 경로면 `/`를 `\`로 바꾼다.
+///
+/// `explorer.exe`는 `C:\work/sub`처럼 `/`가 섞인 경로를 알아보지 못하고
+/// **조용히 기본 폴더(문서/내 PC)를 연다.** 실패가 아니라 엉뚱한 창이 떠서
+/// 원인을 찾기 어렵다. config의 `search_paths = ["C:/work"]`처럼 `/`로 적은
+/// 경로, `~/` 확장 결과 등 섞인 경로가 들어올 길이 여럿이라 여는 쪽에서 막는다.
+///
+/// 드라이브 문자(`C:`)나 UNC(`\\`, `//`)로 시작할 때만 바꾼다 —
+/// `ms-settings:` 같은 URI나 셸 명령에는 손대지 않는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn explorer_path(target: &str) -> std::borrow::Cow<'_, str> {
+    let b = target.as_bytes();
+    let drive =
+        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\');
+    let unc = target.starts_with(r"\\") || target.starts_with("//");
+    if (drive || unc) && target.contains('/') {
+        std::borrow::Cow::Owned(target.replace('/', r"\"))
+    } else {
+        std::borrow::Cow::Borrowed(target)
     }
 }
 
@@ -138,5 +160,43 @@ pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> Action
     match command.spawn() {
         Ok(_) => ActionResult::Launched,
         Err(e) => ActionResult::Error(format!("Failed to execute '{}': {}", cmd.display_name, e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::explorer_path;
+
+    #[test]
+    fn 탐색기_경로는_섞인_구분자를_역슬래시로_통일한다() {
+        // 섞인 경로를 그대로 넘기면 explorer.exe는 기본 폴더를 연다.
+        assert_eq!(
+            explorer_path(r"C:\Users\me/Documents\a.txt"),
+            r"C:\Users\me\Documents\a.txt"
+        );
+        assert_eq!(explorer_path("C:/work/sub"), r"C:\work\sub");
+        assert_eq!(explorer_path("d:/x"), r"d:\x");
+        assert_eq!(explorer_path(r"\\server\share/dir"), r"\\server\share\dir");
+        assert_eq!(explorer_path("//server/share"), r"\\server\share");
+    }
+
+    #[test]
+    fn 탐색기_경로_이미_정상이면_그대로() {
+        assert!(matches!(
+            explorer_path(r"C:\work\sub"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn 파일경로가_아니면_건드리지_않는다() {
+        // URI·설정 스킴·상대 경로는 대상이 아니다.
+        assert_eq!(explorer_path("ms-settings:display"), "ms-settings:display");
+        assert_eq!(
+            explorer_path("shell:::{20D04FE0}/x"),
+            "shell:::{20D04FE0}/x"
+        );
+        assert_eq!(explorer_path("foo/bar"), "foo/bar");
+        assert_eq!(explorer_path("C:"), "C:");
     }
 }
