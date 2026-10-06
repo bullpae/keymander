@@ -485,55 +485,60 @@ pub struct PromptTemplate {
 
 /// Platform-specific default search paths (user directories).
 /// These become the default for `launcher.search_paths`, editable in settings.
+///
+/// **OS가 알려주는 실제 위치**를 먼저 쓴다. 예전엔 홈 아래 고정 이름
+/// (`Desktop`·`Documents`·`Downloads`)만 봐서 실제 위치가 다르면 놓쳤다:
+/// - Windows: OneDrive 백업을 켜면 바탕 화면·문서가 `OneDrive\바탕 화면` 등으로
+///   옮겨진다(Known Folder 리디렉션). 회사 OneDrive 폴더는 `OneDrive - 회사명`이라
+///   이름 `OneDrive`와도 맞지 않는다
+/// - Linux: 지역화된 사용자 폴더(`~/바탕화면`)는 `user-dirs.dirs`에 적혀 있다
+///
+/// 옛 고정 이름 후보도 그대로 둔다 — 결과는 이전 동작의 상위 집합이라 기존
+/// 사용자에게서 빠지는 폴더가 없다. 존재하는 폴더만, 중복 없이.
 fn default_search_paths() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+    let mut candidates: Vec<Option<PathBuf>> = vec![
+        dirs::desktop_dir(),
+        dirs::document_dir(),
+        dirs::download_dir(),
+    ];
 
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(profile) = std::env::var("USERPROFILE") {
-            let base = PathBuf::from(&profile);
-            for name in &["Desktop", "Documents", "Downloads", "OneDrive"] {
-                let dir = base.join(name);
-                if dir.is_dir() {
-                    dirs.push(dir);
-                }
-            }
+    if let Some(home) = dirs::home_dir() {
+        for name in ["Desktop", "Documents", "Downloads"] {
+            candidates.push(Some(home.join(name)));
         }
+        #[cfg(target_os = "windows")]
+        candidates.push(Some(home.join("OneDrive")));
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = dirs::home_dir() {
-            for name in &["Desktop", "Documents", "Downloads"] {
-                let dir = home.join(name);
-                if dir.is_dir() {
-                    dirs.push(dir);
-                }
-            }
-        }
+    // Windows가 설정하는 OneDrive 루트들 (개인·회사)
+    #[cfg(target_os = "windows")]
+    for key in ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"] {
+        candidates.push(std::env::var_os(key).map(PathBuf::from));
     }
 
     #[cfg(target_os = "linux")]
-    {
-        if let Some(home) = dirs::home_dir() {
-            for name in &["Desktop", "Documents", "Downloads"] {
-                let dir = home.join(name);
-                if dir.is_dir() {
-                    dirs.push(dir);
-                }
-            }
-        }
-        for env_key in &["XDG_DESKTOP_DIR", "XDG_DOCUMENTS_DIR", "XDG_DOWNLOAD_DIR"] {
-            if let Ok(val) = std::env::var(env_key) {
-                let dir = PathBuf::from(val);
-                if dir.is_dir() && !dirs.contains(&dir) {
-                    dirs.push(dir);
-                }
-            }
-        }
+    for key in ["XDG_DESKTOP_DIR", "XDG_DOCUMENTS_DIR", "XDG_DOWNLOAD_DIR"] {
+        candidates.push(std::env::var_os(key).map(PathBuf::from));
     }
 
-    dirs
+    existing_unique_dirs(candidates)
+}
+
+/// 존재하는 폴더만 남기고 중복을 없앤다 (순서 유지). Windows는 대소문자 무시.
+fn existing_unique_dirs(candidates: impl IntoIterator<Item = Option<PathBuf>>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in candidates.into_iter().flatten() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let dup = out.iter().any(|seen| {
+            crate::fsutil::path_within(seen, &dir) && crate::fsutil::path_within(&dir, seen)
+        });
+        if !dup {
+            out.push(dir);
+        }
+    }
+    out
 }
 
 /// Search result priority weights per item kind.
@@ -1231,6 +1236,32 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 기본_검색경로는_존재하는_폴더만_중복없이() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        let got = existing_unique_dirs([
+            Some(a.clone()),
+            None,
+            Some(dir.path().join("missing")),
+            Some(b.clone()),
+            Some(a.clone()), // 같은 폴더가 두 경로로 들어와도 한 번만
+        ]);
+        assert_eq!(got, vec![a, b]);
+    }
+
+    #[test]
+    fn 기본_검색경로에_중복이_없다() {
+        let paths = default_search_paths();
+        for (i, p) in paths.iter().enumerate() {
+            assert!(p.is_dir(), "존재하지 않는 기본 경로: {}", p.display());
+            assert!(!paths[..i].contains(p), "중복된 기본 경로: {}", p.display());
+        }
+    }
     use crate::CONFIG_FILENAME;
 
     // ── 잘못된 값 거부 (2026-08-27) ────────────────────────────────────
