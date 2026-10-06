@@ -203,7 +203,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
                 continue;
             }
             let name = entry.file_name().to_str().unwrap_or("");
-            if name.starts_with('.') {
+            if crate::fsutil::is_hidden_walk_entry(&entry) {
                 continue;
             }
             let ext = Path::new(name)
@@ -284,7 +284,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
             // 소실된 루트 하위는 보존 — 재마운트 시 전량 재인덱싱을 피한다
             if missing_roots
                 .iter()
-                .any(|root| Path::new(path).starts_with(root))
+                .any(|root| crate::fsutil::path_within(Path::new(path), root))
             {
                 continue;
             }
@@ -353,21 +353,9 @@ fn read_text(path: &Path, size_hint: usize) -> Option<String> {
     if sniff.contains(&0) {
         return None;
     }
-    match String::from_utf8(bytes) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            let bytes = e.into_bytes();
-            let (decoded, _, had_errors) = encoding_rs::EUC_KR.decode(&bytes);
-            // 치환문자 비율로 "진짜 EUC-KR"인지 판정 — 잡음 바이너리 배제
-            if had_errors {
-                let bad = decoded.chars().filter(|&c| c == '\u{FFFD}').count();
-                if bad * 10 > decoded.chars().count().max(1) {
-                    return None;
-                }
-            }
-            Some(decoded.into_owned())
-        }
-    }
+    // 치환문자 비율로 "진짜 CP949"인지 판정 — 잡음 바이너리 배제
+    let decoded = crate::textenc::decode_utf8_or_cp949(bytes);
+    (!decoded.mostly_garbage).then_some(decoded.text)
 }
 
 /// 본문 검색 — bm25 랭킹 + snippet. 질의가 짧으면(2자 미만) 빈 결과.

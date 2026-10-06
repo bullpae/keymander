@@ -1658,41 +1658,34 @@ fn drill_back(state: &mut AppState) {
 }
 
 /// List contents of a directory as SearchResults, sorted: directories first, then files
+///
+/// 폴더 읽기는 `:f`와 같은 `folder_search::list_dir`를 쓴다 — 상한(잘리면 안내),
+/// OS별 숨김 규칙(Windows 숨김 속성), stat 절약이 함께 따라온다.
 fn list_directory_contents(dir: &Path, use_emoji: bool) -> Vec<SearchResult> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+    let Ok(listing) = kmd_core::folder_search::list_dir(dir, kmd_core::folder_search::MAX_ENTRIES)
+    else {
+        return Vec::new();
     };
 
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip hidden files/dirs
-        if name.starts_with('.') {
-            continue;
-        }
-
-        let is_dir = path.is_dir();
-        let path_str = path.to_string_lossy().to_string();
-
+    for entry in listing.entries {
+        let is_dir = entry.is_dir;
         let item = kmd_core::IndexItem {
-            name,
-            path: path_str,
+            icon: if is_dir {
+                dir_icon(use_emoji)
+            } else {
+                icon_for_path(&entry.path, use_emoji)
+            },
+            name: entry.name,
+            path: entry.path.to_string_lossy().into_owned(),
             kind: if is_dir {
                 ItemKind::Directory
             } else {
                 ItemKind::File
             },
             source: Source::FileProvider,
-            icon: if is_dir {
-                dir_icon(use_emoji)
-            } else {
-                icon_for_path(&path, use_emoji)
-            },
             keywords: String::new(),
             icon_path: None,
         };
@@ -1727,6 +1720,12 @@ fn list_directory_contents(dir: &Path, use_emoji: bool) -> Vec<SearchResult> {
     files.sort_by(sort_by_name);
 
     directories.extend(files);
+    // 잘렸으면 알린다 — "이게 전부"와 "앞부분만 봤다"는 다르다
+    if listing.truncated {
+        directories.push(kmd_core::folder_search::truncated_notice(
+            &dir.to_string_lossy(),
+        ));
+    }
     directories
 }
 

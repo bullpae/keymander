@@ -38,7 +38,9 @@ fn spawn_capped_reader<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Recei
                 }
             }
         }
-        let _ = tx.send(String::from_utf8_lossy(&captured).trim().to_string());
+        // Windows의 콘솔 코드페이지(CP949) 출력도 한글로 읽는다 (textenc 참조)
+        let text = crate::textenc::decode_command_output(captured);
+        let _ = tx.send(text.trim().to_string());
     });
     rx
 }
@@ -129,19 +131,73 @@ fn run_with_timeout(
     Ok((status.success(), stdout, stderr, status.code()))
 }
 
+/// Quick action 한 개의 실행 방법.
+///
+/// 세 OS의 명령을 **모두** 표에 담고 실행 시점에 고른다. 예전에는
+/// `cfg(windows)`/`cfg(not(windows))` 두 갈래뿐이라 **macOS가 Linux 명령을
+/// 실행했다** — `uptime -p`, `df --total`, `free`, `grep -P`가 macOS에 없어
+/// 8개 중 4개가 실패하거나 빈 결과였다. 표가 모든 빌드에 들어가므로 어느
+/// OS에서도 컴파일되고, CI의 각 OS가 자기 명령을 실제로 실행해 검증한다.
+enum QuickCmd {
+    /// 실행 파일 + 인자 그대로
+    Exec(&'static str, &'static [&'static str]),
+    /// `sh -c <스크립트>` (macOS/Linux)
+    Sh(&'static str),
+    /// PowerShell 스크립트. 실행 시 출력 인코딩을 UTF-8로 고정한다 — 기본값은
+    /// 콘솔 코드페이지(한국어 Windows는 CP949)라 한글이 깨진다.
+    Ps(&'static str),
+}
+
+/// PowerShell 출력 인코딩 고정 — `apps.rs`·`files.rs`의 PowerShell 호출과 같은 규칙.
+const PS_UTF8_PREAMBLE: &str = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ";
+
+impl QuickCmd {
+    fn to_command(&self) -> Command {
+        match self {
+            QuickCmd::Exec(program, args) => {
+                let mut c = Command::new(program);
+                c.args(*args);
+                c
+            }
+            QuickCmd::Sh(script) => {
+                let mut c = Command::new("sh");
+                c.args(["-c", script]);
+                c
+            }
+            QuickCmd::Ps(script) => {
+                let mut c = Command::new("powershell");
+                c.args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &format!("{PS_UTF8_PREAMBLE}{script}"),
+                ]);
+                c
+            }
+        }
+    }
+}
+
 /// Quick action: a pre-defined system info command
 struct QuickAction {
     name: &'static str,
     description: &'static str,
     icon: &'static str,
-    #[cfg(windows)]
-    command: &'static str,
-    #[cfg(windows)]
-    args: &'static [&'static str],
-    #[cfg(not(windows))]
-    command: &'static str,
-    #[cfg(not(windows))]
-    args: &'static [&'static str],
+    windows: QuickCmd,
+    macos: QuickCmd,
+    linux: QuickCmd,
+}
+
+impl QuickAction {
+    fn current(&self) -> &QuickCmd {
+        if cfg!(windows) {
+            &self.windows
+        } else if cfg!(target_os = "macos") {
+            &self.macos
+        } else {
+            &self.linux
+        }
+    }
 }
 
 /// Pre-defined quick actions for system information
@@ -150,111 +206,89 @@ static QUICK_ACTIONS: &[QuickAction] = &[
         name: "IP Address",
         description: "Show network IP addresses",
         icon: "\u{1F310}", // 🌐
-        #[cfg(windows)]
-        command: "powershell",
-        #[cfg(windows)]
-        args: &["-NoProfile", "-Command",
-            "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' } | Select-Object -ExpandProperty IPAddress) -join \", \""],
-        #[cfg(not(windows))]
-        command: "sh",
-        #[cfg(not(windows))]
-        args: &["-c", "ip -4 addr show 2>/dev/null | grep -oP 'inet \\K[\\d.]+' | grep -v '^127\\.' | head -5 || ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -5 || hostname -I 2>/dev/null"],
+        windows: QuickCmd::Ps(
+            "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' } | Select-Object -ExpandProperty IPAddress) -join ', '",
+        ),
+        macos: QuickCmd::Sh(
+            "ifconfig | awk '/inet / && $2 != \"127.0.0.1\" {print $2}' | head -5",
+        ),
+        // 예전 스크립트는 `ip`·`grep -P`가 없으면 파이프 끝의 head가 성공으로 끝나
+        // `||` 대체가 안 탔다(빈 결과). 명령 존재 여부로 먼저 가른다.
+        linux: QuickCmd::Sh(
+            "if command -v ip >/dev/null 2>&1; then ip -4 -o addr show scope global | awk '{split($4, a, \"/\"); print a[1]}' | head -5; else hostname -I; fi",
+        ),
     },
     QuickAction {
         name: "Hostname",
         description: "Show computer name",
         icon: "\u{1F4BB}", // 💻
-        #[cfg(windows)]
-        command: "hostname",
-        #[cfg(windows)]
-        args: &[],
-        #[cfg(not(windows))]
-        command: "hostname",
-        #[cfg(not(windows))]
-        args: &[],
+        // hostname.exe는 콘솔 코드페이지로 출력한다 — 한글 PC 이름이 깨지지 않게 PowerShell로.
+        windows: QuickCmd::Ps("[Environment]::MachineName"),
+        macos: QuickCmd::Exec("hostname", &[]),
+        linux: QuickCmd::Exec("hostname", &[]),
     },
     QuickAction {
         name: "Uptime",
         description: "Show system uptime",
         icon: "\u{23F1}\u{FE0F}", // ⏱️
-        #[cfg(windows)]
-        command: "powershell",
-        #[cfg(windows)]
-        args: &["-NoProfile", "-Command",
-            "$os = Get-CimInstance Win32_OperatingSystem; $up = (Get-Date) - $os.LastBootUpTime; \"{0}d {1}h {2}m\" -f $up.Days, $up.Hours, $up.Minutes"],
-        #[cfg(not(windows))]
-        command: "uptime",
-        #[cfg(not(windows))]
-        args: &["-p"],
+        windows: QuickCmd::Ps(
+            "$os = Get-CimInstance Win32_OperatingSystem; $up = (Get-Date) - $os.LastBootUpTime; '{0}d {1}h {2}m' -f $up.Days, $up.Hours, $up.Minutes",
+        ),
+        // macOS uptime엔 -p가 없다. "… up 3 days, 2:01, 2 users, …"에서 기간만 뽑는다.
+        macos: QuickCmd::Sh("uptime | sed -E 's/.*up +//; s/, +[0-9]+ users?.*//'"),
+        linux: QuickCmd::Exec("uptime", &["-p"]),
     },
     QuickAction {
         name: "Disk Usage",
         description: "Show disk space usage",
         icon: "\u{1F4BE}", // 💾
-        #[cfg(windows)]
-        command: "powershell",
-        #[cfg(windows)]
-        args: &["-NoProfile", "-Command",
-            "Get-PSDrive -PSProvider FileSystem | ForEach-Object { \"{0}: {1:N1}GB free / {2:N1}GB\" -f $_.Name, ($_.Free/1GB), (($_.Used+$_.Free)/1GB) }"],
-        #[cfg(not(windows))]
-        command: "df",
-        #[cfg(not(windows))]
-        args: &["-h", "--total"],
+        windows: QuickCmd::Ps(
+            "Get-PSDrive -PSProvider FileSystem | ForEach-Object { '{0}: {1:N1}GB free / {2:N1}GB' -f $_.Name, ($_.Free/1GB), (($_.Used+$_.Free)/1GB) }",
+        ),
+        // BSD df엔 --total이 없다.
+        macos: QuickCmd::Sh("df -h / | awk 'NR==2 {print $4\" free / \"$2}'"),
+        linux: QuickCmd::Exec("df", &["-h", "--total"]),
     },
     QuickAction {
         name: "Memory Usage",
         description: "Show memory usage",
         icon: "\u{1F9E0}", // 🧠
-        #[cfg(windows)]
-        command: "powershell",
-        #[cfg(windows)]
-        args: &["-NoProfile", "-Command",
-            "$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize/1MB,1); $free = [math]::Round($os.FreePhysicalMemory/1MB,1); $used = $total - $free; \"Used: {0}GB / Total: {1}GB ({2}%)\" -f $used, $total, [math]::Round($used/$total*100)"],
-        #[cfg(not(windows))]
-        command: "free",
-        #[cfg(not(windows))]
-        args: &["-h"],
+        windows: QuickCmd::Ps(
+            "$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize/1MB,1); $free = [math]::Round($os.FreePhysicalMemory/1MB,1); $used = $total - $free; 'Used: {0}GB / Total: {1}GB ({2}%)' -f $used, $total, [math]::Round($used/$total*100)",
+        ),
+        // macOS엔 free가 없다. top 1회 샘플의 PhysMem 줄(약 0.7초).
+        macos: QuickCmd::Sh("top -l 1 -s 0 | awk '/PhysMem/ {sub(/^PhysMem: /, \"\"); print}'"),
+        linux: QuickCmd::Exec("free", &["-h"]),
     },
     QuickAction {
         name: "Public IP",
         description: "Show public IP address",
         icon: "\u{1F30D}", // 🌍
-        #[cfg(windows)]
-        command: "powershell",
-        #[cfg(windows)]
-        args: &["-NoProfile", "-Command",
-            "(Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing -TimeoutSec 5).Content"],
-        #[cfg(not(windows))]
-        command: "curl",
-        #[cfg(not(windows))]
-        args: &["-s", "--max-time", "5", "https://api.ipify.org"],
+        windows: QuickCmd::Ps(
+            "(Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing -TimeoutSec 5).Content",
+        ),
+        macos: QuickCmd::Exec("curl", &["-s", "--max-time", "5", "https://api.ipify.org"]),
+        linux: QuickCmd::Exec("curl", &["-s", "--max-time", "5", "https://api.ipify.org"]),
     },
     QuickAction {
         name: "OS Version",
         description: "Show operating system version",
         icon: "\u{2699}\u{FE0F}", // ⚙️
-        #[cfg(windows)]
-        command: "powershell",
-        #[cfg(windows)]
-        args: &["-NoProfile", "-Command",
-            "(Get-CimInstance Win32_OperatingSystem).Caption + ' ' + (Get-CimInstance Win32_OperatingSystem).Version"],
-        #[cfg(not(windows))]
-        command: "uname",
-        #[cfg(not(windows))]
-        args: &["-srm"],
+        windows: QuickCmd::Ps(
+            "$os = Get-CimInstance Win32_OperatingSystem; $os.Caption + ' ' + $os.Version",
+        ),
+        // uname -srm은 커널 버전(Darwin 25.x)이라 사용자가 아는 macOS 버전이 아니다.
+        macos: QuickCmd::Sh("echo \"macOS $(sw_vers -productVersion) ($(uname -m))\""),
+        linux: QuickCmd::Exec("uname", &["-srm"]),
     },
     QuickAction {
         name: "User Name",
         description: "Show current user",
         icon: "\u{1F464}", // 👤
-        #[cfg(windows)]
-        command: "whoami",
-        #[cfg(windows)]
-        args: &[],
-        #[cfg(not(windows))]
-        command: "whoami",
-        #[cfg(not(windows))]
-        args: &[],
+        // whoami.exe도 콘솔 코드페이지 — 한글 사용자명이 깨진다.
+        windows: QuickCmd::Ps("$env:USERDOMAIN + '\\' + $env:USERNAME"),
+        macos: QuickCmd::Exec("whoami", &[]),
+        linux: QuickCmd::Exec("whoami", &[]),
     },
 ];
 
@@ -410,8 +444,8 @@ impl ShellExtension {
             .find(|a| a.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| format!("Unknown quick action: {}", name))?;
 
-        let mut cmd = Command::new(action.command);
-        cmd.args(action.args);
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut cmd = action.current().to_command();
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -502,7 +536,10 @@ impl Extension for ShellExtension {
 
     fn execute(&self, item: &IndexItem) -> ExtensionAction {
         // If path matches a quick action name, execute it
-        if QUICK_ACTIONS.iter().any(|a| a.name == item.path) {
+        // is_quick_action과 같은 규칙(대소문자 무시)으로 가른다 — 예전엔 여기만
+        // 정확히 일치를 봐서, 이름이 조금만 달라도 quick action 이름을 셸 명령으로
+        // 실행하려 들었다.
+        if Self::is_quick_action(&item.path) {
             match Self::execute_quick_action(&item.path) {
                 Ok(output) => ExtensionAction::CopyToClipboard(output),
                 Err(e) => ExtensionAction::Display(format!("Error: {}", e)),
@@ -542,6 +579,46 @@ mod tests {
     fn 알_수_없는_quick_action은_오류() {
         let err = ShellExtension::execute_quick_action("no-such-action").unwrap_err();
         assert!(err.contains("Unknown quick action"), "{err}");
+    }
+
+    /// 이 OS의 quick action을 **실제로 실행**해 본다. CI가 Windows·macOS·Linux에서
+    /// 돌므로 세 OS의 명령이 각자 검증된다 — 예전에 macOS가 Linux 명령(`uptime -p`,
+    /// `df --total`, `free`)을 실행해 8개 중 4개가 실패한 걸 아무 테스트도 못 잡았다.
+    /// 네트워크가 필요한 Public IP만 뺀다.
+    #[test]
+    fn 이_os의_quick_action은_모두_성공하고_내용이_있다() {
+        for action in QUICK_ACTIONS.iter().filter(|a| a.name != "Public IP") {
+            let out = ShellExtension::execute_quick_action(action.name)
+                .unwrap_or_else(|e| panic!("{} 실패: {e}", action.name));
+            assert!(
+                !out.trim().is_empty() && out != "(no output)",
+                "{}: 출력이 비었다 — 명령은 성공했지만 결과를 못 뽑았다",
+                action.name
+            );
+            assert!(
+                !out.contains('\u{FFFD}'),
+                "{}: 깨진 문자 — 출력 인코딩 문제: {out}",
+                action.name
+            );
+        }
+    }
+
+    #[test]
+    fn quick_action_이름은_대소문자_무관하게_실행된다() {
+        // execute()가 is_quick_action과 다른 규칙을 쓰면 이름을 셸 명령으로 실행하려 든다.
+        let item = IndexItem {
+            name: String::new(),
+            path: "hostname".into(), // 표의 이름은 "Hostname"
+            kind: ItemKind::Shell,
+            source: Source::Plugin,
+            icon: String::new(),
+            keywords: String::new(),
+            icon_path: None,
+        };
+        assert!(matches!(
+            ShellExtension.execute(&item),
+            ExtensionAction::CopyToClipboard(_)
+        ));
     }
 
     #[test]

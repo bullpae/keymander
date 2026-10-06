@@ -267,10 +267,12 @@ pub fn suggest_folders(launcher: &LauncherConfig, max: usize) -> Vec<FolderSugge
 /// 스캔 시점과 캐시 반환 시점 양쪽에서 쓴다 — Enter로 방금 추가한 폴더가
 /// TTL이 남은 캐시에서 계속 제안되는 staleness를 막는다.
 fn covered_by_search_paths(launcher: &LauncherConfig, path: &Path) -> bool {
+    use crate::fsutil::path_within;
+    // Windows는 대소문자 무시 — config에 적은 표기와 스캔 결과의 표기가 달라도 같은 폴더다
     launcher
         .search_paths
         .iter()
-        .any(|sp| sp.starts_with(path) || path.starts_with(sp))
+        .any(|sp| path_within(sp, path) || path_within(path, sp))
 }
 
 /// 세션 캐시를 거친 제안 조회 — 런처 키 입력 경로용.
@@ -391,7 +393,10 @@ fn scan_root(
         }
         let name = entry.file_name().to_string_lossy().to_string();
         // 숨김·시스템·무시 패턴 폴더는 후보에서 제외
-        if name.starts_with('.') || name.starts_with('$') || ignore_set.contains(name.as_str()) {
+        if crate::fsutil::is_hidden_entry(&entry)
+            || name.starts_with('$')
+            || ignore_set.contains(name.as_str())
+        {
             continue;
         }
         // 드라이브 루트 직계의 OS 폴더(Windows, Program Files, Users…)는 후보가 아니다
@@ -446,7 +451,7 @@ fn count_recent_files(
             continue;
         }
         let name = entry.file_name().to_str().unwrap_or("");
-        if name.starts_with('.') {
+        if crate::fsutil::is_hidden_walk_entry(&entry) {
             continue;
         }
         let ext = Path::new(name)

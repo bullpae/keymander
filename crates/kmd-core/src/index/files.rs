@@ -652,7 +652,8 @@ fn walkdir_into_items<I>(
             .unwrap_or("")
             .to_string();
 
-        if name.is_empty() || name.starts_with('.') {
+        // 숨김 규칙은 OS마다 다르다(Windows는 속성) — fsutil 참조
+        if name.is_empty() || crate::fsutil::is_hidden_walk_entry(&entry) {
             continue;
         }
 
@@ -687,8 +688,8 @@ pub(crate) fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&st
         return false;
     }
     let name = entry.file_name().to_str().unwrap_or("");
-    // Skip hidden directories (starting with '.')
-    if name.starts_with('.') && name.len() > 1 {
+    // 숨김 폴더 — `.`으로 시작하거나 Windows 숨김 속성(AppData 등). fsutil 참조
+    if crate::fsutil::is_hidden_walk_entry(entry) {
         return true;
     }
     // Skip system directories starting with '$' (e.g. $Recycle.Bin, $WinREAgent)

@@ -10,7 +10,60 @@ use crate::search::SearchResult;
 /// (`folder_suggest`)이 이미 "검색 한 번이 14초"를 겪고 예산을 넣은 문제다.
 /// 5천 개면 로컬 디스크에서 수 ms 안쪽이고, 그보다 큰 폴더는 검색어로 좁히는
 /// 게 맞다(잘렸다는 안내 항목을 붙인다).
-const MAX_ENTRIES: usize = 5_000;
+pub const MAX_ENTRIES: usize = 5_000;
+
+/// 폴더 한 단계 안의 항목.
+pub struct ListedEntry {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub is_dir: bool,
+}
+
+/// 폴더 한 단계를 나열한 결과.
+pub struct DirListing {
+    pub entries: Vec<ListedEntry>,
+    /// `max_entries`에 걸려 뒷부분을 보지 않았다.
+    pub truncated: bool,
+}
+
+/// 폴더 한 단계를 나열한다 — `:f`와 TUI 드릴다운이 공유한다.
+///
+/// 예전엔 TUI 드릴다운이 이 루프의 복사본을 들고 있어서 상한·숨김 규칙·stat
+/// 절약 같은 개선이 한쪽에만 들어갔다. OS마다 다른 부분은 여기서 처리한다:
+/// - 숨김: `.` 이름 + Windows 숨김 속성 ([`crate::fsutil::is_hidden_entry`])
+/// - 폴더 판별: `DirEntry::file_type`은 열거가 이미 준 정보라 추가 stat이 없다
+///   (`path.is_dir()`는 항목마다 stat — 네트워크 볼륨에서 가장 비싼 부분).
+///   심볼릭 링크만 대상을 따라가 폴더 링크를 폴더로 본다
+pub fn list_dir(dir: &std::path::Path, max_entries: usize) -> std::io::Result<DirListing> {
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    for (seen, entry) in std::fs::read_dir(dir)?.flatten().enumerate() {
+        if seen >= max_entries {
+            truncated = true;
+            break;
+        }
+        if crate::fsutil::is_hidden_entry(&entry) {
+            continue;
+        }
+        let path = entry.path();
+        let is_dir = match entry.file_type() {
+            Ok(ft) if ft.is_symlink() => path.is_dir(),
+            Ok(ft) => ft.is_dir(),
+            Err(_) => path.is_dir(),
+        };
+        entries.push(ListedEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path,
+            is_dir,
+        });
+    }
+    Ok(DirListing { entries, truncated })
+}
+
+/// 잘렸다는 안내 항목 — `:f`와 TUI 드릴다운이 같은 문구를 쓴다.
+pub fn truncated_notice(dir_display: &str) -> SearchResult {
+    truncated_item(dir_display, MAX_ENTRIES)
+}
 
 /// `:f` 이후의 입력을 파싱해 폴더 내 검색 결과를 만든다.
 ///
@@ -41,87 +94,47 @@ fn folder_search_with_budget(
     }
 
     // 폴더 내 항목 열거 (1단계)
+    // 검색어·파일명 모두 유니코드 소문자로 — 예전엔 검색어만 유니코드, 파일명은
+    // ASCII 소문자라 `Ä` 같은 문자에서 어긋났다.
     let query_lower = name_query.to_lowercase();
+    let listing = list_dir(dir, max_entries).unwrap_or(DirListing {
+        entries: Vec::new(),
+        truncated: false,
+    });
+    let truncated = listing.truncated;
     let mut results: Vec<SearchResult> = Vec::new();
-    let mut truncated = false;
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for (seen, entry) in entries.flatten().enumerate() {
-            if seen >= max_entries {
-                truncated = true;
-                break;
-            }
-            let path = entry.path();
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            // 숨김 파일 제외
-            if file_name.starts_with('.') {
-                continue;
-            }
-
-            // 검색어 필터 — 쿼리가 있을 때만 lowercase 변환 (할당 최소화)
-            if !query_lower.is_empty() {
-                let name_lower = file_name.to_ascii_lowercase();
-                if !name_lower.contains(query_lower.as_str()) {
-                    continue;
-                }
-            }
-
-            // `DirEntry::file_type`은 디렉터리 열거가 이미 돌려준 정보라 추가
-            // stat이 없다(`path.is_dir()`는 항목마다 stat — 네트워크 볼륨에서
-            // 가장 비싼 부분). 단 심볼릭 링크는 대상을 따라가야 폴더 링크가
-            // 폴더로 보이므로 그때만 stat한다 — 기존 `is_dir()` 의미 보존.
-            let is_dir = match entry.file_type() {
-                Ok(ft) if ft.is_symlink() => path.is_dir(),
-                Ok(ft) => ft.is_dir(),
-                Err(_) => path.is_dir(),
-            };
-            let kind = if is_dir {
-                ItemKind::Directory
-            } else {
-                ItemKind::File
-            };
-            let icon = if is_dir {
-                if use_emoji {
-                    "\u{1F4C1}"
-                } else {
-                    "D/"
-                }
-            } else if use_emoji {
-                "\u{1F4C4}"
-            } else {
-                "F "
-            };
-
-            // 검색어와 얼마나 일치하는지 점수 부여 (이름 접두사 일치 우대)
-            let score: u32 = if !query_lower.is_empty() {
-                let nl = file_name.to_ascii_lowercase();
-                if nl.starts_with(query_lower.as_str()) {
-                    20
-                } else {
-                    10
-                }
-            } else {
-                0
-            };
-
-            results.push(SearchResult {
-                item: IndexItem {
-                    name: file_name,
-                    path: path.to_string_lossy().to_string(),
-                    kind,
-                    source: Source::FileProvider,
-                    icon: icon.to_string(),
-                    keywords: String::new(),
-                    icon_path: None,
-                },
-                score,
-            });
+    for entry in listing.entries {
+        let name_lower = entry.name.to_lowercase();
+        if !query_lower.is_empty() && !name_lower.contains(query_lower.as_str()) {
+            continue;
         }
+        let (kind, icon) = match (entry.is_dir, use_emoji) {
+            (true, true) => (ItemKind::Directory, "\u{1F4C1}"),
+            (true, false) => (ItemKind::Directory, "D/"),
+            (false, true) => (ItemKind::File, "\u{1F4C4}"),
+            (false, false) => (ItemKind::File, "F "),
+        };
+        // 검색어와 얼마나 일치하는지 점수 부여 (이름 접두사 일치 우대)
+        let score: u32 = if query_lower.is_empty() {
+            0
+        } else if name_lower.starts_with(query_lower.as_str()) {
+            20
+        } else {
+            10
+        };
+        results.push(SearchResult {
+            item: IndexItem {
+                name: entry.name,
+                path: entry.path.to_string_lossy().into_owned(),
+                kind,
+                source: Source::FileProvider,
+                icon: icon.to_string(),
+                keywords: String::new(),
+                icon_path: None,
+            },
+            score,
+        });
     }
 
     // 점수 내림차순 → 같은 점수는 폴더 우선 → 이름 오름차순
