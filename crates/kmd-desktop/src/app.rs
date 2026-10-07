@@ -2733,6 +2733,51 @@ mod tests {
         );
     }
 
+    fn app_item(name: &str, path: &str) -> IndexItem {
+        IndexItem {
+            name: name.to_string(),
+            path: path.to_string(),
+            kind: ItemKind::App,
+            source: Source::Apps,
+            icon: "Ap".to_string(),
+            keywords: path.to_string(),
+            icon_path: None,
+        }
+    }
+
+    #[test]
+    fn 글자만_흩어져_걸린_퍼지_결과_아래에_웹_제안을_붙인다() {
+        // "Game Mail" 은 g·m·a·i·l 순서로 퍼지 매칭되지만 gmail 이 그대로 들어있진 않다
+        let mut app = make_test_app();
+        app.engine
+            .load(vec![app_item("Game Mail", r"C:\Apps\Game Mail.lnk")]);
+        app.query = "gmail".into();
+        app.handle_main_search("gmail");
+
+        assert_eq!(
+            app.results[0].item.name, "Game Mail",
+            "퍼지 결과는 위에 유지"
+        );
+        assert!(
+            app.results
+                .iter()
+                .any(|r| r.item.kind == ItemKind::WebSearch && r.item.name.contains("gmail")),
+            "웹 검색 제안이 함께 나와야 한다"
+        );
+    }
+
+    #[test]
+    fn 질의가_그대로_든_결과가_있으면_웹_제안을_붙이지_않는다() {
+        let mut app = make_test_app();
+        app.engine
+            .load(vec![app_item("Gmail", r"C:\Apps\Gmail.lnk")]);
+        app.query = "gmail".into();
+        app.handle_main_search("gmail");
+
+        assert_eq!(app.results.len(), 1, "{:?}", app.results);
+        assert_eq!(app.results[0].item.name, "Gmail");
+    }
+
     #[test]
     fn 빈_입력이면_최근_실행_항목을_보여준다() {
         let mut app = make_test_app();
