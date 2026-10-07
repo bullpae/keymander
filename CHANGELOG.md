@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.16.11] — 2026-10-07
+
 ### Fixed
 - **macOS에서 한글 파일명이 검색되지 않던 문제.** `~/Documents/미닉스 청소기1.jpg`
   가 있는데 `미닉스`로 찾으면 0건이었다. macOS는 한글 파일명을 자모가 분리된
