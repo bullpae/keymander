@@ -15,6 +15,10 @@ All notable changes to keymander are documented here.
 - **macOS에서 "`/Volumes/Macintosh HD/private`을(를) 검색 범위에 추가" 같은
   엉뚱한 폴더 제안이 뜨던 문제** (0.16.8부터). 부팅 디스크의 별칭을 외장 디스크로
   잘못 보고 시스템 폴더까지 훑었다.
+- **재시작·로그아웃·화면 잠금이 검색에서 사라지던 문제** (모든 OS). 여러 시스템
+  명령이 같은 프로그램(macOS `osascript`·`pmset`, Windows `shutdown`·`rundll32`,
+  Linux `systemctl`·`loginctl`)을 써서 색인이 하나만 남기고 지웠다. 앱을 막 켰을
+  때는 보이다가 색인이 완성되면 사라졌다. 이 명령들의 실행 이력도 서로 섞여 있었다.
 
 ## [0.16.10] — 2026-10-07
 

@@ -216,7 +216,12 @@ pub fn collect_system_commands(use_emoji: bool) -> Vec<IndexItem> {
             let keywords_str = cmd.keywords.join(", ");
             IndexItem {
                 name: cmd.display_name.to_string(),
-                path: cmd.command.to_string(),
+                // 명령 **전체 줄**을 경로로 쓴다. 예전엔 `cmd.command`(프로그램 이름)만
+                // 넣었는데, 여러 명령이 같은 프로그램을 쓴다(macOS osascript×3·
+                // pmset×2, Windows shutdown×3, Linux systemctl×3). 색인이 경로로
+                // 중복을 지우면서 재시작·로그아웃·잠금이 검색에서 사라졌고, 실행
+                // 이력(frecency)도 경로 키라 서로 섞였다. 실행은 표시 이름으로 찾는다.
+                path: command_line(cmd),
                 kind: ItemKind::SystemCommand,
                 source: Source::SystemCommand,
                 icon: cmd.pick_icon(use_emoji).to_string(),
@@ -227,7 +232,48 @@ pub fn collect_system_commands(use_emoji: bool) -> Vec<IndexItem> {
         .collect()
 }
 
+fn command_line(cmd: &SystemCommand) -> String {
+    std::iter::once(cmd.command)
+        .chain(cmd.args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Find a system command by its display name
 pub fn find_by_display_name(name: &str) -> Option<&'static SystemCommand> {
     SYSTEM_COMMANDS.iter().find(|cmd| cmd.display_name == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 색인은 경로로 중복을 지운다 — 경로가 겹치면 시스템 명령이 검색에서 사라진다
+    /// (실사례: macOS에서 Restart·Logout·Lock Screen이 0건). CI가 3개 OS에서
+    /// 돌므로 각 OS 표가 검증된다.
+    #[test]
+    fn 시스템_명령_경로는_서로_겹치지_않는다() {
+        let items = collect_system_commands(false);
+        let mut seen = std::collections::HashSet::new();
+        for it in &items {
+            assert!(
+                seen.insert(&it.path),
+                "경로 중복: {} ({})",
+                it.path,
+                it.name
+            );
+        }
+    }
+
+    #[test]
+    fn 시스템_명령은_색인_중복제거_후에도_전부_남는다() {
+        let items = collect_system_commands(false);
+        let count = items.len();
+        let mut seen = std::collections::HashSet::new();
+        let kept = items
+            .into_iter()
+            .filter(|i| seen.insert(i.path.clone()))
+            .count();
+        assert_eq!(kept, count);
+    }
 }
