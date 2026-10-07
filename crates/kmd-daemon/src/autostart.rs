@@ -102,16 +102,23 @@ fn is_dev_build(exe: &Path) -> bool {
 mod tests {
     use super::*;
 
+    // `\` 는 Windows에서만 경로 구분자라 OS별 경로로 검사한다
+    #[cfg(windows)]
     #[test]
     fn 개발_빌드_경로는_자동_등록하지_않는다() {
         assert!(is_dev_build(Path::new(
             r"O:\repo\keymander-cli\target\debug\kmd-daemon.exe"
         )));
-        assert!(is_dev_build(Path::new(
-            "/home/u/keymander/target/release/kmd-daemon"
-        )));
         assert!(!is_dev_build(Path::new(
             r"C:\Users\u\AppData\Local\Microsoft\WinGet\Packages\bullpae.keymander_x\keymander\kmd-daemon.exe"
+        )));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn 개발_빌드_경로는_자동_등록하지_않는다() {
+        assert!(is_dev_build(Path::new(
+            "/home/u/keymander/target/release/kmd-daemon"
         )));
         assert!(!is_dev_build(Path::new("/usr/bin/kmd-daemon")));
     }
