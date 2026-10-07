@@ -1099,6 +1099,13 @@ impl Config {
                 return dir;
             }
         }
+        Self::standard_data_dir()
+    }
+
+    /// 포터블 여부와 상관없는 OS 표준 데이터 디렉터리 (`%APPDATA%\kmd`,
+    /// `~/.local/share/kmd` 등). winget 패키지 폴더처럼 업그레이드 때 정리될 수
+    /// 있는 곳을 피해야 하는 작은 상태 파일용.
+    pub fn standard_data_dir() -> PathBuf {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("kmd")

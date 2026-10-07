@@ -246,6 +246,16 @@ recent stable releases.
 winget install keymander
 ```
 
+Upgrade with `kmd upgrade` rather than a bare `winget upgrade`. The winget
+package can't run pre/post-install steps, and running executables are locked,
+so `kmd upgrade` stops the daemon and launcher, runs
+`winget upgrade bullpae.keymander` in a new window, and then starts the
+daemon again.
+
+On Windows and Linux, the daemon registers itself to start at login the first
+time it runs. Run `kmd daemon uninstall` to turn that off; once you have, it
+won't be re-enabled.
+
 > Available since v0.16.2. A portable zip is also on
 > [Releases](https://github.com/bullpae/keymander/releases) if you prefer not to
 > install system-wide.
@@ -454,8 +464,13 @@ kmd daemon stop
 kmd daemon restart         # stop + start — e.g. after re-granting Accessibility
 kmd daemon status
 kmd daemon install         # register to start at login (launchd / systemd / Startup)
-kmd daemon uninstall
+kmd daemon uninstall       # turn it off (stays off — not re-registered automatically)
+kmd upgrade                # Windows/winget: stop → upgrade → restart the daemon
 ```
+
+Windows and Linux register login autostart automatically on the daemon's first
+run. USB-portable copies and macOS don't; on macOS run `kmd daemon install`
+yourself.
 
 On macOS the daemon needs **Accessibility** (and Input Monitoring) permission
 for `kmd-daemon` under System Settings → Privacy & Security. macOS silently

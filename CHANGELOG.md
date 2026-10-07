@@ -4,6 +4,13 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`kmd upgrade` — Windows(winget) 업그레이드를 한 번에.** winget 패키지는
+  설치 전후에 스크립트를 걸 수 없어, `winget upgrade`만 실행하면 실행 중인
+  파일이 잠겨 실패하거나 데몬이 꺼진 채로 남았다. 이제 `kmd upgrade`가 데몬과
+  런처를 멈추고, 새 창에서 winget 업그레이드를 실행한 뒤, 데몬이 켜져 있었다면
+  다시 띄운다. macOS와 Linux에서는 패키지 관리자 명령을 안내한다.
+
 ### Fixed
 - **`gmail`처럼 짧은 영어 단어를 치면 관계없는 앱이 잔뜩 뜨던 문제.**
   퍼지 검색이 이름뿐 아니라 바로가기 전체 경로까지 비교하고 있었다. 글자가
@@ -45,6 +52,12 @@ All notable changes to keymander are documented here.
   폴더를 다시 추가하라고 제안할 수 있던 문제.
 
 ### Changed
+- **데몬을 처음 실행하면 로그인 자동 시작을 등록한다 (Windows·Linux).** 예전에는
+  `kmd-daemon install`을 따로 실행해야 해서, 대부분 모르고 지나가다 재부팅 뒤
+  단축키가 죽어 있었다. `kmd-daemon uninstall`(또는 `:set`의 토글)로 끄면 다시
+  켜지 않는다. USB 포터블, 개발 빌드, macOS에서는 등록하지 않는다(macOS는 기존처럼
+  `kmd daemon install`). 이전 버전에서 직접 자동 시작을 해제했던 사용자도 이번
+  업데이트 후 첫 실행 때 한 번 다시 등록된다.
 - TUI 폴더 탐색이 `:f`와 같은 폴더 읽기 코드를 쓴다 — 항목이 아주 많으면 앞의
   5,000개만 보고 잘렸다고 알린다.
 

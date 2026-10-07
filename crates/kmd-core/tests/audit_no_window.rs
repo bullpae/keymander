@@ -15,7 +15,8 @@ const EXEMPT_FILES: &[&str] = &[
 ];
 
 const EXEMPT_PATH_SUFFIXES: &[&str] = &[
-    "/src/cmd/daemon.rs", // CLI 맥락의 보조 명령 실행
+    "/src/cmd/daemon.rs",  // CLI 맥락의 보조 명령 실행
+    "/src/cmd/upgrade.rs", // winget 진행 상황을 보여주려고 의도적으로 새 콘솔 창을 연다
 ];
 
 const COMMAND_LOOKAHEAD_LINES: usize = 24;
