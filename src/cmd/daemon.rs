@@ -167,8 +167,8 @@ fn spawn_daemon_process() -> Result<()> {
 
     #[cfg(windows)]
     {
+        use kmd_core::process::CREATE_NO_WINDOW;
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
         const DETACHED_PROCESS: u32 = 0x00000008;
 
         std::process::Command::new(&daemon_exe)

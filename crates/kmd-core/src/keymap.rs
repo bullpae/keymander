@@ -3,6 +3,7 @@
 //! keymander는 kanata 프로파일을 관리하는 도구 역할을 한다.
 //! kanata 프로세스는 독립적으로 실행되며, PID 파일 기반 loose coupling.
 
+use crate::process::HideConsole;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -263,12 +264,7 @@ pub fn start(config: &Config) -> Result<String, String> {
     let exe = kanata_command(config);
     let mut cmd = Command::new(exe);
     cmd.args(["--cfg", &profile.to_string_lossy()]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    cmd.hide_console();
     let child = cmd.spawn().map_err(|e| e.to_string())?;
     let pid = child.id();
     write_pid(pid).map_err(|e| e.to_string())?;
@@ -287,12 +283,7 @@ pub fn stop() -> Result<String, String> {
     {
         let mut cmd = Command::new("taskkill");
         cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        cmd.hide_console();
 
         let status = cmd.status().map_err(|e| e.to_string())?;
         clear_pid();

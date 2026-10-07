@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::{Extension, ExtensionAction};
 use crate::index::{IndexItem, ItemKind, Source};
+use crate::process::HideConsole;
 
 /// 셸 명령 최대 실행 시간 — `!ping -t` 같은 무한 명령이 런처를 멈추지 않도록.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -68,10 +69,9 @@ fn setup_process_group(_cmd: &mut Command) {}
 fn kill_process_tree(child: &mut std::process::Child) {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         let _ = Command::new("taskkill")
             .args(["/T", "/F", "/PID", &child.id().to_string()])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .hide_console()
             .output();
     }
     #[cfg(unix)]
@@ -377,17 +377,10 @@ fn write_command_script(cmd_line: &str) -> std::io::Result<std::path::PathBuf> {
 }
 
 /// Windows에서 콘솔 창 없이 cmd 실행하는 헬퍼
-#[cfg(target_os = "windows")]
 fn hidden_cmd() -> Command {
-    use std::os::windows::process::CommandExt;
     let mut cmd = Command::new("cmd");
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.hide_console();
     cmd
-}
-
-#[cfg(not(target_os = "windows"))]
-fn hidden_cmd() -> Command {
-    Command::new("cmd")
 }
 
 pub struct ShellExtension;
@@ -444,13 +437,8 @@ impl ShellExtension {
             .find(|a| a.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| format!("Unknown quick action: {}", name))?;
 
-        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut cmd = action.current().to_command();
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000);
-        }
+        cmd.hide_console();
         let (success, stdout, stderr, code) = run_with_timeout(cmd, COMMAND_TIMEOUT)?;
 
         // 비정상 종료를 성공으로 넘기지 않는다 — 예전에는 종료 코드와 stderr를

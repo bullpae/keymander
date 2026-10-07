@@ -15,10 +15,7 @@ use std::process::{Command, Stdio};
 use walkdir::WalkDir;
 
 use super::{IndexItem, ItemKind, Source};
-
-/// Windows process creation flag to suppress console window popup.
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use crate::process::HideConsole;
 
 // ============================================================================
 // Public Types
@@ -401,11 +398,7 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
 
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        cmd.hide_console();
 
         let output = cmd.output();
 
@@ -458,11 +451,7 @@ fn collect_everything(config: &ProviderConfig) -> Vec<IndexItem> {
     let mut cmd = Command::new(&es_path);
     cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::null());
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    cmd.hide_console();
 
     match cmd.output() {
         Ok(output) => {
@@ -617,11 +606,7 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
 
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        cmd.hide_console();
 
         match cmd.output() {
             Ok(output) => {

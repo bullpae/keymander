@@ -233,6 +233,10 @@ fn has_hidden_flag_in_chain(lines: &[&str], start: usize) -> bool {
 
     for line in lines.iter().take(end + 1).skip(start) {
         let t = line.trim();
+        // kmd_core::process::HideConsole — Windows에서 CREATE_NO_WINDOW를 건다
+        if t.contains(".hide_console()") {
+            return true;
+        }
         if t.contains("creation_flags(") {
             saw_creation_flags = true;
         }
@@ -270,8 +274,12 @@ fn has_hidden_flag_for_var(lines: &[&str], start: usize, var_name: &str) -> bool
     let mut saw_creation_flags = false;
     let mut saw_expected_flag = false;
 
+    let helper = format!("{var_name}.hide_console()");
     for line in lines.iter().take(end + 1).skip(start + 1) {
         let t = line.trim();
+        if t.contains(&helper) {
+            return true;
+        }
         if t.contains(&call) {
             saw_creation_flags = true;
         }

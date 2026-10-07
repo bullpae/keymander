@@ -109,14 +109,13 @@ impl App {
             ContextAction::OpenAsAdmin => {
                 #[cfg(target_os = "windows")]
                 {
-                    use std::os::windows::process::CommandExt;
-                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    use kmd_core::process::HideConsole;
                     let path = item.path.clone();
                     let escaped = path.replace('\'', "''");
                     let script = format!("Start-Process -FilePath '{}' -Verb RunAs", escaped);
                     if let Err(e) = std::process::Command::new("powershell")
                         .args(["-NoProfile", "-Command", &script])
-                        .creation_flags(CREATE_NO_WINDOW)
+                        .hide_console()
                         .spawn()
                     {
                         tracing::error!("관리자 실행 실패: {e}");

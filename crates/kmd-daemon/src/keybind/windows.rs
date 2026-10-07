@@ -866,12 +866,8 @@ fn execute_slow_action(action: BindAction) {
             let resolved = resolve_launch_cmd(&cmd);
             tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                if let Err(e) = std::process::Command::new(&resolved)
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .spawn()
-                {
+                use kmd_core::process::HideConsole;
+                if let Err(e) = std::process::Command::new(&resolved).hide_console().spawn() {
                     tracing::error!("프로그램 실행 실패: {resolved} — {e}");
                 }
             });

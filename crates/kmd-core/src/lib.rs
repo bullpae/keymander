@@ -17,6 +17,7 @@ pub mod ipc;
 pub mod keymap;
 pub mod plugin;
 pub mod portable;
+pub mod process;
 pub mod prompt;
 pub mod query_prefix;
 pub mod search;

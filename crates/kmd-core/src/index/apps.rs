@@ -104,6 +104,7 @@ fn collect_shell_apps_folder(
     seen: &mut std::collections::HashSet<String>,
     use_emoji: bool,
 ) -> Vec<IndexItem> {
+    use crate::process::HideConsole;
     use std::process::Command;
 
     // PowerShell script: enumerate shell:AppsFolder, output Name<TAB>Path.
@@ -134,12 +135,7 @@ $sw.Close()
         ps_script,
     ]);
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    cmd.hide_console();
 
     let output = cmd.output();
 
