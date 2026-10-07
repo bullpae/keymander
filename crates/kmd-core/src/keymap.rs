@@ -209,33 +209,14 @@ fn clear_pid() {
     let _ = std::fs::remove_file(pid_file());
 }
 
+/// 프로세스 생존 확인 — 런처 단일 인스턴스와 같은 구현을 쓴다
+/// (Windows `OpenProcess`+종료 코드, Unix `kill(pid, 0)`).
+///
+/// 예전엔 여기 따로 구현이 있었다: Windows는 `tasklist` 프로세스를 띄워 출력에
+/// PID 문자열이 **포함되는지** 봤고(한국어 Windows는 출력이 CP949), Unix는 `kill`
+/// 프로세스를 띄웠다. 같은 질문에 두 답을 둘 이유가 없다.
 fn is_pid_running(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let mut cmd = Command::new("tasklist");
-        cmd.args(["/FI", &format!("PID eq {pid}")]);
-
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        if let Ok(out) = cmd.output() {
-            let text = String::from_utf8_lossy(&out.stdout).to_string();
-            return text.contains(&pid.to_string());
-        }
-        false
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
+    crate::single_instance::is_process_alive(pid)
 }
 
 // ── 프로세스 상태/제어 ───────────────────────────────────────────────────────

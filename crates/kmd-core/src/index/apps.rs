@@ -275,12 +275,15 @@ fn scan_lnk_dir(
             .unwrap_or("")
             .to_string();
 
-        if name.is_empty() || !seen.insert(name.clone()) {
+        // 소문자로 넣는다 — 위 AppsFolder 단계가 같은 `seen`에 소문자를 넣는다.
+        // 예전엔 여기만 원래 대소문자라 "google chrome" ≠ "Google Chrome"으로
+        // 중복 제거가 안 돼 같은 앱이 두 번 나왔다.
+        let name_lower = name.to_lowercase();
+        if name.is_empty() || !seen.insert(name_lower.clone()) {
             continue;
         }
 
         // Skip common uninstallers
-        let name_lower = name.to_lowercase();
         if name_lower.contains("uninstall") || name_lower.contains("제거") {
             continue;
         }

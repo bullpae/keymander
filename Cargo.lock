@@ -2358,6 +2358,7 @@ dependencies = [
  "arboard",
  "clipboard-win",
  "color-eyre",
+ "dirs",
  "fs2",
  "kmd-core",
  "notify",

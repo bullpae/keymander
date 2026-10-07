@@ -98,9 +98,30 @@ fn is_dev_build(exe: &Path) -> bool {
         .any(|w| w[0] == "target" && (w[1] == "debug" || w[1] == "release"))
 }
 
+/// systemd 유닛의 `ExecStart` 인자 하나를 따옴표로 감싼다.
+///
+/// 예전엔 `ExecStart={exe} start`로 그대로 써서, 경로에 공백이 있으면
+/// (`~/My Apps/kmd-daemon`) systemd가 인자를 쪼개 자동 시작이 실패했다. Windows
+/// VBS 경로는 이미 따옴표를 처리하고 있었다(같은 일, Linux만 빠짐).
+/// systemd는 큰따옴표 안에서 `\`와 `"`를 역슬래시로 이스케이프한다.
+#[cfg(any(target_os = "linux", test))]
+fn systemd_quote(arg: &str) -> String {
+    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn systemd_경로는_따옴표로_감싼다() {
+        assert_eq!(
+            systemd_quote("/home/u/My Apps/kmd-daemon"),
+            r#""/home/u/My Apps/kmd-daemon""#
+        );
+        assert_eq!(systemd_quote(r#"/a"b\c"#), r#""/a\"b\\c""#);
+    }
 
     // `\` 는 Windows에서만 경로 구분자라 OS별 경로로 검사한다
     #[cfg(windows)]
@@ -266,14 +287,10 @@ mod platform {
     const SERVICE_NAME: &str = "kmd-daemon";
 
     fn service_path() -> PathBuf {
-        let config_dir = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var("HOME")
-                    .map(|h| PathBuf::from(h).join(".config"))
-                    .unwrap_or_else(|_| PathBuf::from("/tmp/.config"))
-            });
-        config_dir
+        // dirs::config_dir = $XDG_CONFIG_HOME 또는 ~/.config. 예전의 /tmp 폴백은
+        // 재부팅하면 사라지는 곳에 유닛을 만들어 "등록됨"으로 보고했다.
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from(".config"))
             .join("systemd/user")
             .join(format!("{SERVICE_NAME}.service"))
     }
@@ -292,7 +309,7 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target"#,
-            exe = exe.display(),
+            exe = super::systemd_quote(&exe.to_string_lossy()),
         );
 
         let path = service_path();
@@ -304,11 +321,23 @@ WantedBy=default.target"#,
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .output();
-        let _ = std::process::Command::new("systemctl")
+        // enable 결과를 확인한다 — 예전엔 버려서, systemd 사용자 세션이 없는 환경
+        // (WSL 등)에서도 "등록됨"으로 보고했다. is_installed는 파일 존재만 본다.
+        let enabled = std::process::Command::new("systemctl")
             .args(["--user", "enable", SERVICE_NAME])
             .output();
-
-        Ok(format!("등록 위치: {}", path.display()))
+        match enabled {
+            Ok(o) if o.status.success() => Ok(format!("등록 위치: {}", path.display())),
+            Ok(o) => Ok(format!(
+                "유닛 파일은 만들었지만 활성화에 실패했습니다 ({}): {} — `systemctl --user enable {SERVICE_NAME}`로 직접 활성화하세요",
+                path.display(),
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => Ok(format!(
+                "유닛 파일은 만들었지만 systemctl을 실행하지 못했습니다 ({}): {e}",
+                path.display()
+            )),
+        }
     }
 
     pub fn uninstall() -> Result<(), String> {

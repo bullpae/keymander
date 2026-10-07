@@ -340,7 +340,7 @@ fn is_recent_lock(lock_path: &Path, threshold_ms: u64) -> bool {
 // ── Platform-specific process helpers ────────────────────────────────────────
 
 #[cfg(windows)]
-fn is_process_alive(pid: u32) -> bool {
+pub(crate) fn is_process_alive(pid: u32) -> bool {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const STILL_ACTIVE: u32 = 259;
 
@@ -375,7 +375,7 @@ unsafe extern "system" {
 }
 
 #[cfg(unix)]
-fn is_process_alive(pid: u32) -> bool {
+pub(crate) fn is_process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 

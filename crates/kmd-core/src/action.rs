@@ -21,6 +21,16 @@ pub enum ActionResult {
 /// Execute the action for a search result
 pub fn execute(result: &SearchResult) -> ActionResult {
     match result.item.kind {
+        // Linux 앱 항목의 path는 파일이 아니라 .desktop의 Exec **명령줄**이다
+        // (index/apps.rs). 예전엔 다른 OS처럼 `xdg-open <명령줄>`로 열려다 실패했다 —
+        // xdg-open은 파일·URL을 여는 도구라 `firefox --new-window`를 실행하지 못한다.
+        #[cfg(target_os = "linux")]
+        ItemKind::App => match linux_desktop_exec(&result.item.path).spawn() {
+            Ok(_) => ActionResult::Launched,
+            Err(e) => {
+                ActionResult::Error(format!("Failed to launch '{}': {}", result.item.name, e))
+            }
+        },
         ItemKind::App | ItemKind::Executable | ItemKind::File | ItemKind::Directory => {
             open_with_system(&result.item.path)
         }
@@ -109,6 +119,20 @@ fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
     }
 }
 
+/// Linux .desktop의 Exec 명령줄을 실행할 명령. `%f` 같은 필드 코드는 색인 단계에서
+/// 이미 뺐다(index/apps.rs). 명령줄의 따옴표는 셸이 해석한다. 출력은 버린다 —
+/// TUI 터미널에 앱 로그가 쏟아지지 않게.
+#[cfg(any(target_os = "linux", test))]
+fn linux_desktop_exec(exec: &str) -> Command {
+    let mut c = Command::new("sh");
+    c.arg("-c")
+        .arg(exec)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    c
+}
+
 /// 탐색기에 넘길 경로 — 로컬 파일 경로면 `/`를 `\`로 바꾼다.
 ///
 /// `explorer.exe`는 `C:\work/sub`처럼 `/`가 섞인 경로를 알아보지 못하고
@@ -172,7 +196,24 @@ pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> Action
 
 #[cfg(test)]
 mod tests {
-    use super::explorer_path;
+    use super::{explorer_path, linux_desktop_exec};
+
+    #[test]
+    fn linux_앱은_명령줄을_셸로_실행한다() {
+        // xdg-open이 아니라 sh -c — Exec 명령줄은 파일이 아니다
+        let c = linux_desktop_exec("firefox --new-window");
+        assert_eq!(c.get_program(), "sh");
+        let args: Vec<_> = c.get_args().collect();
+        assert_eq!(args, ["-c", "firefox --new-window"]);
+    }
+
+    /// 실제로 실행되는지 — 셸이 있는 OS에서만 (명령은 아무 부작용 없는 true)
+    #[cfg(unix)]
+    #[test]
+    fn linux_앱_명령줄은_실제로_실행된다() {
+        let status = linux_desktop_exec("true").status().unwrap();
+        assert!(status.success());
+    }
 
     #[test]
     fn 탐색기_경로는_섞인_구분자를_역슬래시로_통일한다() {
