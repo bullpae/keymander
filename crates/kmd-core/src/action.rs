@@ -2,6 +2,8 @@
 
 use std::process::Command;
 
+use crate::process::HideConsole;
+
 use crate::index::{system_commands, ItemKind};
 use crate::search::SearchResult;
 
@@ -31,7 +33,11 @@ pub fn execute(result: &SearchResult) -> ActionResult {
                 ActionResult::Error(format!("Failed to launch '{}': {}", result.item.name, e))
             }
         },
-        ItemKind::App | ItemKind::Executable | ItemKind::File | ItemKind::Directory => {
+        // App은 OS별로 갈라 둔다 — Linux에서 위 분기와 한 줄로 묶으면 App이 도달
+        // 불가 패턴이 된다(macOS 빌드에선 위 분기가 없어 보이지 않던 경고).
+        #[cfg(not(target_os = "linux"))]
+        ItemKind::App => open_with_system(&result.item.path),
+        ItemKind::Executable | ItemKind::File | ItemKind::Directory => {
             open_with_system(&result.item.path)
         }
         ItemKind::SystemCommand => execute_system_command(&result.item.name),
@@ -89,21 +95,18 @@ pub fn open_url(url: &str) -> ActionResult {
 fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
         let t = target.trim();
         // explorer.exe + URL 은 탐색기만 뜨는 환경이 있어, http(s)는 기본 브라우저 핸들러로 연다.
         if t.starts_with("http://") || t.starts_with("https://") {
             Command::new("rundll32")
                 .arg("url.dll,FileProtocolHandler")
                 .arg(t)
-                .creation_flags(CREATE_NO_WINDOW)
+                .hide_console()
                 .spawn()
         } else {
             Command::new("explorer.exe")
                 .arg(&*explorer_path(t))
-                .creation_flags(CREATE_NO_WINDOW)
+                .hide_console()
                 .spawn()
         }
     }
@@ -181,12 +184,7 @@ pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> Action
     command.args(cmd.args);
 
     // Hide the console window on Windows so it doesn't flash.
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    command.hide_console();
 
     match command.spawn() {
         Ok(_) => ActionResult::Launched,
