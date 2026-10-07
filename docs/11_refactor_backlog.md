@@ -313,3 +313,42 @@ Windows `:f` 버그(결과마다 같은 폴더가 열림 · 있는 폴더를 못
   `launch_in_terminal`의 `raw_arg`)라 실제 피해는 없지만, 쓰게 되면 `raw_arg`로 바꿀 것
 - Windows 실기기 확인: quick action 출력 한글, 숨김 파일 제외, OneDrive 백업
   환경의 기본 폴더 — CI는 영문 Windows라 CP949·OneDrive 경로는 실기기에서만 보인다
+
+## OS 공통/개별 구현 점검 (2026-10-07)
+
+질문: "세 OS 공통으로 처리해야 할 로직을 OS마다 따로 구현한 곳은 없는가." 데몬 키
+훅(`keybind/`)과 나머지(약 300개 cfg 분기)를 나눠 전수 조사했다. 분류는 셋 —
+OS 특성상 정당 / 통합 가능한 복붙 / **같아야 하는데 갈라진 것(버그)**.
+
+**전체 그림**: 판정 로직(레이어·tap-hold·더블탭·콤보·마우스 가속)은 이미 엔진과
+`mouse.rs`에 공통으로 잘 모여 있다. 중복과 갈라짐은 **판정의 바깥** — 결정을
+주입으로 바꾸는 분기, 훅 상실·종료 복구, 실행/프로세스 관리, 색인 provider의 후처리
+— 에 몰려 있다. `macos.rs`에는 테스트가 하나도 없다.
+
+### 갈라진 것 (버그) — 확인 수준별
+
+| # | 무엇 | 확인 | 상태 |
+|---|---|---|---|
+| G1 | 시스템 명령 path에 프로그램 이름만 → 색인 중복 제거로 **재시작·로그아웃·잠금이 검색에서 사라짐**(모든 OS) | 설치본 실측 0건 | ✅ `ac8c23b` |
+| G2 | 훅 상실 시 macOS만 주입해 둔 chord 트리거를 해제하지 않음 → Option이 눌린 채 남을 수 있음 (`macos.rs:1027` vs `windows.rs:1073`) | 코드 확인 | ⬜ |
+| G3 | 데몬 종료 시 macOS만 tap-hold hold 수정자(CapsLock→Ctrl)를 해제하지 않음 (`macos.rs:1484` vs `windows.rs:1604`) | 코드 확인 | ⬜ |
+| G4 | 훅 상실 시 **양쪽 모두** 마우스 StopAll을 보내지 않음 → 포인터가 계속 움직일 수 있음 | 코드 추론 | ⬜ |
+| G5 | macOS 서킷브레이커가 `saturating_sub` → 가동 약 49.7일 후 tick 랩어라운드로 오판(엔진·Windows는 wrapping) | 코드 확인 | ⬜ |
+| G6 | 파일 provider마다 설정 해석이 다름 — mdfind/locate는 `ignore_patterns`·숨김·`search_depth` 무시, mdfind는 첫 search_path만 | 조사 보고, **실측 필요** | ⬜ |
+| G7 | Windows 앱 이름 중복 제거가 한쪽은 소문자·한쪽은 원본 대소문자 → 같은 앱 2번 | 조사 보고 | ⬜ |
+| G8 | Linux 앱 path에 Exec 명령줄 저장 → `xdg-open <명령줄>`로 실행 실패 | 조사 보고 | ⬜ |
+| G9 | Windows kanata 생존 확인이 `tasklist` 출력 부분 문자열 매칭 → 오탐(single_instance는 정확한 API) | 조사 보고 | ⬜ |
+| G10 | 런처의 영문 전환: Windows는 런처 창 IME만, macOS는 **시스템 전역 입력 소스**를 바꾸고 복원 안 함 | 조사 보고 — 의도인지 결정 필요 | ❓ |
+| G11 | 볼륨 열거가 `files.rs`·`folder_suggest.rs` 두 벌 — 부팅 디스크 별칭 필터는 후자만(`9dbe15c`) | 코드 확인 | ⬜ |
+| G12 | Linux 자동 시작 유닛 `ExecStart` 경로 따옴표 없음, `is_installed`는 파일 존재만 확인 | 조사 보고 | ⬜ |
+| (추정) | Windows는 수정자 keyup 누락 보정(sync) 없음 / macOS는 SendCombo·리맵에 물리 Shift 병합 안 함 | 추정, 실기기 필요 | ⬜ |
+
+### 통합 가능한 중복 (상위)
+
+- 데몬 `KeyDecision → 주입` 분기: macOS 안에서도 두 벌(`1112-1170`, `1176-1235`) + Windows → mod.rs 순수 함수 `plan()`
+- 훅 상실·종료 복구 → 엔진 `on_hook_lost() -> Recovery { release, stop_mouse }` (G2·G3·G4 동시 해결)
+- 마우스 잡 디스패치·일회성 표 → `mouse.rs`
+- `CREATE_NO_WINDOW` 상수·블록 13곳 → `process::hidden_command()`
+- 프로세스 생존 확인 2벌, 인스턴스 잠금 3경로 → `proc::is_alive`, fs2 잠금
+- launchd 코드가 `autostart.rs`·`src/cmd/daemon.rs` 두 크레이트에
+- 시스템 명령 표 3벌 → QuickCmd처럼 공통 표 + OS별 명령
