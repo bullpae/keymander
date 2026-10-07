@@ -265,14 +265,80 @@ pub fn collect_files(
 
     tracing::info!("File provider: {} (quota: {} files)", kind, remaining);
 
-    match kind {
-        ProviderKind::Builtin => collect_builtin(&limited_config),
+    let items = match kind {
+        // walkdir는 걷는 동안 같은 규칙을 이미 적용한다 (is_ignored_dir·fsutil)
+        ProviderKind::Builtin => return collect_builtin(&limited_config),
         ProviderKind::Fd => collect_fd(&limited_config),
         ProviderKind::Everything => collect_everything(&limited_config),
         ProviderKind::Spotlight => collect_spotlight(&limited_config),
         ProviderKind::Locate => collect_locate(&limited_config),
         ProviderKind::WinFs => collect_windows_fs(&limited_config),
+    };
+    apply_common_rules(items, &limited_config)
+}
+
+/// 외부 도구(fd·Everything·Spotlight·locate·PowerShell)의 결과에 **같은 규칙**을 건다.
+///
+/// 도구마다 같은 설정을 다르게 해석했다 — fd·Everything·PowerShell은 검색 폴더
+/// 안에서 깊이·무시 목록을 지켰지만, Spotlight(macOS 기본)는 **첫 검색 폴더만**
+/// 보면서 무시 목록·숨김·깊이를 모두 무시했고, locate(Linux)는 검색 폴더와
+/// 상관없이 **파일시스템 전체**에서 할당량을 채웠다. 같은 config인데 OS에 따라
+/// 색인에 `node_modules` 안의 문서나 `/usr/share` 파일이 섞였다.
+/// 도구는 후보를 내고, 무엇을 받아들일지는 여기서 정한다.
+fn apply_common_rules(items: Vec<IndexItem>, config: &ProviderConfig) -> Vec<IndexItem> {
+    let roots = provider_roots(config);
+    let ignore: HashSet<&str> = config.ignore_patterns.iter().map(|s| s.as_str()).collect();
+    let before = items.len();
+    let kept: Vec<IndexItem> = items
+        .into_iter()
+        .filter(|it| {
+            allowed_by_common_rules(Path::new(&it.path), &roots, &ignore, config.search_depth)
+        })
+        .collect();
+    if kept.len() != before {
+        tracing::info!(
+            "공통 규칙으로 제외: {}개 (범위 밖·숨김·무시·깊이)",
+            before - kept.len()
+        );
     }
+    kept
+}
+
+/// 외부 도구의 검색 범위 — 검색 폴더, 없으면 홈 (fd·PowerShell과 같은 규칙).
+fn provider_roots(config: &ProviderConfig) -> Vec<PathBuf> {
+    if config.search_paths.is_empty() {
+        dirs::home_dir().into_iter().collect()
+    } else {
+        config.search_paths.clone()
+    }
+}
+
+/// `path`가 어떤 루트 아래에서 깊이 이내이고, 그 사이에 숨김·무시 폴더가 없는가.
+/// walkdir 경로(`is_ignored_dir`·`max_depth`)와 같은 판정.
+fn allowed_by_common_rules(
+    path: &Path,
+    roots: &[PathBuf],
+    ignore: &HashSet<&str>,
+    max_depth: usize,
+) -> bool {
+    roots.iter().any(|root| {
+        if !crate::fsutil::path_within(path, root) {
+            return false;
+        }
+        let rel: Vec<String> = path
+            .components()
+            .skip(root.components().count())
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if rel.is_empty() || rel.len() > max_depth {
+            return false; // 루트 자신은 항목이 아니다 (walkdir depth 0 제외와 같음)
+        }
+        !rel.iter().any(|name| {
+            crate::fsutil::is_hidden_name(name)
+                || name.starts_with('$')
+                || ignore.contains(name.as_str())
+        })
+    })
 }
 
 // ── Builtin (walkdir) ────────────────────────────────────
@@ -457,7 +523,9 @@ fn collect_everything(config: &ProviderConfig) -> Vec<IndexItem> {
 fn collect_spotlight(config: &ProviderConfig) -> Vec<IndexItem> {
     let mut args = vec!["kind:document OR kind:folder".to_string()];
 
-    if let Some(dir) = config.search_paths.first() {
+    // 모든 검색 폴더 — 예전엔 첫 번째만 넘겨 나머지 폴더는 이 도구로 찾지 못했다.
+    // (-onlyin은 반복할 수 있다)
+    for dir in provider_roots(config) {
         args.push("-onlyin".to_string());
         args.push(dir.to_string_lossy().to_string());
     }
@@ -497,13 +565,19 @@ fn collect_locate(config: &ProviderConfig) -> Vec<IndexItem> {
         return Vec::new();
     };
 
+    // `/` 전체가 아니라 검색 범위로 — 할당량을 시스템 파일에 쓰지 않는다.
+    // locate의 패턴은 경로 부분 문자열이고 여러 개면 OR다. 정확한 범위·깊이는
+    // apply_common_rules가 다시 거른다.
+    let roots: Vec<String> = provider_roots(config)
+        .iter()
+        .map(|r| r.to_string_lossy().into_owned())
+        .collect();
+    if roots.is_empty() {
+        return Vec::new();
+    }
     match Command::new(cmd)
-        .args([
-            "--limit",
-            &config.max_results.to_string(),
-            "--existing",
-            "/",
-        ])
+        .args(["--limit", &config.max_results.to_string(), "--existing"])
+        .args(&roots)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
@@ -917,6 +991,57 @@ pub fn dir_icon(use_emoji: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 외부 도구 결과의 공통 규칙 (OS마다 갈라졌던 해석) ──
+
+    fn rules_ok(path: &str, roots: &[&str], depth: usize) -> bool {
+        let roots: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+        let ignore: HashSet<&str> = ["node_modules", "Library"].into_iter().collect();
+        allowed_by_common_rules(Path::new(path), &roots, &ignore, depth)
+    }
+
+    #[test]
+    fn 공통규칙_검색범위_밖은_뺀다() {
+        // locate가 `/` 전체를 훑어 들어오던 시스템 파일
+        assert!(!rules_ok(
+            "/usr/share/doc/a.txt",
+            &["/home/me/Documents"],
+            4
+        ));
+        assert!(rules_ok(
+            "/home/me/Documents/a.txt",
+            &["/home/me/Documents"],
+            4
+        ));
+        // 두 번째 검색 폴더도 범위다 (Spotlight가 첫 번째만 보던 문제)
+        assert!(rules_ok(
+            "/home/me/Downloads/b.pdf",
+            &["/home/me/Documents", "/home/me/Downloads"],
+            4
+        ));
+    }
+
+    #[test]
+    fn 공통규칙_숨김_무시_폴더_아래는_뺀다() {
+        let root = ["/home/me/Desktop"];
+        assert!(!rules_ok(
+            "/home/me/Desktop/proj/node_modules/x/README.md",
+            &root,
+            9
+        ));
+        assert!(!rules_ok("/home/me/Desktop/.git/HEAD", &root, 9));
+        assert!(!rules_ok("/home/me/Desktop/.secret.txt", &root, 9));
+        assert!(!rules_ok("/home/me/Desktop/$RECYCLE.BIN/x", &root, 9));
+        assert!(rules_ok("/home/me/Desktop/proj/notes.md", &root, 9));
+    }
+
+    #[test]
+    fn 공통규칙_깊이는_walkdir와_같다() {
+        let root = ["/r"];
+        assert!(rules_ok("/r/a", &root, 1), "depth 1 = 루트 바로 아래");
+        assert!(!rules_ok("/r/a/b", &root, 1));
+        assert!(!rules_ok("/r", &root, 4), "루트 자신은 항목이 아니다");
+    }
 
     fn must_mkdir(path: &Path) {
         std::fs::create_dir_all(path).expect("디렉터리 생성 실패");
