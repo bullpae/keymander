@@ -2,7 +2,7 @@
 
 All notable changes to keymander are documented here.
 
-## [Unreleased]
+## [0.16.10] — 2026-10-07
 
 ### Added
 - **`kmd upgrade` — Windows(winget) 업그레이드를 한 번에.** winget 패키지는
