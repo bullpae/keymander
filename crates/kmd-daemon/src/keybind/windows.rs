@@ -1067,13 +1067,19 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
 /// 리셋한다 — 그러지 않으면 "LAlt를 누른 채 훅이 죽었다가 되살아난" 경우
 /// 레이어가 계속 활성으로 남아 모든 키가 화살표로 나간다.
 unsafe fn reinstall_hook(hook: &mut HHOOK) -> Result<(), String> {
-    // 코드 모드로 주입해 둔 트리거가 있으면 먼저 해제 (stuck-Alt 방지)
-    if let Some(state) = HOOK_STATE.get() {
-        if let Ok(mut guard) = state.lock() {
-            if let Some(trigger) = guard.engaged_chord_trigger() {
-                release_key_up_or_track(vkey_to_vk(trigger));
-            }
-            guard.reset_transient_state();
+    // 코드 모드로 주입해 둔 트리거 해제(stuck-Alt 방지) + 마우스 정지. 무엇을 할지는
+    // 엔진이 정한다 — macOS 탭 비활성화와 같은 규칙(engine::on_hook_lost).
+    // 마우스 정지는 예전엔 빠져 있어, 이동 키를 누른 채 훅이 재설치되면 포인터가
+    // 계속 움직였다(초기화로 레이어가 꺼져 key-up이 MouseRelease가 되지 못함).
+    let cleanup = HOOK_STATE
+        .get()
+        .and_then(|state| state.lock().ok().map(|mut guard| guard.on_hook_lost()));
+    if let Some(cleanup) = cleanup {
+        if let Some(trigger) = cleanup.release_trigger {
+            release_key_up_or_track(vkey_to_vk(trigger));
+        }
+        if cleanup.stop_mouse {
+            queue_fast(FastJob::StopAll);
         }
     }
 
@@ -1599,9 +1605,10 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         }
         // 코드 모드 중 중지된 경우 주입돼 있는 트리거를 해제한다 (stuck-Alt 방지).
         // slow worker join보다 먼저 수행해 느린 클립보드 작업에 해제가 막히지 않게 한다.
+        // (engine::on_hook_lost — macOS stop과 같은 규칙. 마우스는 아래 worker 정리가 멈춘다)
         if let Some(state) = HOOK_STATE.get() {
-            if let Ok(guard) = state.lock() {
-                if let Some(trigger) = guard.engaged_chord_trigger() {
+            if let Ok(mut guard) = state.lock() {
+                if let Some(trigger) = guard.on_hook_lost().release_trigger {
                     tracing::info!("중지 시 코드 트리거 해제: {trigger:?}");
                     release_key_up_or_track(vkey_to_vk(trigger));
                 }

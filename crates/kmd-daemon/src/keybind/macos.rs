@@ -1016,7 +1016,10 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
         // 리맵만 꺼진다. 복구는 데몬 재시작 (status가 사유를 보여준다).
         let now = tick_ms();
         let start = TAP_TIMEOUT_WINDOW_START.load(Ordering::Relaxed);
-        let count = if now.saturating_sub(start) > TAP_TIMEOUT_WINDOW_MS {
+        // wrapping_sub: tick_ms()는 u32라 약 49.7일마다 0으로 돌아간다. saturating_sub는
+        // 랩어라운드 뒤 0을 돌려줘 창이 영영 리셋되지 않고 횟수만 쌓였다 — 간격과
+        // 무관하게 6회째에 리맵이 영구히 꺼졌다. 엔진·Windows 워치독과 같은 규약.
+        let count = if now.wrapping_sub(start) > TAP_TIMEOUT_WINDOW_MS {
             TAP_TIMEOUT_WINDOW_START.store(now, Ordering::Relaxed);
             TAP_TIMEOUT_COUNT.store(1, Ordering::Relaxed);
             1
@@ -1024,10 +1027,18 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
             TAP_TIMEOUT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
         };
 
-        // 어느 경로든 일시 상태는 리셋 (stuck modifier 방지)
-        if let Some(state) = HOOK_STATE.get() {
-            if let Ok(mut guard) = state.lock() {
-                guard.reset_transient_state();
+        // 어느 경로든 정리한다 (stuck modifier·stuck mouse 방지). 무엇을 풀지는
+        // 엔진이 정한다 — Windows 훅 재설치와 같은 규칙(engine::on_hook_lost).
+        // 예전엔 상태만 리셋해서, 레이어 chord 중이면 주입해 둔 Option이 눌린 채 남았다.
+        let cleanup = HOOK_STATE
+            .get()
+            .and_then(|state| state.lock().ok().map(|mut guard| guard.on_hook_lost()));
+        if let Some(cleanup) = cleanup {
+            if let Some(trigger) = cleanup.release_trigger {
+                queue_job(WorkerJob::ChordRelease { trigger });
+            }
+            if cleanup.stop_mouse {
+                queue_job(WorkerJob::MouseStopAll);
             }
         }
 
@@ -1480,13 +1491,21 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         // CapsLock→F19 재맵을 적용했다면 원복 (다른 앱들이 CapsLock을 정상 사용)
         clear_hidutil_remap();
 
-        // stuck modifier 방지: 종료 전에 held 상태인 modifier key-up 전송
+        // stuck modifier 방지: 종료 전에 눌린 수정자와 **주입해 둔 트리거**를 푼다.
+        // 예전엔 물리 수정자만 풀어서, CapsLock(F19)→Ctrl tap-hold 중 데몬을 멈추면
+        // F19는 수정자가 아니라 목록에 없고 주입한 Ctrl이 눌린 채 남았다.
+        // 무엇을 풀지는 엔진이 정한다(engine::on_hook_lost, Windows stop과 같은 규칙).
+        // 마우스는 아래 워커 정리 경로가 멈춘다.
         if let Some(state) = HOOK_STATE.get() {
             if let Ok(mut guard) = state.lock() {
-                for vkey in guard.held_modifiers() {
-                    send_key_event(vkey_to_cg(vkey), false, 0);
+                let held = guard.held_modifiers();
+                let cleanup = guard.on_hook_lost();
+                for vkey in &held {
+                    send_key_event(vkey_to_cg(*vkey), false, 0);
                 }
-                guard.reset_transient_state();
+                if let Some(trigger) = cleanup.release_trigger.filter(|t| !held.contains(t)) {
+                    send_key_event(vkey_to_cg(trigger), false, 0);
+                }
             }
         }
 

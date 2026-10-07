@@ -12,6 +12,16 @@ use super::{
     UnmappedBehavior, VKey,
 };
 
+/// 훅을 잃거나 멈출 때 어댑터가 실행할 정리 — [`EngineState::on_hook_lost`] 참조.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookLossCleanup {
+    /// OS에 down으로 주입해 둔 트리거(레이어 chord 또는 tap-hold의 hold 수정자).
+    /// 어댑터가 up을 주입해야 한다 — 안 하면 그 키가 눌린 채 남는다.
+    pub release_trigger: Option<VKey>,
+    /// 마우스 레이어가 동작 중이었다 — 어댑터가 모션·버튼을 모두 멈춰야 한다.
+    pub stop_mouse: bool,
+}
+
 /// 키 이벤트 처리 결정
 #[derive(Debug, Clone)]
 pub enum KeyDecision {
@@ -242,6 +252,25 @@ impl EngineState {
     pub fn reset_transient_state(&mut self) {
         self.modifiers_held.clear();
         self.reset_runtime_state();
+    }
+
+    /// 훅·탭을 잃었을 때(macOS 탭 타임아웃 비활성화, Windows 훅 재설치) 또는
+    /// 데몬을 멈출 때 어댑터가 해야 할 정리를 계산하고 일시 상태를 초기화한다.
+    ///
+    /// 예전엔 어댑터마다 각자 했고 **갈라져 있었다**: Windows는 주입해 둔 트리거를
+    /// 풀었지만 macOS는 상태만 초기화해, 레이어 chord 중 탭이 꺼지면 Option이,
+    /// tap-hold 중 데몬을 멈추면 Ctrl이 눌린 채 남을 수 있었다. 마우스 정지는
+    /// 양쪽 모두 빠져 있어 이동 키를 누른 채 훅을 잃으면 포인터가 계속 움직였다
+    /// (초기화로 레이어가 꺼져 이후 key-up이 MouseRelease가 되지 못한다).
+    /// 결정을 여기 한 곳에 두고, 어댑터는 결과대로 주입만 한다.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    pub fn on_hook_lost(&mut self) -> HookLossCleanup {
+        let cleanup = HookLossCleanup {
+            release_trigger: self.engaged_chord_trigger(),
+            stop_mouse: !self.mouse_keys_held.is_empty(),
+        };
+        self.reset_transient_state();
+        cleanup
     }
 
     /// 어댑터의 합성 입력이 실패했을 때 이미 계산 과정에서 전진한 일시 상태를
@@ -1648,6 +1677,73 @@ mod tests {
             e.process_key(VKey::CapsLock, false, 1100),
             KeyDecision::PassThrough
         ));
+    }
+
+    // ── 훅 상실·종료 정리 (on_hook_lost) — 예전엔 macOS·Windows가 각자 했고 갈라졌다 ──
+
+    #[test]
+    fn 훅_상실시_레이어_chord_트리거를_풀라고_알린다() {
+        // macOS는 이걸 안 해서 탭이 꺼지면 Option이 눌린 채 남을 수 있었다
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1050),
+            KeyDecision::EngageChord { .. }
+        ));
+
+        let cleanup = e.on_hook_lost();
+        assert_eq!(cleanup.release_trigger, Some(VKey::LAlt));
+        assert!(!cleanup.stop_mouse);
+        assert_eq!(
+            e.engaged_chord_trigger(),
+            None,
+            "정리 후엔 상태도 비어야 한다"
+        );
+    }
+
+    #[test]
+    fn 종료시_tap_hold_hold_수정자를_풀라고_알린다() {
+        // macOS stop은 물리 수정자만 풀어 CapsLock→Ctrl hold가 눌린 채 남을 수 있었다
+        let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::C, true, 1050),
+            KeyDecision::EngageChord { .. }
+        ));
+
+        assert_eq!(e.on_hook_lost().release_trigger, Some(VKey::LCtrl));
+    }
+
+    #[test]
+    fn 훅_상실시_마우스를_멈추라고_알린다() {
+        // 양쪽 OS 모두 빠져 있었다: 초기화로 레이어가 꺼지면 이후 이동 키 up이
+        // MouseRelease가 되지 못해 포인터가 계속 움직인다
+        let mut e = EngineState::new(mouse_layer_config());
+        e.process_key(VKey::RAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::MoveUp)
+        ));
+
+        let cleanup = e.on_hook_lost();
+        assert!(cleanup.stop_mouse);
+        assert_eq!(
+            cleanup.release_trigger, None,
+            "마우스 레이어는 트리거를 주입하지 않는다"
+        );
+        // 정리 후 같은 키 up은 더 이상 마우스 해제가 아니다 — 그래서 정리가 필요했다
+        assert!(!matches!(
+            e.process_key(VKey::W, false, 1100),
+            KeyDecision::MouseRelease(_)
+        ));
+    }
+
+    #[test]
+    fn 아무것도_안_할_때_훅_상실은_정리할_게_없다() {
+        let mut e = EngineState::new(layer_config());
+        let cleanup = e.on_hook_lost();
+        assert_eq!(cleanup.release_trigger, None);
+        assert!(!cleanup.stop_mouse);
     }
 
     #[test]
