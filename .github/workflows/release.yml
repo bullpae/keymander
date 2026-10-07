@@ -330,7 +330,9 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        # SHA 고정 — winget-releaser@v2가 깨진 커밋으로 옮겨진 일(2026-10)과 같은 위험.
+        # 3bb1273은 v0.16.11 릴리스에서 성공한 커밋.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
@@ -426,7 +428,10 @@ jobs:
           HAS_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
         run: echo "has=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
 
-      - uses: vedantmgoyal9/winget-releaser@v2
+      # 커밋 SHA로 고정한다 — `@v2`는 움직이는 태그다. 2026-10 v2가 action.yml이 깨진
+      # 커밋(c4f385a, "Required property is missing: shell")으로 옮겨져 잡 준비 단계에서
+      # 실패했다. 4ffc788은 v0.16.3에서 실제로 제출에 성공한 커밋. 올릴 땐 SHA를 바꾼다.
+      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2 (검증됨)
         if: steps.winget.outputs.has == 'true'
         with:
           identifier: bullpae.keymander

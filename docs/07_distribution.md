@@ -161,8 +161,15 @@ gh api -X POST repos/bullpae/winget-pkgs/merge-upstream -f branch=master
 
 토큰 만료 시 같은 명령으로 재등록. 만료가 다가오면 GitHub가 메일로 알려준다.
 
+**또 다른 실패 원인 (2026-10-07, v0.16.11)** — 토큰과 무관하게 잡 준비 단계에서
+`vedantmgoyal9\winget-releaser\v2\action.yml: Required property is missing: shell`로
+실패했다. 움직이는 태그 `@v2`가 action.yml이 깨진 커밋(`c4f385a`)으로 옮겨졌다.
+v0.16.3에서 성공한 커밋 `4ffc788`로 **SHA 고정**했다. 같은 위험이라
+`softprops/action-gh-release`도 SHA 고정. 그래서 `workflow` 스코프 수정의 효과는
+아직 실제 릴리스로 확인되지 않았다 — **다음 릴리스에서 이 잡이 통과하는지 볼 것.**
+
 **그때까지의 우회** — 릴리스 후 로컬에서 수동 제출(PR #432626·#433987·#437988·
-#446932를 이렇게 올렸다). zip 이름은 `release.yml`의 `installers-regex`와 같아야 한다:
+#446932·#448207을 이렇게 올렸다). zip 이름은 `release.yml`의 `installers-regex`와 같아야 한다:
 
 ```bash
 GITHUB_TOKEN=$(gh auth token) KOMAC_FORK_OWNER=bullpae \
