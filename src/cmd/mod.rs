@@ -10,6 +10,7 @@ pub mod plugin;
 pub mod portable;
 pub mod prompt;
 pub mod search;
+pub mod upgrade;
 pub mod version;
 
 use std::path::PathBuf;

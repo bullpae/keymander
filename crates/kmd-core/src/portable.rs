@@ -32,6 +32,25 @@ pub fn is_portable() -> bool {
     portable_data_dir().map(|d| d.is_dir()).unwrap_or(false)
 }
 
+/// winget 설치본인가 — `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<id>_...\`.
+///
+/// winget zip에는 `kmd-data\`가 들어 있어 [`is_portable`]이 참이 되지만, 실제로는
+/// 한 PC에 설치된 앱이다. USB용 포터블과 구분해야 하는 곳(자동 시작 등록,
+/// `kmd upgrade`)에서 쓴다.
+pub fn is_winget_install(exe: &std::path::Path) -> bool {
+    exe.to_string_lossy()
+        .to_lowercase()
+        .replace('/', "\\")
+        .contains("\\microsoft\\winget\\packages\\")
+}
+
+/// 실행 중인 exe가 winget 설치본인가
+pub fn running_from_winget() -> bool {
+    std::env::current_exe()
+        .map(|p| is_winget_install(&p))
+        .unwrap_or(false)
+}
+
 /// Enable portable mode by creating the `kmd-data/` directory.
 ///
 /// Returns the path to the created directory.
@@ -63,6 +82,18 @@ mod tests {
     fn test_exe_dir_returns_some() {
         // Should always succeed in a test runner
         assert!(exe_dir().is_some());
+    }
+
+    #[test]
+    fn winget_설치본_판별() {
+        use std::path::Path;
+        assert!(is_winget_install(Path::new(
+            r"C:\Users\u\AppData\Local\Microsoft\WinGet\Packages\bullpae.keymander_Microsoft.Winget.Source_8wekyb3d8bbwe\keymander\kmd.exe"
+        )));
+        assert!(!is_winget_install(Path::new(r"D:\tools\keymander\kmd.exe")));
+        assert!(!is_winget_install(Path::new(
+            r"O:\repo\keymander-cli\target\debug\kmd.exe"
+        )));
     }
 
     #[test]

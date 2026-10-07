@@ -49,8 +49,15 @@
   kmd-daemon start 만 실행하면 Alt+Space 로 자동 등록됨
 
   ** 부팅 시 자동 시작 **
-  kmd-daemon install 한 번만 실행하면 다음 로그인부터 자동 시작
+  winget으로 설치한 경우 데몬을 처음 실행하면 자동 시작이 등록됩니다.
+  끄려면 kmd-daemon uninstall (한 번 끄면 다시 켜지지 않음)
+  USB 포터블로 쓸 때는 직접 등록: kmd-daemon install
   (Windows: Startup 폴더, macOS: LaunchAgent, Linux: systemd)
+
+  ** 업그레이드 (winget) **
+  kmd upgrade
+  데몬과 런처를 멈추고 → winget으로 업그레이드하고 → 데몬을 다시 띄웁니다.
+  (winget upgrade만 실행하면 실행 중인 파일이 잠겨 있어 실패하거나 데몬이 꺼진 채로 남습니다)
 
 ------------------------------------------------------------
   주요 명령어

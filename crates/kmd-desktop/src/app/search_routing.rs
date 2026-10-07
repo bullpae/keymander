@@ -433,6 +433,17 @@ impl App {
         if results.is_empty() && !query.is_empty() {
             results = self.build_fallback_suggestions(query);
             self.search_mode = kmd_core::SearchMode::Contains;
+        } else if self.search_mode == kmd_core::SearchMode::Fuzzy
+            && !builtin_calc::looks_like_math(query)
+            && !has_literal_match(&results, query)
+        {
+            // 퍼지 결과만 있고 질의가 그대로 든 항목이 없으면 (`gmail` →
+            // 글자만 흩어져 걸린 앱들) 결과가 비지 않아 웹 제안이 영영 안 나온다.
+            // 약어 매칭(`vsc` → Visual Studio Code)일 수도 있으니 상위 몇 개는
+            // 그대로 두고 그 아래에 대체 제안을 끼운다.
+            let at = results.len().min(WEAK_MATCH_KEEP_TOP);
+            let fallback = self.build_fallback_suggestions(query);
+            results.splice(at..at, fallback);
         }
 
         // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
@@ -543,6 +554,25 @@ impl App {
 
         items
     }
+}
+
+/// 이름 매칭이 약할 때 대체 제안 위에 남겨 둘 퍼지 결과 수.
+const WEAK_MATCH_KEEP_TOP: usize = 5;
+
+/// 결과 중 질의 토큰이 모두 (대소문자 무시) 이름이나 경로에 그대로 들어간
+/// 항목이 있는가 — 글자만 흩어져 걸린 퍼지 매칭과 구분한다.
+fn has_literal_match(results: &[kmd_core::SearchResult], query: &str) -> bool {
+    let tokens: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if tokens.is_empty() {
+        return true;
+    }
+    results.iter().any(|r| {
+        let name = r.item.name.to_lowercase();
+        let path = r.item.path.to_lowercase();
+        tokens
+            .iter()
+            .all(|t| name.contains(t.as_str()) || path.contains(t.as_str()))
+    })
 }
 
 /// 클립보드 히스토리 항목 → 런처 결과. 키워드에 `kmd:clip:<id>:<slot>` 마커를

@@ -116,6 +116,8 @@ enum Commands {
     },
     /// Show version information
     Version,
+    /// Upgrade keymander (stops the daemon/launcher, upgrades, restarts the daemon)
+    Upgrade,
     /// Manage keymap backend (Kanata prototype)
     Keymap {
         #[command(subcommand)]
@@ -388,6 +390,9 @@ fn main() -> color_eyre::Result<()> {
         }
         Some(Commands::Version) => {
             cmd::version::run();
+        }
+        Some(Commands::Upgrade) => {
+            cmd::upgrade::run()?;
         }
         Some(Commands::Keymap { action }) => {
             cmd::keymap::run(match action {

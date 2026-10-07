@@ -76,6 +76,44 @@ impl SearchMode {
     }
 }
 
+/// 퍼지 매칭 대상 문자열 — 이름과 사람이 붙인 키워드만 담는다.
+///
+/// 인덱서들은 keywords에 전체 경로나 앱 ID(AUMID)를 넣는다. 퍼지 매칭은 글자가
+/// 순서대로 흩어져 있기만 해도 통과하므로, 긴 경로가 섞이면 거의 모든 항목이
+/// 걸린다 — `gmail` 이 `...\Roamin[g]\[M]icrosoft\St[a]rt Menu\...\Access[i]bi[l]ity`
+/// 로 매칭돼 시작 메뉴 바로가기가 전부 결과에 뜨던 문제. 크롬 웹앱 AUMID
+/// (`Chrome._crx_<무작위 32자>`)도 같은 식으로 오탐을 만든다.
+///
+/// 경로 조각으로 보고 빼는 토큰:
+/// - 경로 구분자(`\`, `/`)가 든 토큰
+/// - 항목 경로가 실제 경로/URI(구분자 포함)일 때 그 안에 들어 있는 토큰
+///   (`shell:appsFolder\<AUMID>` 의 AUMID, `.desktop` Exec의 `%u` 등)
+///
+/// 경로로 찾는 질의는 [`SearchEngine::search_fuzzy_with_paths`]가
+/// 멀티 토큰 contains 매칭으로 따로 처리한다.
+fn fuzzy_haystack(item: &IndexItem) -> String {
+    let path_is_path = item.path.contains(['\\', '/']);
+    let mut text = item.name.clone();
+    for token in item.keywords.split_whitespace() {
+        let path_piece = token.contains(['\\', '/']) || (path_is_path && item.path.contains(token));
+        if !path_piece {
+            text.push(' ');
+            text.push_str(token);
+        }
+    }
+    text
+}
+
+/// 질의를 소문자 토큰으로 나눈다 — 공백과 경로 구분자 모두 경계로 본다.
+fn split_query_tokens(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .flat_map(|word| word.split(['\\', '/']))
+        .filter(|s| !s.is_empty())
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
 /// Pre-lowercased fields for efficient case-insensitive substring/glob/regex matching.
 struct LowercaseCache {
     /// Lowercased name, path, and keywords for each item (same order as `all_items`)
@@ -168,7 +206,7 @@ impl SearchEngine {
         let injector = self.nucleo.injector();
         for item in &items {
             injector.push(item.clone(), |item, cols| {
-                cols[0] = format!("{} {}", item.name, item.keywords).into();
+                cols[0] = fuzzy_haystack(item).into();
             });
         }
         self.lowercase_cache = LowercaseCache::build(&items);
@@ -190,7 +228,7 @@ impl SearchEngine {
         limit: usize,
     ) -> Vec<SearchResult> {
         let mut results = match mode {
-            SearchMode::Fuzzy => self.search_fuzzy(pattern, limit),
+            SearchMode::Fuzzy => self.search_fuzzy_with_paths(pattern, limit),
             SearchMode::Glob => self.filter_glob(pattern, limit),
             SearchMode::Regex => self.filter_regex(pattern, limit),
             SearchMode::Contains | SearchMode::Url => self.filter_contains(pattern, limit),
@@ -208,6 +246,29 @@ impl SearchEngine {
             result.score = result.score.saturating_add(boost);
         }
         results.sort_by_key(|entry| std::cmp::Reverse(entry.score));
+    }
+
+    /// 퍼지 검색 + (여러 토큰일 때) 경로 세그먼트 매칭.
+    ///
+    /// 퍼지 매칭은 이름 위주([`fuzzy_haystack`])라 `dev rust` 같은 경로 조각
+    /// 질의는 못 찾는다. 토큰이 둘 이상이면 [`Self::filter_contains`]의 AND +
+    /// 세그먼트 점수 결과를 합쳐, 경로로 찾던 기존 동작을 유지한다.
+    /// 양쪽에 모두 잡힌 항목은 점수를 더해 위로 올린다.
+    fn search_fuzzy_with_paths(&mut self, pattern: &str, limit: usize) -> Vec<SearchResult> {
+        let mut results = self.search_fuzzy(pattern, limit);
+        if split_query_tokens(pattern).len() < 2 {
+            return results;
+        }
+
+        for hit in self.filter_contains(pattern, limit) {
+            match results.iter_mut().find(|r| r.item.path == hit.item.path) {
+                Some(existing) => existing.score = existing.score.saturating_add(hit.score),
+                None => results.push(hit),
+            }
+        }
+        results.sort_by_key(|entry| std::cmp::Reverse(entry.score));
+        results.truncate(limit);
+        results
     }
 
     /// Fuzzy search using Nucleo
@@ -285,13 +346,7 @@ impl SearchEngine {
     /// 모든 토큰이 name/path/keywords 중 하나에 포함되어야 매칭 (AND 조건).
     /// 경로 세그먼트 정확 일치에 높은 점수를 부여하여 디렉토리 점프에 활용.
     fn filter_contains(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        // 토큰 분리 — 입력 내 경로 구분자도 분리하여 플래튼
-        let tokens: Vec<String> = query
-            .split_whitespace()
-            .flat_map(|word| word.split(['\\', '/']))
-            .filter(|s| !s.is_empty())
-            .map(|t| t.to_lowercase())
-            .collect();
+        let tokens = split_query_tokens(query);
 
         // 단일 토큰: 기존 동작 100% 보존 (score: 0, substring match)
         if tokens.len() <= 1 {
@@ -918,5 +973,112 @@ mod tests {
                 "전 세그먼트 일치 보너스로 점수 차이 발생"
             );
         }
+    }
+
+    // ── 퍼지 오탐 방지 (경로가 keywords에 들어간 항목) ──────────
+
+    fn make_app(name: &str, path: &str, keywords: &str) -> IndexItem {
+        use crate::index::{ItemKind, Source};
+        IndexItem {
+            name: name.to_string(),
+            path: path.to_string(),
+            kind: ItemKind::App,
+            source: Source::Apps,
+            icon: String::new(),
+            keywords: keywords.to_string(),
+            icon_path: None,
+        }
+    }
+
+    /// 시작 메뉴 .lnk 처럼 keywords = 전체 경로인 앱 목록
+    fn start_menu_apps() -> Vec<IndexItem> {
+        let base = r"C:\Users\mspma\AppData\Roaming\Microsoft\Windows\Start Menu\Programs";
+        ["Magnify", "Narrator", "VoiceAccess", "On-Screen Keyboard"]
+            .iter()
+            .map(|name| {
+                let path = format!(r"{base}\Accessibility\{name}.lnk");
+                make_app(name, &path, &path)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn 퍼지는_경로_글자로_매칭하지_않는다() {
+        // `gmail` 이 경로의 흩어진 글자(Roamin[g]\[M]icrosoft\St[a]rt...)로
+        // 시작 메뉴 바로가기 전부에 매칭되던 회귀 방지
+        let mut engine = SearchEngine::new();
+        engine.load(start_menu_apps());
+
+        let (mode, results) = engine.search("gmail", 50);
+        assert_eq!(mode, SearchMode::Fuzzy);
+        assert!(
+            results.is_empty(),
+            "경로 글자만으로 매칭되면 안 됨: {:?}",
+            results.iter().map(|r| &r.item.name).collect::<Vec<_>>()
+        );
+
+        // 이름 매칭은 그대로
+        let (_, results) = engine.search("magn", 50);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item.name, "Magnify");
+    }
+
+    #[test]
+    fn 퍼지는_aumid로_매칭하지_않는다() {
+        // Get-StartApps 항목: keywords = "shell:appsFolder\<AUMID> <AUMID>"
+        let aumid = "Chrome._crx_fmgjjmmmlfnkbppncabfkddbjimcfncm";
+        let path = format!(r"shell:appsFolder\{aumid}");
+        let mut engine = SearchEngine::new();
+        engine.load(vec![make_app("YouTube", &path, &format!("{path} {aumid}"))]);
+
+        let (_, results) = engine.search("gmail", 50);
+        assert!(results.is_empty(), "AUMID 글자로 매칭되면 안 됨");
+    }
+
+    #[test]
+    fn 퍼지는_사람이_붙인_키워드는_유지한다() {
+        // 시스템 명령: path가 경로가 아니므로 keywords가 전부 유지된다
+        let mut engine = SearchEngine::new();
+        engine.load(vec![make_app(
+            "Recycle Bin",
+            "explorer",
+            "trash, recyclebin, 휴지통",
+        )]);
+
+        let (_, results) = engine.search("trash", 10);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn 퍼지_멀티토큰은_경로_세그먼트로도_찾는다() {
+        // 이름에는 없는 경로 조각(`dev rust`)으로 찾던 기존 동작 유지
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("projects", r"D:\dev\projects\rust", r"D:\dev\projects\rust"),
+            make_item("notes", r"D:\docs\notes", r"D:\docs\notes"),
+        ]);
+
+        let (mode, results) = engine.search("dev rust", 10);
+        assert_eq!(mode, SearchMode::Fuzzy);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item.name, "projects");
+
+        // 경로 구분자 입력도 토큰으로 나뉘어 매칭
+        let (_, results) = engine.search(r"dev\projects", 10);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn 퍼지_멀티토큰은_중복없이_합친다() {
+        // 이름 퍼지와 경로 세그먼트 양쪽에 걸린 항목은 한 번만 나온다
+        let mut engine = SearchEngine::new();
+        engine.load(vec![make_item(
+            "rust book",
+            r"D:\rust\book",
+            r"D:\rust\book",
+        )]);
+
+        let (_, results) = engine.search("rust book", 10);
+        assert_eq!(results.len(), 1);
     }
 }

@@ -94,7 +94,7 @@ fn restart_daemon() -> Result<()> {
     start_daemon()
 }
 
-fn daemon_alive() -> bool {
+pub(crate) fn daemon_alive() -> bool {
     matches!(ipc::read_port(), Ok(port) if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok())
 }
 
@@ -239,7 +239,7 @@ fn e2e_selftest() -> Result<()> {
     )
 }
 
-fn send_command(request: ipc::Request, _action_name: &str) -> Result<()> {
+pub(crate) fn send_command(request: ipc::Request, _action_name: &str) -> Result<()> {
     send_command_with_timeout(request, std::time::Duration::from_secs(5))
 }
 

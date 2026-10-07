@@ -30,7 +30,14 @@ fn main() -> Result<()> {
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("start");
 
     match command {
-        "start" => server::run()?,
+        "start" => {
+            if let Some(detail) = autostart::ensure_default() {
+                tracing::info!(
+                    "자동 시작을 기본으로 등록했습니다 ({detail}) — 해제: kmd-daemon uninstall"
+                );
+            }
+            server::run()?
+        }
         "stop" => send_shutdown()?,
         "status" => send_status()?,
         "install" => cmd_install()?,
