@@ -1321,7 +1321,7 @@ impl App {
             self._guard.consume_quit_signal();
             tracing::info!("Received quit signal — exiting");
             self.window_state.save();
-            return iced::exit();
+            return exit_launcher();
         }
         Task::none()
     }
@@ -1337,7 +1337,7 @@ impl App {
                 Ok(()) => {
                     let first_line = output.lines().next().unwrap_or("(no output)");
                     tracing::info!("Shell output copied: {first_line}");
-                    iced::exit()
+                    exit_launcher()
                 }
                 Err(e) => {
                     tracing::warn!("클립보드 쓰기 실패: {e}");
@@ -1455,7 +1455,7 @@ impl App {
             Message::ClipActionFinished(result) => match result {
                 Ok(message) => {
                     tracing::info!("{message}");
-                    iced::exit()
+                    exit_launcher()
                 }
                 Err(message) => {
                     // 실패는 결과 리스트에 표시해 사용자가 원인(항목 만료·데몬
@@ -1474,7 +1474,7 @@ impl App {
                 if self.state_dirty {
                     self.window_state.save();
                 }
-                iced::exit()
+                exit_launcher()
             }
             Message::ApplyPendingShrink(token) => self.apply_pending_shrink(token),
             Message::UncloakWindow(token) => self.apply_uncloak(token),
@@ -1639,6 +1639,18 @@ fn copy_shell_output(text: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// 런처를 닫는다 — 닫기 전에 할 일을 한 곳에서.
+///
+/// 예전엔 `iced::exit()`가 20곳에 흩어져 있어 "닫을 때 무엇을 할지"를 넣을 자리가
+/// 없었다. 지금 하는 일: 열 때 영문으로 바꿔 둔 입력 소스를 되돌린다(macOS —
+/// Windows는 런처 창의 IME만 바꿔 되돌릴 것이 없다). 런처 창이 아직 앞에 있을 때
+/// 불려야 안전하다(`platform::restore_input_source` 참조). 포커스를 잃어 닫히는
+/// 경로만 예외로 `iced::exit()`를 직접 쓴다(focus_flow).
+fn exit_launcher() -> Task<Message> {
+    crate::platform::restore_input_source();
+    iced::exit()
+}
+
 /// 설정 저장 대상 경로.
 ///
 /// 테스트에서는 **실제 사용자 설정 파일을 건드리면 안 된다.** 설정 토글을
@@ -1682,6 +1694,43 @@ mod tests {
 
     use std::sync::atomic::{AtomicU32, Ordering};
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    /// 런처를 닫는 경로는 `exit_launcher()`를 거쳐야 한다 — 직접 `iced::exit()`를
+    /// 쓰면 열 때 영문으로 바꿔 둔 macOS 입력 소스가 되돌려지지 않는다.
+    /// 예외는 두 곳뿐: `exit_launcher` 자신, 포커스 유실 경로(focus_flow, 의도적).
+    #[test]
+    fn 런처_닫기는_exit_launcher를_거친다() {
+        let marker = ["iced", "::exit()"].concat(); // 이 테스트 자신이 세지지 않게
+                                                    // 주석 줄은 세지 않는다 (설명에 이름이 나온다)
+        let count = |src: &str| {
+            src.lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .map(|l| l.matches(marker.as_str()).count())
+                .sum::<usize>()
+        };
+        assert_eq!(
+            count(include_str!("app.rs")),
+            1,
+            "app.rs: exit_launcher 안의 1회만"
+        );
+        assert_eq!(
+            count(include_str!("app/focus_flow.rs")),
+            1,
+            "포커스 유실 경로 1회만"
+        );
+        for (name, src) in [
+            ("launch.rs", include_str!("app/launch.rs")),
+            ("settings.rs", include_str!("app/settings.rs")),
+            ("search_routing.rs", include_str!("app/search_routing.rs")),
+            ("view.rs", include_str!("app/view.rs")),
+        ] {
+            assert_eq!(
+                count(src),
+                0,
+                "{name}: 런처를 닫을 땐 exit_launcher()를 쓸 것"
+            );
+        }
+    }
 
     /// 테스트용 App 인스턴스 생성 (각 테스트마다 고유 temp 디렉토리)
     fn make_test_app() -> App {

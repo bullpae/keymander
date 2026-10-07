@@ -84,6 +84,11 @@ pub fn force_english_ime(raw_id: u64) {
 /// We use Carbon Text Input Source APIs because Iced itself does not expose
 /// a cross-platform IME mode switch hook. Selecting an English source here
 /// keeps command-first typing predictable on open.
+///
+/// **바꾸기 전의 입력 소스를 기억해 둔다** — 런처를 닫을 때
+/// [`restore_input_source`]가 되돌린다. Windows 구현은 런처 창의 IME만 닫아
+/// 다른 앱에 영향이 없는데, macOS의 TIS는 **시스템 전역**이라 예전엔 한글로
+/// 쓰던 앱으로 돌아가도 영문으로 남았다(2026-10-07 두 OS 동작 통일).
 #[cfg(target_os = "macos")]
 pub fn force_english_ime(_raw_id: u64) {
     // TIS(Text Input Source) API는 메인 스레드 + 윈도우 서버 세션을 요구한다.
@@ -94,21 +99,9 @@ pub fn force_english_ime(_raw_id: u64) {
         return;
     }
 
-    use core_foundation_sys::base::{CFRelease, CFTypeRef};
-    use core_foundation_sys::string::{
-        kCFStringEncodingUTF8, CFStringCreateWithCString, CFStringRef,
-    };
-    use std::ffi::c_void;
+    use core_foundation_sys::base::{CFEqual, CFRelease, CFTypeRef};
+    use core_foundation_sys::string::{kCFStringEncodingUTF8, CFStringCreateWithCString};
     use std::ptr;
-
-    type TISInputSourceRef = *mut c_void;
-    type OSStatus = i32;
-
-    #[link(name = "Carbon", kind = "framework")]
-    unsafe extern "C" {
-        fn TISCopyInputSourceForLanguage(language: CFStringRef) -> TISInputSourceRef;
-        fn TISSelectInputSource(input_source: TISInputSourceRef) -> OSStatus;
-    }
 
     unsafe {
         let lang =
@@ -118,7 +111,7 @@ pub fn force_english_ime(_raw_id: u64) {
             return;
         }
 
-        let source = TISCopyInputSourceForLanguage(lang);
+        let source = mac_tis::TISCopyInputSourceForLanguage(lang);
         CFRelease(lang as CFTypeRef);
 
         if source.is_null() {
@@ -126,7 +119,23 @@ pub fn force_english_ime(_raw_id: u64) {
             return;
         }
 
-        let status = TISSelectInputSource(source);
+        // 지금 소스가 이미 영문이면 되돌릴 것도 없다. 아니면 기억한다 — 단, 이미
+        // 기억한 게 있으면(포커스 재시도로 두 번 불림) 덮지 않는다: 두 번째 호출의
+        // "현재"는 우리가 바꾼 영문이다.
+        let current = mac_tis::TISCopyCurrentKeyboardInputSource();
+        if !current.is_null() {
+            let already_english = CFEqual(current as CFTypeRef, source as CFTypeRef) != 0;
+            let mut prev = mac_tis::PREVIOUS_SOURCE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if already_english || prev.is_some() {
+                CFRelease(current as CFTypeRef);
+            } else {
+                *prev = Some(current as usize); // Copy로 받은 참조를 그대로 보관
+            }
+        }
+
+        let status = mac_tis::TISSelectInputSource(source);
         CFRelease(source as CFTypeRef);
 
         if status == 0 {
@@ -136,6 +145,63 @@ pub fn force_english_ime(_raw_id: u64) {
         }
     }
 }
+
+/// 런처를 열 때 바꿔 둔 입력 소스를 원래대로 되돌린다.
+///
+/// **런처 창이 아직 앞에 있을 때 불러야 한다** (창을 닫기 직전). TIS로 한글 같은
+/// CJK 입력기를 고르면, 그 순간 앞에 있는 앱의 입력 컨텍스트는 따라오지 않는
+/// "반쪽 전환"이 생긴다(e773363 — 메뉴바만 바뀌고 실제 입력은 그대로). 런처가
+/// 앞에 있을 때 되돌리고 닫으면, 이전 앱은 활성화되면서 그 소스를 이어받는다.
+/// 그래서 다른 앱을 클릭해 런처가 닫히는 경로(이미 다른 앱이 앞)에서는 부르지 않는다.
+#[cfg(target_os = "macos")]
+pub fn restore_input_source() {
+    if cfg!(test) {
+        return;
+    }
+    use core_foundation_sys::base::{CFRelease, CFTypeRef};
+    let prev = mac_tis::PREVIOUS_SOURCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    let Some(source) = prev else {
+        return; // 바꾼 적 없음 (옵션 꺼짐, 원래 영문)
+    };
+    unsafe {
+        let source = source as mac_tis::TISInputSourceRef;
+        let status = mac_tis::TISSelectInputSource(source);
+        CFRelease(source as CFTypeRef);
+        if status == 0 {
+            tracing::debug!("macOS input source restored");
+        } else {
+            tracing::warn!("restore_input_source(macos): TISSelectInputSource failed ({status})");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac_tis {
+    use core_foundation_sys::string::CFStringRef;
+    use std::ffi::c_void;
+    use std::sync::Mutex;
+
+    pub type TISInputSourceRef = *mut c_void;
+    pub type OSStatus = i32;
+
+    /// 런처를 열기 전의 입력 소스 (retain된 TISInputSourceRef를 usize로 보관 —
+    /// 원시 포인터는 Send가 아니라 static에 둘 수 없다).
+    pub static PREVIOUS_SOURCE: Mutex<Option<usize>> = Mutex::new(None);
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        pub fn TISCopyInputSourceForLanguage(language: CFStringRef) -> TISInputSourceRef;
+        pub fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
+        pub fn TISSelectInputSource(input_source: TISInputSourceRef) -> OSStatus;
+    }
+}
+
+/// Windows는 런처 창의 IME만 닫았으므로(전역 상태 불변) 되돌릴 것이 없다.
+#[cfg(not(target_os = "macos"))]
+pub fn restore_input_source() {}
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn force_english_ime(_raw_id: u64) {
@@ -416,6 +482,7 @@ mod tests {
     fn test_platform_functions_compile() {
         let _: fn(u64) = apply_native_rounded_corners;
         let _: fn(u64) = force_english_ime;
+        let _: fn() = restore_input_source;
         let _: fn(u64) = force_foreground;
         let _: fn() -> bool = stabilize_surface_layer;
         let _: fn(u64, bool) -> bool = set_window_cloaked;

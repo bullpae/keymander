@@ -238,6 +238,10 @@ impl App {
         if self.state_dirty {
             self.window_state.save();
         }
+        // 여기서만 exit_launcher()가 아니라 iced::exit()다 — 입력 소스를 되돌리지
+        // 않는다. 포커스를 잃고 닫히는 경로라 이미 **다른 앱이 앞에 있고**, 그 상태에서
+        // TIS로 한글을 고르면 메뉴바만 바뀌고 실제 입력은 영문으로 남는 반쪽 전환이
+        // 생긴다(platform::restore_input_source 참조). 헷갈리는 반쪽보다 영문이 낫다.
         iced::exit()
     }
 }

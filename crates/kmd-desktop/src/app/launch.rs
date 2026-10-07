@@ -121,7 +121,7 @@ impl App {
                     {
                         tracing::error!("관리자 실행 실패: {e}");
                     }
-                    iced::exit()
+                    exit_launcher()
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -144,7 +144,7 @@ impl App {
                         tracing::warn!("폴더 열기 실패: {e}");
                     }
                 }
-                iced::exit()
+                exit_launcher()
             }
             ContextAction::CopyPath => {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
@@ -152,7 +152,7 @@ impl App {
                         tracing::warn!("클립보드 쓰기 실패: {e}");
                     }
                 }
-                iced::exit()
+                exit_launcher()
             }
             ContextAction::CopyName => {
                 let text = if item.kind == ItemKind::Calculator || item.kind == ItemKind::Emoji {
@@ -165,7 +165,7 @@ impl App {
                         tracing::warn!("클립보드 쓰기 실패: {e}");
                     }
                 }
-                iced::exit()
+                exit_launcher()
             }
         }
     }
@@ -235,7 +235,7 @@ impl App {
                     }
                 }
             }
-            return iced::exit();
+            return exit_launcher();
         }
 
         // 클립보드가 비어 실행할 수 없는 :t 안내 — 선택해도 아무 일도 하지 않는다
@@ -293,7 +293,7 @@ impl App {
                 self.status_message = Some(format!("터미널 실행 실패: {e}"));
                 return Task::none();
             }
-            return iced::exit();
+            return exit_launcher();
         }
 
         // 폴더 제안 항목 — Enter로 search_paths에 추가 + config 저장 (docs/15 P2)
@@ -349,7 +349,7 @@ impl App {
                         tracing::warn!("URL 열기 실패: {url} — {e}");
                     }
                 }
-                return iced::exit();
+                return exit_launcher();
             }
         }
 
@@ -366,7 +366,7 @@ impl App {
                     return Task::none();
                 }
             }
-            return iced::exit();
+            return exit_launcher();
         }
 
         let action_result = kmd_core::action::execute(&result);
@@ -400,7 +400,7 @@ impl App {
                 return Task::none();
             }
         }
-        iced::exit()
+        exit_launcher()
     }
 
     /// Ctrl+숫자/Ctrl+Shift+Enter 단축키 → ContextAction 매핑
@@ -477,7 +477,7 @@ impl App {
                 if self.state_dirty {
                     self.window_state.save();
                 }
-                iced::exit()
+                exit_launcher()
             }
             keyboard::Key::Named(keyboard::key::Named::F1) => {
                 self.query = ":keys".to_string();

@@ -199,7 +199,7 @@ impl App {
                         let _ = kmd_core::action::open_url(url);
                     }
                     tracing::info!("LLM 오토파일럿 위임: {}개 잡", plan.jobs.len());
-                    return Some(iced::exit());
+                    return Some(exit_launcher());
                 }
                 Err(e) => {
                     tracing::warn!("오토파일럿 IPC 실패 — URL 폴백: {e}");
@@ -214,7 +214,7 @@ impl App {
         for url in web::llm_plan_all_urls(&plan) {
             let _ = kmd_core::action::open_url(&url);
         }
-        Some(iced::exit())
+        Some(exit_launcher())
     }
 
     /// `@@ <프롬프트>` 이어서 질문 — 데몬에 위임. 열 URL이 없으므로 데몬
@@ -233,7 +233,7 @@ impl App {
             Ok(_) => {}
             Err(e) => tracing::warn!("이어서 질문 실패(데몬 미실행?): {e}"),
         }
-        iced::exit()
+        exit_launcher()
     }
 
     pub(super) fn handle_keymap_action(
