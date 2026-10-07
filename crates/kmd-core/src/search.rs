@@ -7,6 +7,7 @@ use nucleo::{Config as NucleoConfig, Nucleo};
 
 use crate::config::KindWeights;
 use crate::index::IndexItem;
+use crate::textenc::nfc;
 
 /// A search result wrapping an IndexItem with a relevance score
 #[derive(Debug, Clone)]
@@ -93,12 +94,12 @@ impl SearchMode {
 /// 멀티 토큰 contains 매칭으로 따로 처리한다.
 fn fuzzy_haystack(item: &IndexItem) -> String {
     let path_is_path = item.path.contains(['\\', '/']);
-    let mut text = item.name.clone();
+    let mut text = nfc(&item.name).into_owned();
     for token in item.keywords.split_whitespace() {
         let path_piece = token.contains(['\\', '/']) || (path_is_path && item.path.contains(token));
         if !path_piece {
             text.push(' ');
-            text.push_str(token);
+            text.push_str(&nfc(token));
         }
     }
     text
@@ -130,10 +131,12 @@ impl LowercaseCache {
     fn build(items: &[IndexItem]) -> Self {
         let entries = items
             .iter()
+            // NFC로 맞춘 뒤 소문자화 — macOS의 NFD 한글 파일명이 타이핑한 NFC
+            // 질의와 매칭되도록 (textenc::nfc 참조). 원본 item은 건드리지 않는다.
             .map(|item| LowercaseEntry {
-                name: item.name.to_lowercase(),
-                path: item.path.to_lowercase(),
-                keywords: item.keywords.to_lowercase(),
+                name: nfc(&item.name).to_lowercase(),
+                path: nfc(&item.path).to_lowercase(),
+                keywords: nfc(&item.keywords).to_lowercase(),
             })
             .collect();
         Self { entries }
@@ -227,6 +230,10 @@ impl SearchEngine {
         pattern: &str,
         limit: usize,
     ) -> Vec<SearchResult> {
+        // 질의도 NFC로 — 매칭 대상(LowercaseCache·fuzzy_haystack)과 같은 정규형.
+        // UI가 이 함수를 직접 부르기도 해서 search()가 아니라 여기서 한다.
+        let pattern = nfc(pattern);
+        let pattern = pattern.as_ref();
         let mut results = match mode {
             SearchMode::Fuzzy => self.search_fuzzy_with_paths(pattern, limit),
             SearchMode::Glob => self.filter_glob(pattern, limit),
@@ -666,6 +673,39 @@ mod tests {
         assert_eq!(mode, SearchMode::Fuzzy);
         assert!(!results.is_empty());
         assert_eq!(results[0].item.name, "Firefox");
+    }
+
+    /// 실사례(2026-10-07): ~/Documents/미닉스 청소기1.jpg가 `미닉스`로 0건이었다.
+    /// macOS가 파일명을 NFD(자모 분리)로 저장해 타이핑한 NFC 질의와 달랐다.
+    #[test]
+    fn nfd_파일명도_nfc_질의로_찾는다() {
+        use crate::index::{ItemKind, Source};
+        // "미닉스 청소기1.jpg" — 디스크에 실제로 있던 NFD 형태
+        let nfd_name = "\u{1106}\u{1175}\u{1102}\u{1175}\u{11A8}\u{1109}\u{1173} \
+                        \u{110E}\u{1165}\u{11BC}\u{1109}\u{1169}\u{1100}\u{1175}1.jpg";
+        let path = format!("/Users/me/Documents/{nfd_name}");
+        let mut engine = SearchEngine::with_items(
+            &KindWeights::default(),
+            vec![IndexItem {
+                name: nfd_name.to_string(),
+                path: path.clone(),
+                kind: ItemKind::File,
+                source: Source::FileProvider,
+                icon: String::new(),
+                keywords: path.clone(),
+                icon_path: None,
+            }],
+        );
+
+        for q in ["미닉스", "미닉스 청소", "청소기"] {
+            let (_, results) = engine.search(q, 10);
+            assert_eq!(results.len(), 1, "질의 {q:?}가 NFD 파일명을 못 찾음");
+            assert_eq!(results[0].item.path, path, "열 때 쓰는 경로는 원본 그대로");
+        }
+        // 반대 방향(NFD 질의)도
+        let nfd_query = "\u{1106}\u{1175}\u{1102}\u{1175}\u{11A8}\u{1109}\u{1173}";
+        let (_, results) = engine.search(nfd_query, 10);
+        assert_eq!(results.len(), 1);
     }
 
     #[test]

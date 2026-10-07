@@ -96,7 +96,7 @@ fn folder_search_with_budget(
     // 폴더 내 항목 열거 (1단계)
     // 검색어·파일명 모두 유니코드 소문자로 — 예전엔 검색어만 유니코드, 파일명은
     // ASCII 소문자라 `Ä` 같은 문자에서 어긋났다.
-    let query_lower = name_query.to_lowercase();
+    let query_lower = crate::textenc::nfc(name_query).to_lowercase();
     let listing = list_dir(dir, max_entries).unwrap_or(DirListing {
         entries: Vec::new(),
         truncated: false,
@@ -105,7 +105,8 @@ fn folder_search_with_budget(
     let mut results: Vec<SearchResult> = Vec::new();
 
     for entry in listing.entries {
-        let name_lower = entry.name.to_lowercase();
+        // macOS NFD 파일명도 NFC 질의와 맞게 (textenc::nfc)
+        let name_lower = crate::textenc::nfc(&entry.name).to_lowercase();
         if !query_lower.is_empty() && !name_lower.contains(query_lower.as_str()) {
             continue;
         }

@@ -14,6 +14,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 # 본문 인덱싱 — Windows 한국어 legacy 텍스트(EUC-KR/CP949) 디코드 폴백 (docs/15)
 encoding_rs = "0.8"
+# 파일명 NFC 정규화 — macOS는 한글 파일명을 NFD(자모 분리)로 저장하는 경우가 많아
+# 타이핑한 NFC 질의와 매칭되지 않는다 (search.rs)
+unicode-normalization = "0.1"
 
 # Config / Serialization
 serde = { version = "1", features = ["derive"] }

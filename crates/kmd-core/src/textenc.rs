@@ -5,6 +5,23 @@
 //! 깨진다. 본문 색인(`content_index`)과 셸 출력(`builtin_shell`)이 같은 규칙을
 //! 쓰도록 여기 한 곳에 둔다.
 
+/// 문자열을 NFC(완성형)로 정규화한다. 이미 NFC면 복사하지 않는다.
+///
+/// macOS는 한글 파일명을 **NFD(자모 분리)**로 저장하는 경우가 많다 — Safari
+/// 다운로드, AirDrop, HFS+ 시절 파일 등. 화면에는 똑같이 보이지만 `미닉스`(NFC,
+/// 3글자)와 디스크의 `미닉스`(NFD, 7글자)는 서로 다른 문자열이라 검색이 0건이
+/// 된다. 매칭에 쓰는 문자열은 양쪽 다 이 함수를 거친다. **경로 자체는 바꾸지
+/// 않는다** — 파일을 열 때는 원래 바이트가 필요하다(Linux는 NFC/NFD를 다른
+/// 이름으로 본다).
+pub fn nfc(s: &str) -> std::borrow::Cow<'_, str> {
+    use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
+    if is_nfc_quick(s.chars()) == IsNormalized::Yes {
+        std::borrow::Cow::Borrowed(s)
+    } else {
+        std::borrow::Cow::Owned(s.nfc().collect())
+    }
+}
+
 /// 디코딩 결과.
 pub struct Decoded {
     pub text: String,
@@ -51,6 +68,18 @@ pub fn decode_command_output(bytes: Vec<u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfd_한글은_nfc로_합친다() {
+        let nfd = "\u{1106}\u{1175}\u{1102}\u{1175}\u{11A8}\u{1109}\u{1173}"; // 미닉스 (NFD)
+        assert_ne!(nfd, "미닉스", "화면엔 같아 보여도 다른 문자열이다");
+        assert_eq!(nfc(nfd), "미닉스");
+        assert!(
+            matches!(nfc("미닉스"), std::borrow::Cow::Borrowed(_)),
+            "NFC는 복사 없음"
+        );
+        assert_eq!(nfc("cafe\u{301}"), "café", "라틴 결합 문자도");
+    }
 
     #[test]
     fn utf8은_그대로() {
