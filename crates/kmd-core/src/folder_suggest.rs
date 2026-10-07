@@ -76,20 +76,6 @@ fn home_dir() -> Option<PathBuf> {
     dirs::home_dir().filter(|p| p.is_dir())
 }
 
-/// `/Volumes/Macintosh HD` 같은 **부팅 디스크 별칭**인가.
-///
-/// macOS는 부팅 볼륨을 `/Volumes/<이름> -> /` 심볼릭 링크로 둔다. 외장 디스크는
-/// 실제 마운트 지점(디렉터리)이다. 이걸 외장 볼륨으로 보고 훑으면 시스템 디스크
-/// 전체가 후보가 되어 `/private`(OS가 계속 파일을 쓰는 곳)를 "검색 범위에
-/// 추가하라"고 제안했다(2026-10-07 실사례). 홈은 이미 따로 후보에 있다.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn is_boot_volume_alias(p: &Path) -> bool {
-    let is_link = std::fs::symlink_metadata(p)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false);
-    is_link || p.canonicalize().is_ok_and(|c| c == Path::new("/"))
-}
-
 /// 제안 후보를 찾을 루트 목록.
 ///
 /// 홈 직계만 보면 **홈 밖에서 일하는 사용자에게는 아무것도 제안하지 못한다.**
@@ -102,42 +88,8 @@ fn candidate_roots() -> Vec<PathBuf> {
     if let Some(home) = home_dir() {
         roots.push(home);
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        for letter in 'A'..='Z' {
-            let drive = PathBuf::from(format!("{letter}:\\"));
-            if drive.is_dir() {
-                roots.push(drive);
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(entries) = std::fs::read_dir("/Volumes") {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() && !is_boot_volume_alias(&p) {
-                    roots.push(p);
-                }
-            }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        for mp in ["/mnt", "/media"] {
-            if let Ok(entries) = std::fs::read_dir(mp) {
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if p.is_dir() {
-                        roots.push(p);
-                    }
-                }
-            }
-        }
-    }
+    // 드라이브·외장 볼륨 — 색인과 같은 목록(fsutil::volume_roots, 부팅 디스크 별칭 제외)
+    roots.extend(crate::fsutil::volume_roots());
 
     roots.sort();
     roots.dedup();
@@ -777,7 +729,7 @@ mod tests {
         // 부팅 디스크(`/`)나 그 별칭(`/Volumes/Macintosh HD`)은 후보가 아니다
         for r in &roots {
             assert!(
-                !is_boot_volume_alias(r),
+                !crate::fsutil::is_boot_volume_alias(r),
                 "부팅 디스크 별칭이 후보에 있다: {}",
                 r.display()
             );
@@ -790,11 +742,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let alias = dir.path().join("Macintosh HD");
         std::os::unix::fs::symlink("/", &alias).unwrap();
-        assert!(is_boot_volume_alias(&alias));
+        assert!(crate::fsutil::is_boot_volume_alias(&alias));
         let real = dir.path().join("USB");
         std::fs::create_dir(&real).unwrap();
         assert!(
-            !is_boot_volume_alias(&real),
+            !crate::fsutil::is_boot_volume_alias(&real),
             "실제 마운트 지점(디렉터리)은 후보다"
         );
     }

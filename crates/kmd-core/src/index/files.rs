@@ -108,47 +108,12 @@ fn scan_directories(config: &ProviderConfig) -> Vec<(PathBuf, usize)> {
         }
     }
 
-    // Auto-discover drive roots if enabled
+    // Auto-discover drive roots if enabled — 폴더 제안과 같은 목록
+    // (fsutil::volume_roots: macOS 부팅 디스크 별칭 제외, Windows C~Z)
     if config.scan_drives {
-        #[cfg(target_os = "windows")]
-        {
-            for letter in 'C'..='Z' {
-                let drive = PathBuf::from(format!("{}:\\", letter));
-                if drive.is_dir() && !dirs.iter().any(|(d, _)| d == &drive) {
-                    dirs.push((drive, config.drive_scan_depth));
-                }
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let volumes = PathBuf::from("/Volumes");
-            if volumes.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&volumes) {
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        if p.is_dir() && !dirs.iter().any(|(d, _)| d == &p) {
-                            dirs.push((p, config.drive_scan_depth));
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            for mount_point in &["/mnt", "/media"] {
-                let mp = PathBuf::from(mount_point);
-                if mp.is_dir() {
-                    if let Ok(entries) = std::fs::read_dir(&mp) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if p.is_dir() && !dirs.iter().any(|(d, _)| d == &p) {
-                                dirs.push((p, config.drive_scan_depth));
-                            }
-                        }
-                    }
-                }
+        for root in crate::fsutil::volume_roots() {
+            if !dirs.iter().any(|(d, _)| d == &root) {
+                dirs.push((root, config.drive_scan_depth));
             }
         }
     }

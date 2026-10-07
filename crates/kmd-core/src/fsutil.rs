@@ -57,6 +57,62 @@ pub fn is_hidden_walk_entry(entry: &walkdir::DirEntry) -> bool {
     false
 }
 
+/// 이 컴퓨터의 드라이브·외장 볼륨 루트 (홈은 포함하지 않는다).
+///
+/// - Windows: `C:\` ~ `Z:\` 중 존재하는 것. A·B는 플로피 자리라 조회가 멈출 수 있어 뺀다
+/// - macOS: `/Volumes/*` — 단 부팅 디스크 별칭(`/Volumes/Macintosh HD -> /`)은 뺀다
+/// - Linux: `/mnt/*`, `/media/*`
+///
+/// 예전엔 색인(`index/files.rs`)과 폴더 제안(`folder_suggest.rs`)에 두 벌이 있었고,
+/// 부팅 디스크 필터는 폴더 제안 쪽에만 들어가 있었다(9dbe15c) — 색인에서
+/// `scan_drives`를 켜면 macOS 시스템 디스크 전체를 훑었다.
+pub fn volume_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    for letter in 'C'..='Z' {
+        let drive = std::path::PathBuf::from(format!("{letter}:\\"));
+        if drive.is_dir() {
+            roots.push(drive);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let parents: &[&str] = if cfg!(target_os = "macos") {
+            &["/Volumes"]
+        } else {
+            &["/mnt", "/media"]
+        };
+        for parent in parents {
+            let Ok(entries) = std::fs::read_dir(parent) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() && !is_boot_volume_alias(&p) {
+                    roots.push(p);
+                }
+            }
+        }
+    }
+
+    roots
+}
+
+/// `/Volumes/Macintosh HD` 같은 **부팅 디스크 별칭**인가.
+///
+/// macOS는 부팅 볼륨을 `/Volumes/<이름> -> /` 심볼릭 링크로 둔다. 외장 디스크는
+/// 실제 마운트 지점(디렉터리)이다. 이걸 외장 볼륨으로 보고 훑으면 시스템 디스크
+/// 전체가 후보가 되어 `/private`(OS가 계속 파일을 쓰는 곳)를 "검색 범위에
+/// 추가하라"고 제안했다(2026-10-07 실사례).
+pub fn is_boot_volume_alias(p: &Path) -> bool {
+    let is_link = std::fs::symlink_metadata(p)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    is_link || p.canonicalize().is_ok_and(|c| c == Path::new("/"))
+}
+
 /// `path`가 `root` 아래(또는 같은 곳)인가.
 ///
 /// Windows 경로는 대소문자를 구분하지 않는데 `Path::starts_with`는 구분한다.
