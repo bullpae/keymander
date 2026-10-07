@@ -330,25 +330,32 @@ OS 특성상 정당 / 통합 가능한 복붙 / **같아야 하는데 갈라진 
 | # | 무엇 | 확인 | 상태 |
 |---|---|---|---|
 | G1 | 시스템 명령 path에 프로그램 이름만 → 색인 중복 제거로 **재시작·로그아웃·잠금이 검색에서 사라짐**(모든 OS) | 설치본 실측 0건 | ✅ `ac8c23b` |
-| G2 | 훅 상실 시 macOS만 주입해 둔 chord 트리거를 해제하지 않음 → Option이 눌린 채 남을 수 있음 (`macos.rs:1027` vs `windows.rs:1073`) | 코드 확인 | ⬜ |
-| G3 | 데몬 종료 시 macOS만 tap-hold hold 수정자(CapsLock→Ctrl)를 해제하지 않음 (`macos.rs:1484` vs `windows.rs:1604`) | 코드 확인 | ⬜ |
-| G4 | 훅 상실 시 **양쪽 모두** 마우스 StopAll을 보내지 않음 → 포인터가 계속 움직일 수 있음 | 코드 추론 | ⬜ |
-| G5 | macOS 서킷브레이커가 `saturating_sub` → 가동 약 49.7일 후 tick 랩어라운드로 오판(엔진·Windows는 wrapping) | 코드 확인 | ⬜ |
-| G6 | 파일 provider마다 설정 해석이 다름 — mdfind/locate는 `ignore_patterns`·숨김·`search_depth` 무시, mdfind는 첫 search_path만 | 조사 보고, **실측 필요** | ⬜ |
-| G7 | Windows 앱 이름 중복 제거가 한쪽은 소문자·한쪽은 원본 대소문자 → 같은 앱 2번 | 조사 보고 | ⬜ |
-| G8 | Linux 앱 path에 Exec 명령줄 저장 → `xdg-open <명령줄>`로 실행 실패 | 조사 보고 | ⬜ |
-| G9 | Windows kanata 생존 확인이 `tasklist` 출력 부분 문자열 매칭 → 오탐(single_instance는 정확한 API) | 조사 보고 | ⬜ |
-| G10 | 런처의 영문 전환: Windows는 런처 창 IME만, macOS는 **시스템 전역 입력 소스**를 바꾸고 복원 안 함 | 조사 보고 — 의도인지 결정 필요 | ❓ |
-| G11 | 볼륨 열거가 `files.rs`·`folder_suggest.rs` 두 벌 — 부팅 디스크 별칭 필터는 후자만(`9dbe15c`) | 코드 확인 | ⬜ |
-| G12 | Linux 자동 시작 유닛 `ExecStart` 경로 따옴표 없음, `is_installed`는 파일 존재만 확인 | 조사 보고 | ⬜ |
+| G2 | 훅 상실 시 macOS만 주입해 둔 chord 트리거를 해제하지 않음 → Option이 눌린 채 남을 수 있음 (`macos.rs:1027` vs `windows.rs:1073`) | 코드 확인 | ✅ `8c235e4` engine::on_hook_lost |
+| G3 | 데몬 종료 시 macOS만 tap-hold hold 수정자(CapsLock→Ctrl)를 해제하지 않음 (`macos.rs:1484` vs `windows.rs:1604`) | 코드 확인 | ✅ `8c235e4` |
+| G4 | 훅 상실 시 **양쪽 모두** 마우스 StopAll을 보내지 않음 → 포인터가 계속 움직일 수 있음 | 코드 추론 | ✅ `8c235e4` |
+| G5 | macOS 서킷브레이커가 `saturating_sub` → 가동 약 49.7일 후 tick 랩어라운드로 오판(엔진·Windows는 wrapping) | 코드 확인 | ✅ `8c235e4` |
+| G6 | 파일 provider마다 설정 해석이 다름 — mdfind/locate는 `ignore_patterns`·숨김·`search_depth` 무시, mdfind는 첫 search_path만 | 코드 확인 + 실측(파일 868→888) | ✅ `de3f99b` apply_common_rules |
+| G7 | Windows 앱 이름 중복 제거가 한쪽은 소문자·한쪽은 원본 대소문자 → 같은 앱 2번 | 코드 확인 | ✅ `fc78d2b` |
+| G8 | Linux 앱 path에 Exec 명령줄 저장 → `xdg-open <명령줄>`로 실행 실패 | 코드 확인 | ✅ `fc78d2b`·`d08b514` |
+| G9 | Windows kanata 생존 확인이 `tasklist` 출력 부분 문자열 매칭 → 오탐(single_instance는 정확한 API) | 코드 확인 — 오탐은 드묾, 중복이 본질 | ✅ `fc78d2b` |
+| G10 | 런처의 영문 전환: Windows는 런처 창 IME만, macOS는 **시스템 전역 입력 소스**를 바꾸고 복원 안 함 | 사용자 결정: 통일 | ✅ `351ddbc` 닫을 때 복원 — **실기기 타이핑 확인 필요** |
+| G11 | 볼륨 열거가 `files.rs`·`folder_suggest.rs` 두 벌 — 부팅 디스크 별칭 필터는 후자만(`9dbe15c`) | 코드 확인 | ✅ `d0f7753` fsutil::volume_roots |
+| G12 | Linux 자동 시작 유닛 `ExecStart` 경로 따옴표 없음, `is_installed`는 파일 존재만 확인 | 코드 확인 | ✅ `fc78d2b` |
 | (추정) | Windows는 수정자 keyup 누락 보정(sync) 없음 / macOS는 SendCombo·리맵에 물리 Shift 병합 안 함 | 추정, 실기기 필요 | ⬜ |
 
 ### 통합 가능한 중복 (상위)
 
 - 데몬 `KeyDecision → 주입` 분기: macOS 안에서도 두 벌(`1112-1170`, `1176-1235`) + Windows → mod.rs 순수 함수 `plan()`
-- 훅 상실·종료 복구 → 엔진 `on_hook_lost() -> Recovery { release, stop_mouse }` (G2·G3·G4 동시 해결)
+- ~~훅 상실·종료 복구~~ ✅ `8c235e4` 엔진 `on_hook_lost()`
 - 마우스 잡 디스패치·일회성 표 → `mouse.rs`
-- `CREATE_NO_WINDOW` 상수·블록 13곳 → `process::hidden_command()`
-- 프로세스 생존 확인 2벌, 인스턴스 잠금 3경로 → `proc::is_alive`, fs2 잠금
+- ~~`CREATE_NO_WINDOW` 상수·블록 13곳~~ ✅ `a652f98` `process::HideConsole`
+- 프로세스 생존 확인 2벌 ✅ `fc78d2b` / 인스턴스 잠금 3경로 → fs2 잠금 ⬜
 - launchd 코드가 `autostart.rs`·`src/cmd/daemon.rs` 두 크레이트에
 - 시스템 명령 표 3벌 → QuickCmd처럼 공통 표 + OS별 명령
+
+**교훈 6**: macOS에서 clippy가 통과해도 Linux 전용 코드는 검사되지 않는다 —
+`fc78d2b`의 Linux `ItemKind::App` 분기가 CI(Linux clippy)에서만 `unreachable
+pattern`으로 걸렸다. 로컬 교차 검사는 SQLite C 빌드 때문에 안 되므로, OS 전용
+코드를 고친 커밋은 **CI 결과까지 보고** 다음으로 넘어간다. 또 하나 — 부분 커밋할
+때 파일 단위로 add하면 같은 파일의 다른 변경이 딸려 간다(`d08b514`가 process.rs
+없이 커밋돼 단독 빌드 불가). 독립 변경은 작업 트리를 비운 뒤 시작한다.
