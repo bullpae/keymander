@@ -116,15 +116,22 @@ fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
 /// 원인을 찾기 어렵다. config의 `search_paths = ["C:/work"]`처럼 `/`로 적은
 /// 경로, `~/` 확장 결과 등 섞인 경로가 들어올 길이 여럿이라 여는 쪽에서 막는다.
 ///
+/// 드라이브 상대 경로(`d:`, `d:My Data`)도 같은 증상이다 — "D의 현재 폴더"
+/// 기준이라 탐색기가 알아보지 못한다. 루트 기준(`d:\`, `d:\My Data`)으로 본다.
+///
 /// 드라이브 문자(`C:`)나 UNC(`\\`, `//`)로 시작할 때만 바꾼다 —
-/// `ms-settings:` 같은 URI나 셸 명령에는 손대지 않는다.
+/// `ms-settings:` 같은 URI(스킴이 두 글자 이상)나 셸 명령에는 손대지 않는다.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn explorer_path(target: &str) -> std::borrow::Cow<'_, str> {
     let b = target.as_bytes();
-    let drive =
-        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\');
+    let has_drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let drive_relative = has_drive && !matches!(b.get(2), Some(b'/' | b'\\'));
     let unc = target.starts_with(r"\\") || target.starts_with("//");
-    if (drive || unc) && target.contains('/') {
+
+    if drive_relative {
+        let rest = target[2..].replace('/', r"\");
+        std::borrow::Cow::Owned(format!(r"{}\{rest}", &target[..2]))
+    } else if (has_drive || unc) && target.contains('/') {
         std::borrow::Cow::Owned(target.replace('/', r"\"))
     } else {
         std::borrow::Cow::Borrowed(target)
@@ -197,6 +204,13 @@ mod tests {
             "shell:::{20D04FE0}/x"
         );
         assert_eq!(explorer_path("foo/bar"), "foo/bar");
-        assert_eq!(explorer_path("C:"), "C:");
+    }
+
+    #[test]
+    fn 드라이브_상대_경로는_루트_기준으로() {
+        // `d:My Data`는 "D의 현재 폴더" 기준이라 탐색기가 문서 폴더를 열었다
+        assert_eq!(explorer_path("C:"), r"C:\");
+        assert_eq!(explorer_path("d:My Data"), r"d:\My Data");
+        assert_eq!(explorer_path("d:My Data/sub"), r"d:\My Data\sub");
     }
 }

@@ -238,8 +238,23 @@ fn native_separators(s: &str) -> String {
     }
 }
 
+/// `/`→`\` 변환 + 드라이브 상대 경로를 루트 기준으로 보정한다.
+///
+/// `d:`는 Windows에서 "D 드라이브의 **현재 폴더**"라는 뜻이라, `:f d:`의 하위
+/// 항목이 `d:My Data`처럼 만들어졌다. 탐색기는 이런 경로를 알아보지 못하고
+/// 기본 폴더(문서)를 열어, 어떤 폴더를 골라도 엉뚱한 곳이 열렸다. 런처에는
+/// 드라이브별 현재 폴더라는 개념이 의미 없으니 `d:` → `d:\`, `d:temp` →
+/// `d:\temp`로 본다.
 fn to_windows_separators(s: &str) -> String {
-    s.replace('/', "\\")
+    let s = s.replace('/', "\\");
+    let b = s.as_bytes();
+    let drive_relative =
+        b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && b.get(2) != Some(&b'\\');
+    if drive_relative {
+        format!("{}\\{}", &s[..2], &s[2..])
+    } else {
+        s
+    }
 }
 
 fn help_item() -> SearchResult {
@@ -377,6 +392,35 @@ mod tests {
         assert_eq!(
             to_windows_separators(r"C:\Users\me/Documents/x"),
             r"C:\Users\me\Documents\x"
+        );
+    }
+
+    #[test]
+    fn 드라이브만_쓰면_루트로_본다() {
+        // `d:`는 "D의 현재 폴더"라 하위 항목이 `d:My Data`가 되어 탐색기가
+        // 기본 폴더(문서)를 열던 회귀 방지
+        assert_eq!(to_windows_separators("d:"), r"d:\");
+        assert_eq!(to_windows_separators("D:temp"), r"D:\temp");
+        assert_eq!(to_windows_separators("d:/Temp"), r"d:\Temp");
+        assert_eq!(to_windows_separators(r"d:\Temp"), r"d:\Temp");
+        // 드라이브 문자가 아닌 것은 그대로
+        assert_eq!(to_windows_separators(r"\\server\share"), r"\\server\share");
+        assert_eq!(to_windows_separators("~"), "~");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn 드라이브_루트의_하위_항목은_절대경로() {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let results = folder_search_results(&format!(":f {drive}"), false);
+        let dir = results
+            .iter()
+            .find(|r| r.item.kind == ItemKind::Directory)
+            .expect("시스템 드라이브 루트에 폴더가 있어야 한다");
+        assert!(
+            dir.item.path.starts_with(&format!("{drive}\\")),
+            "드라이브 상대 경로가 되면 안 됨: {}",
+            dir.item.path
         );
     }
 
