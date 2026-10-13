@@ -132,14 +132,22 @@ impl Compositor {
 
                 log::info!("Available alpha modes: {alpha_modes:#?}");
 
+                // [keymander patch] PreMultiplied 를 PostMultiplied 보다 먼저 고른다.
+                //
+                // iced 셰이더는 premultiply 된 색을 PREMULTIPLIED_ALPHA_BLENDING 으로
+                // 그리므로 PreMultiplied 가 정확한 모드다. 업스트림 순서대로
+                // PostMultiplied 를 고르면 DX12 DirectComposition 스왑체인에
+                // DXGI_ALPHA_MODE_STRAIGHT 가 넘어가 CreateSwapChainForComposition 이
+                // DXGI_ERROR_INVALID_CALL(0x887A0001)로 실패한다. Metal 은
+                // [Opaque, PostMultiplied] 만 보고하므로 macOS 동작은 그대로다.
                 let preferred_alpha = if alpha_modes
-                    .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
-                {
-                    wgpu::CompositeAlphaMode::PostMultiplied
-                } else if alpha_modes
                     .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
                 {
                     wgpu::CompositeAlphaMode::PreMultiplied
+                } else if alpha_modes
+                    .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+                {
+                    wgpu::CompositeAlphaMode::PostMultiplied
                 } else {
                     wgpu::CompositeAlphaMode::Auto
                 };
