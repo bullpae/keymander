@@ -107,6 +107,16 @@ fn init_window_transparency(config: &kmd_core::Config) {
         std::env::set_var("WGPU_DX12_PRESENTATION_SYSTEM", "visual");
         tracing::info!("DX12 presentation = DirectComposition visual (투명 창 지원)");
     }
+
+    // Windows: 백엔드를 DX12 로 고정한다. 위 DirectComposition 설정은 DX12 에만
+    // 적용되는데, wgpu 는 Vulkan → DX12 순으로 어댑터를 모은 뒤 외장 GPU 를
+    // 우선하므로 NVIDIA 외장 GPU(MX250 등)가 있으면 Vulkan 을 잡는다. NVIDIA 의
+    // Windows Vulkan 서피스는 alpha_modes=[Opaque] 라 빈 영역이 검게 칠해진다.
+    #[cfg(target_os = "windows")]
+    if transparent && std::env::var_os("WGPU_BACKEND").is_none() {
+        std::env::set_var("WGPU_BACKEND", "dx12");
+        tracing::info!("wgpu backend = DX12 (Vulkan 우회 — 투명 창은 DX12 에서만 보장)");
+    }
 }
 
 /// config.general.renderer → iced 렌더러 선택 환경변수.
@@ -146,6 +156,9 @@ fn main() -> iced::Result {
         tracing_subscriber::EnvFilter::from_default_env()
             .add_directive("kmd_desktop=info".parse().unwrap())
             .add_directive("kmd_core=info".parse().unwrap())
+            // 선택된 GPU 어댑터·백엔드·alpha 모드 — 투명 창이 검게 나오는
+            // 환경을 로그만으로 진단하려면 필요하다.
+            .add_directive("iced_wgpu::window::compositor=info".parse().unwrap())
     };
 
     let log_file = fs::create_dir_all(&log_dir).ok().and_then(|_| {
