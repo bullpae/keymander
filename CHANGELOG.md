@@ -5,6 +5,19 @@ All notable changes to keymander are documented here.
 ## [Unreleased]
 
 ### Fixed
+- **winget으로 업그레이드할 때마다 설정과 실행 이력이 사라지던 문제.** winget
+  설치본은 포터블 zip을 그대로 써서 데이터가 설치 폴더 안 `kmd-data\`에
+  있었는데, winget은 업그레이드 때 그 폴더를 통째로 지운다. 이제 winget에는
+  `kmd-data`가 없는 전용 zip(`keymander-winget-*.zip`)을 올리고, 데이터는 표준
+  위치 `%APPDATA%\kmd`에 둔다. 처음 실행할 때는 함께 들어 있는
+  `config.default.toml`(키맵 프리셋)을 설정으로 복사하므로 레이어 프리셋은
+  그대로다. USB용 포터블 zip은 바뀌지 않는다.
+  - **v0.16.11 이하에서 올릴 때만** 업그레이드 전에 `kmd-data`를 직접
+    옮겨야 한다. winget이 새 버전을 실행하기 전에 폴더부터 지우기 때문이다.
+    명령은 README의 "Windows (winget)" 절에 있다.
+- winget 설치본 판별을 설치 경로 대신 exe 옆의 `.channel` 파일로 한다.
+  `winget install --location`으로 다른 곳에 설치해도 자동 시작 기본 등록과
+  `kmd upgrade`가 winget 설치본으로 알아본다.
 - **Windows에서 입력창 아래 빈 영역이 검게 보이던 문제** (NVIDIA 외장 GPU
   노트북 등). 원인은 두 가지가 겹쳐 있었다.
   - wgpu는 Vulkan → DX12 순으로 어댑터를 모아 외장 GPU를 우선하므로, NVIDIA

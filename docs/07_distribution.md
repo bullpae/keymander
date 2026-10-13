@@ -174,8 +174,8 @@ v0.16.3에서 성공한 커밋 `4ffc788`로 **SHA 고정**했다. 같은 위험�
 ```bash
 GITHUB_TOKEN=$(gh auth token) KOMAC_FORK_OWNER=bullpae \
 komac update bullpae.keymander --version <VER> \
-  --urls https://github.com/bullpae/keymander/releases/download/v<VER>/keymander-portable-x86_64-pc-windows-msvc.zip \
-         https://github.com/bullpae/keymander/releases/download/v<VER>/keymander-portable-aarch64-pc-windows-msvc.zip \
+  --urls https://github.com/bullpae/keymander/releases/download/v<VER>/keymander-winget-x86_64-pc-windows-msvc.zip \
+         https://github.com/bullpae/keymander/releases/download/v<VER>/keymander-winget-aarch64-pc-windows-msvc.zip \
   --submit
 ```
 

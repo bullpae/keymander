@@ -40,12 +40,12 @@ asset_sha() {
         sed 's/^sha256://' | tr '[:lower:]' '[:upper:]'
 }
 
-SHA_X64="$(asset_sha "keymander-portable-x86_64-pc-windows-msvc.zip")"
-SHA_ARM64="$(asset_sha "keymander-portable-aarch64-pc-windows-msvc.zip")"
+SHA_X64="$(asset_sha "keymander-winget-x86_64-pc-windows-msvc.zip")"
+SHA_ARM64="$(asset_sha "keymander-winget-aarch64-pc-windows-msvc.zip")"
 RELEASE_DATE="$(gh api "repos/$REPO/releases/tags/v$VERSION" --jq '.published_at[:10]')"
 
 [ -n "$SHA_X64" ] && [ -n "$SHA_ARM64" ] || {
-    echo "✗ v$VERSION 릴리스에서 Windows 포터블 zip을 찾지 못했습니다" >&2
+    echo "✗ v$VERSION 릴리스에서 Windows winget zip을 찾지 못했습니다" >&2
     exit 1
 }
 
@@ -69,10 +69,10 @@ NestedInstallerFiles:
 ReleaseDate: $RELEASE_DATE
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/$REPO/releases/download/v$VERSION/keymander-portable-x86_64-pc-windows-msvc.zip
+  InstallerUrl: https://github.com/$REPO/releases/download/v$VERSION/keymander-winget-x86_64-pc-windows-msvc.zip
   InstallerSha256: $SHA_X64
 - Architecture: arm64
-  InstallerUrl: https://github.com/$REPO/releases/download/v$VERSION/keymander-portable-aarch64-pc-windows-msvc.zip
+  InstallerUrl: https://github.com/$REPO/releases/download/v$VERSION/keymander-winget-aarch64-pc-windows-msvc.zip
   InstallerSha256: $SHA_ARM64
 ManifestType: installer
 ManifestVersion: $SCHEMA

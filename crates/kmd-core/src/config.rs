@@ -725,6 +725,11 @@ impl Config {
     /// Load config from a directory (reads config.toml)
     pub fn load(config_dir: &Path) -> Result<Self, ConfigError> {
         let config_path = config_dir.join(crate::CONFIG_FILENAME);
+        if !config_path.exists() {
+            if let Some(exe_dir) = crate::portable::exe_dir() {
+                seed_config(&config_path, &exe_dir);
+            }
+        }
         let mut config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
                 .map_err(|e| ConfigError::Io(config_path.clone(), e))?;
@@ -1188,6 +1193,28 @@ fn merge_table(old: &mut toml_edit::Table, new: &toml_edit::Table) {
     }
 }
 
+/// 배포본이 exe 옆에 두는 첫 실행용 설정 (플랫폼 키맵 프리셋 포함).
+pub const SEED_CONFIG_FILENAME: &str = "config.default.toml";
+
+/// 설정 파일이 아직 없으면 exe 옆의 [`SEED_CONFIG_FILENAME`]을 복사해 둔다.
+///
+/// winget 설치본은 데이터를 패키지 폴더(`kmd-data\`)가 아닌 표준 위치에 둔다 —
+/// winget은 업그레이드 때 패키지 폴더를 통째로 지워서 설정·이력이 사라졌다.
+/// 그런데 표준 위치에서 설정 없이 시작하면 `Config::default()`라 포터블 zip이
+/// 주던 mouse/nav 레이어 프리셋이 빠진다. 그 프리셋을 처음 한 번만 심는다.
+/// 이후로는 사용자의 파일이므로 다시 덮어쓰지 않는다. 실패해도 기본값으로
+/// 계속 동작하면 되므로 오류는 삼킨다.
+fn seed_config(config_path: &Path, exe_dir: &Path) {
+    let seed = exe_dir.join(SEED_CONFIG_FILENAME);
+    let Ok(content) = std::fs::read_to_string(&seed) else {
+        return;
+    };
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = write_atomic(config_path, &content);
+}
+
 /// 임시 파일 → flush/sync → rename 으로 원자적으로 쓴다.
 ///
 /// 두 가지를 막는다.
@@ -1475,6 +1502,30 @@ mod tests {
     // save()는 메모리 전체를 쓰므로, 오래 열어 둔 창이 저장하면 그 사이 다른
     // 곳에서 바뀐 값까지 되돌린다. update_and_save는 저장 직전에 파일을 다시
     // 읽어 변경분만 얹는다.
+
+    #[test]
+    fn 설정이_없으면_배포본의_시드를_한_번만_심는다() {
+        let exe_dir = tempfile::tempdir().unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let path = cfg_dir.path().join(CONFIG_FILENAME);
+
+        // 시드가 없으면 아무것도 만들지 않는다
+        seed_config(&path, exe_dir.path());
+        assert!(!path.exists());
+
+        std::fs::write(
+            exe_dir.path().join(SEED_CONFIG_FILENAME),
+            "[general]\ntheme = \"nord\"\n",
+        )
+        .unwrap();
+        seed_config(&path, exe_dir.path());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("nord"));
+
+        // 이미 사용자 설정이 있으면 Config::load가 시드를 다시 심지 않는다
+        std::fs::write(&path, "[general]\ntheme = \"snow\"\n").unwrap();
+        let loaded = Config::load(cfg_dir.path()).unwrap();
+        assert_eq!(loaded.general.theme, "snow");
+    }
 
     #[test]
     fn 변경분만_적용해_다른_곳의_수정을_보존한다() {

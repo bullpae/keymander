@@ -32,12 +32,29 @@ pub fn is_portable() -> bool {
     portable_data_dir().map(|d| d.is_dir()).unwrap_or(false)
 }
 
-/// winget 설치본인가 — `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<id>_...\`.
+/// 배포 채널 표시 파일 — exe 옆에 두고 내용으로 채널을 적는다 (`winget`).
 ///
-/// winget zip에는 `kmd-data\`가 들어 있어 [`is_portable`]이 참이 되지만, 실제로는
-/// 한 PC에 설치된 앱이다. USB용 포터블과 구분해야 하는 곳(자동 시작 등록,
-/// `kmd upgrade`)에서 쓴다.
+/// winget 전용 zip에만 들어 있다. 설치 위치(`--location`, portable 루트 변경,
+/// 관리자 설치)와 상관없이 채널을 알 수 있는 유일한 신호다.
+pub const CHANNEL_FILE: &str = ".channel";
+
+/// exe 옆의 [`CHANNEL_FILE`]에 적힌 배포 채널 (없으면 `None`)
+pub fn install_channel(exe: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(exe.parent()?.join(CHANNEL_FILE)).ok()?;
+    let channel = text.trim().to_ascii_lowercase();
+    (!channel.is_empty()).then_some(channel)
+}
+
+/// winget 설치본인가.
+///
+/// winget 설치본은 USB용 포터블과 구분해야 한다(자동 시작 등록, `kmd upgrade`).
+/// 1. winget 전용 zip의 [`CHANNEL_FILE`] — 정본
+/// 2. 경로 `\Microsoft\WinGet\Packages\` — 표시 파일이 없던 v0.16.12 이전
+///    설치본용 보조 판별. 기본 설치 위치에서만 맞는다
 pub fn is_winget_install(exe: &std::path::Path) -> bool {
+    if install_channel(exe).as_deref() == Some("winget") {
+        return true;
+    }
     exe.to_string_lossy()
         .to_lowercase()
         .replace('/', "\\")
@@ -94,6 +111,21 @@ mod tests {
         assert!(!is_winget_install(Path::new(
             r"O:\repo\keymander-cli\target\debug\kmd.exe"
         )));
+    }
+
+    #[test]
+    fn 채널_표시_파일이_있으면_어디에_설치돼도_winget() {
+        // `winget install --location D:\Apps\...` 처럼 기본 경로가 아니어도 판별돼야 한다
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("kmd.exe");
+        assert!(!is_winget_install(&exe), "표시 파일 없으면 경로로만 판단");
+
+        std::fs::write(dir.path().join(CHANNEL_FILE), "winget\r\n").unwrap();
+        assert_eq!(install_channel(&exe).as_deref(), Some("winget"));
+        assert!(is_winget_install(&exe));
+
+        std::fs::write(dir.path().join(CHANNEL_FILE), "portable").unwrap();
+        assert!(!is_winget_install(&exe), "다른 채널은 winget이 아니다");
     }
 
     #[test]

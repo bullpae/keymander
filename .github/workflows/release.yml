@@ -260,11 +260,31 @@ jobs:
         if: runner.os == 'Windows'
         run: 7z a keymander-portable-${{ matrix.target }}.zip keymander
 
+      # winget 전용 zip — 포터블과 같은 바이너리지만 `kmd-data\`를 넣지 않는다.
+      # winget은 업그레이드 때 패키지 폴더를 통째로 지우므로, 그 안에 데이터를
+      # 두면 설정·실행 이력이 매번 사라졌다. kmd-data가 없으면 앱은 표준 위치
+      # (%APPDATA%\kmd)를 쓰고, 첫 실행 때 config.default.toml(키맵 프리셋)을 심는다.
+      # `.channel` = 채널 표시(자동 시작·kmd upgrade가 winget 설치본을 알아보는 신호).
+      # 최상위 `keymander\` 구조는 그대로 — 매니페스트의 RelativeFilePath가 이를 가리킨다.
+      - name: Package winget zip (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          WG="winget-stage/keymander"
+          mkdir -p "$WG"
+          cp keymander/kmd.exe keymander/kmd-desktop.exe keymander/kmd-daemon.exe keymander/README.txt "$WG/"
+          cp keymander/kmd-data/config.toml "$WG/config.default.toml"
+          printf 'winget\n' > "$WG/.channel"
+          (cd winget-stage && 7z a ../keymander-winget-${{ matrix.target }}.zip keymander)
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: keymander-portable-${{ matrix.target }}
-          path: keymander-portable-${{ matrix.target }}.*
+          path: |
+            keymander-portable-${{ matrix.target }}.*
+            keymander-winget-${{ matrix.target }}.zip
+          if-no-files-found: error
 
   build-packages:
     name: Linux Packages (deb/rpm)
@@ -435,6 +455,7 @@ jobs:
         if: steps.winget.outputs.has == 'true'
         with:
           identifier: bullpae.keymander
-          installers-regex: 'keymander-portable-(x86_64|aarch64)-pc-windows-msvc\.zip$'
+          # winget 전용 zip(kmd-data 없음) — build-bundle의 "Package winget zip" 참조
+          installers-regex: 'keymander-winget-(x86_64|aarch64)-pc-windows-msvc\.zip$'
           max-versions-to-keep: 5
           token: ${{ secrets.WINGET_GITHUB_TOKEN }}

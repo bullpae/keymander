@@ -256,6 +256,21 @@ On Windows and Linux, the daemon registers itself to start at login the first
 time it runs. Run `kmd daemon uninstall` to turn that off; once you have, it
 won't be re-enabled.
 
+Since v0.16.12 the winget install keeps config and history in `%APPDATA%\kmd`,
+outside the package folder. Earlier versions stored them in `kmd-data\` inside
+the package folder, and winget deletes that folder on every upgrade, so settings
+and history were lost. **When upgrading from v0.16.11 or earlier**, copy your
+data out first, because winget deletes the folder before the new version runs:
+
+```powershell
+kmd daemon stop
+$data = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\bullpae.keymander_Microsoft.Winget.Source_8wekyb3d8bbwe\keymander\kmd-data"
+New-Item -ItemType Directory -Force "$env:APPDATA\kmd" | Out-Null
+Copy-Item "$data\*" "$env:APPDATA\kmd\" -Recurse -Force -Exclude *.lock
+winget upgrade bullpae.keymander
+kmd daemon start
+```
+
 > Available since v0.16.2. A portable zip is also on
 > [Releases](https://github.com/bullpae/keymander/releases) if you prefer not to
 > install system-wide.
@@ -304,7 +319,7 @@ stick included) with settings intact. Deleting the folder removes everything.
 | Homebrew | `$(brew --prefix)/bin/{kmd,kmd-desktop,kmd-daemon}` (symlinks into `Cellar/keymander/<ver>/bin/`) | `$(brew --prefix)/share/keymander/config.example.toml` | standard |
 | apt (deb) | `/usr/bin/{kmd,kmd-desktop,kmd-daemon}` | `/usr/share/keymander/config.example.toml` (+ `/usr/share/doc/keymander/README.md`) | standard |
 | dnf/yum (rpm) | same as deb | same as deb | standard |
-| winget | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<id>\keymander\` with PATH aliases in `…\WinGet\Links` | `kmd-data\config.toml` inside the package dir | **portable** (zip ships `kmd-data\`) |
+| winget | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<id>\keymander\` with PATH aliases in `…\WinGet\Links` | `config.default.toml` next to the binaries, copied to `%APPDATA%\kmd\config.toml` on first run | standard (v0.16.12+; earlier: portable `kmd-data\`, wiped by every upgrade) |
 | Portable archive | wherever you extract `keymander/` | `kmd-data/config.toml` | **portable** |
 
 In **standard** mode nothing is written next to the binaries; config and data
