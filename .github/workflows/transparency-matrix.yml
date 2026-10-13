@@ -1,0 +1,92 @@
+name: Transparency Matrix (Windows)
+
+# [임시] Windows 투명 창 수정(DX12 고정 + PreMultiplied 우선)이 다른 Windows
+# 버전에서도 동작하는지 확인한다. 러너에는 GPU가 없어 DX12 WARP(소프트웨어)
+# 경로를 탄다 — GPU 없는 VM·원격 환경과 같은 조건.
+#   windows-2022 = Windows Server 2022 (Windows 10 21H2 계열)
+#   windows-2025 = Windows Server 2025 (Windows 11 24H2 계열)
+on:
+  push:
+    branches: ["claude/transparency-ci-test"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  probe:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tools/gpu-probe
+
+      - name: OS / GPU info
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          "{0} build {1}" -f $os.Caption, $os.BuildNumber
+          Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion | Format-List
+          "vulkan-1.dll: $(Test-Path C:\Windows\System32\vulkan-1.dll)"
+          "session id: $((Get-Process -Id $PID).SessionId)"
+
+      - name: Build kmd-desktop + gpu-probe
+        run: |
+          cargo build --profile fast -p kmd-desktop --locked
+          cargo build --release --manifest-path tools/gpu-probe/Cargo.toml
+
+      - name: GPU probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          & tools/gpu-probe/target/release/gpu-probe.exe 2>&1 | Tee-Object out/gpu-probe.txt
+
+      - name: Run kmd-desktop
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $p = Start-Process target/fast/kmd-desktop.exe -PassThru
+          Start-Sleep -Seconds 10
+          $alive = -not $p.HasExited
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          try {
+            $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height
+            $g = [Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("out/screen.png"); $g.Dispose(); $bmp.Dispose()
+          } catch { "screenshot failed: $_" }
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          $log = "$env:APPDATA\kmd\desktop\logs\desktop.log"
+          Copy-Item $log out/desktop.log -ErrorAction SilentlyContinue
+          "alive after 10s: $alive" | Tee-Object out/result.txt
+          $text = Get-Content $log -Raw -ErrorAction SilentlyContinue
+          $selected = [regex]::Match($text, 'Selected format: .*').Value
+          "selected: $selected" | Tee-Object out/result.txt -Append
+          $backend = [regex]::Matches($text, 'backend: (\w+),') | Select-Object -Last 1
+          "last backend: $($backend.Groups[1].Value)" | Tee-Object out/result.txt -Append
+          $errors = Select-String -Path $log -Pattern 'ERROR|panicked|0x887A' -ErrorAction SilentlyContinue
+          "errors: $($errors.Count)" | Tee-Object out/result.txt -Append
+          $errors | ForEach-Object { $_.Line } | Tee-Object out/result.txt -Append
+          if (-not $alive) { throw "kmd-desktop exited early" }
+          if ($selected -notmatch 'PreMultiplied') { throw "expected PreMultiplied alpha mode" }
+          if ($errors.Count -gt 0) { throw "errors in desktop.log" }
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transparency-${{ matrix.os }}
+          path: out/
+          retention-days: 7

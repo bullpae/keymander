@@ -34,9 +34,15 @@ fn probe(window: Arc<Window>) {
             Some(wgpu_types::Dx12SwapchainKind::DxgiFromVisual),
         ),
         ("3. Vulkan", wgpu::Backends::VULKAN, None),
+        (
+            "4. DX12 WARP(소프트웨어) + DxgiFromVisual",
+            wgpu::Backends::DX12,
+            Some(wgpu_types::Dx12SwapchainKind::DxgiFromVisual),
+        ),
     ];
 
-    for (label, backends, swapchain_kind) in combos {
+    for (i, (label, backends, swapchain_kind)) in combos.into_iter().enumerate() {
+        let force_fallback = i == 3;
         println!("--- {label}");
 
         let mut backend_options = wgpu::BackendOptions::default();
@@ -61,7 +67,7 @@ fn probe(window: Arc<Window>) {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
+            force_fallback_adapter: force_fallback,
         }));
 
         let adapter = match adapter {
@@ -83,13 +89,80 @@ fn probe(window: Arc<Window>) {
         println!("    디바이스 : {:?} / driver={}", info.device_type, info.driver);
         println!("    alpha_modes: {:?}", caps.alpha_modes);
         println!(
-            "    ▶ 투명 창 : {}\n",
+            "    ▶ 투명 창 : {}",
             if transparent_ok {
                 "가능 ✅"
             } else {
                 "불가 ❌ (Opaque only)"
             }
         );
+
+        // 실제 스왑체인 생성 시험 — 브랜치(iced 패치)가 고르는 순서대로
+        let (device, queue) =
+            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) {
+                Ok(dq) => dq,
+                Err(e) => {
+                    println!("    디바이스 생성 실패: {e}\n");
+                    continue;
+                }
+            };
+        for mode in [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+        ] {
+            if !caps.alpha_modes.contains(&mode) {
+                continue;
+            }
+            let format = caps.formats[0];
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                device.push_error_scope(wgpu::ErrorFilter::Validation);
+                surface.configure(
+                    &device,
+                    &wgpu::SurfaceConfiguration {
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        format,
+                        width: 640,
+                        height: 400,
+                        present_mode: wgpu::PresentMode::Fifo,
+                        desired_maximum_frame_latency: 2,
+                        alpha_mode: mode,
+                        view_formats: vec![],
+                    },
+                );
+                let err = pollster::block_on(device.pop_error_scope());
+                if err.is_some() {
+                    return Err(format!("{err:?}"));
+                }
+                // 프레임 하나를 실제로 받아 제출까지
+                let frame = surface.get_current_texture().map_err(|e| format!("{e:?}"))?;
+                let view = frame.texture.create_view(&Default::default());
+                let mut enc = device.create_command_encoder(&Default::default());
+                {
+                    let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                }
+                queue.submit([enc.finish()]);
+                frame.present();
+                Ok(())
+            }));
+            match result {
+                Ok(Ok(())) => println!("    스왑체인 {mode:?}: 생성·표시 성공 ✅"),
+                Ok(Err(e)) => println!("    스왑체인 {mode:?}: 실패 ❌ {e}"),
+                Err(_) => println!("    스왑체인 {mode:?}: 패닉 ❌"),
+            }
+        }
+        println!();
     }
 
     println!("=== 진단 끝 ===");
