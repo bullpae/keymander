@@ -4,6 +4,29 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **Windows에서 입력창 아래 빈 영역이 검게 보이던 문제** (NVIDIA 외장 GPU
+  노트북 등). 원인은 두 가지가 겹쳐 있었다.
+  - wgpu는 Vulkan → DX12 순으로 어댑터를 모아 외장 GPU를 우선하므로, NVIDIA
+    GPU(예: GeForce MX250)가 있으면 Vulkan을 잡는다. NVIDIA의 Windows Vulkan은
+    `alpha_modes=[Opaque]`라 투명이 불가능했다. 이제 투명 창일 때 Windows는
+    DX12로 고정한다(`WGPU_BACKEND`를 직접 지정하면 그 값을 따른다).
+  - DX12로 가면 iced가 PostMultiplied(`DXGI_ALPHA_MODE_STRAIGHT`)를 골라
+    DirectComposition 스왑체인 생성이 `0x887A0001`로 실패하고 런처가 뜨지
+    않았다. iced 셰이더는 premultiplied 출력이므로 PreMultiplied를 우선한다
+    (`vendor/iced_wgpu`). 0.12에서 도입한 DirectComposition 경로는 그동안
+    Vulkan이 먼저 잡혀 실제로 쓰인 적이 없었던 것으로 보인다.
+  - Windows 11 Enterprise LTSC + MX250 실기기에서 투명 표시를 확인했다.
+
+### Changed
+- `desktop.log`에 선택된 GPU 어댑터·백엔드·alpha 모드를 기본으로 기록한다.
+  투명 창 문제를 로그만으로 진단할 수 있다.
+
+### Internal
+- **`.github/workflows/dev-build.yml`** — `claude/**` 브랜치 푸시 시
+  Windows x64 `kmd-desktop.exe`를 빌드해 Actions 아티팩트로 올린다(7일 보관).
+  Rust 툴체인이 없는 실기기에서 개발 빌드를 시험하는 용도.
+
 ## [0.16.11] — 2026-10-07
 
 ### Fixed
