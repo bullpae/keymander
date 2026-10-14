@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.16.12] — 2026-10-14
+
 ### Fixed
 - **winget으로 업그레이드할 때마다 설정과 실행 이력이 사라지던 문제.** winget
   설치본은 포터블 zip을 그대로 써서 데이터가 설치 폴더 안 `kmd-data\`에
