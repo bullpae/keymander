@@ -968,21 +968,30 @@ enum WorkerJob {
     MouseStopAll,
 }
 
+/// 수백 ms 블로킹하는 액션 — 액션 워커의 느린 레인에서 돈다.
+fn is_slow_action(action: &BindAction) -> bool {
+    matches!(action, BindAction::ClipPaste(_))
+}
+
 /// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
 static ACTION_TX: Mutex<Option<mpsc::Sender<WorkerJob>>> = Mutex::new(None);
 
 /// 작업을 워커 스레드 큐에 넣는다 (탭 콜백에서 호출 — 블로킹 없음)
 fn queue_job(job: WorkerJob) {
     let sender = ACTION_TX.lock().ok().and_then(|g| g.clone());
-    match sender {
-        Some(tx) => {
-            if tx.send(job).is_err() {
-                tracing::warn!("액션 워커가 종료되어 작업을 실행하지 못했습니다");
-            }
-        }
-        None => tracing::warn!("액션 워커 미시작 — 작업 무시"),
+    let delivered = match sender {
+        Some(tx) => tx.send(job).is_ok(),
+        None => false,
+    };
+    // 탭 콜백 안이라 동기 로그 IO를 키마다 하지 않는다 — 워커가 죽은 상태에선
+    // 매 키 입력이 여기 오므로 첫 1회만 남긴다(start가 플래그를 되돌린다).
+    if !delivered && !WORKER_MISSING_WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!("액션 워커가 없어 작업을 실행하지 못했습니다 (이후 반복 경고 생략)");
     }
 }
+
+/// [`queue_job`] 실패 경고를 한 번만 남겼는지
+static WORKER_MISSING_WARNED: AtomicBool = AtomicBool::new(false);
 
 // ── CGEventTap 콜백 ─────────────────────────────────────────────────────────
 
@@ -1126,81 +1135,27 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
             (flags & CG_EVENT_FLAG_MASK_COMMAND) != 0,
         );
 
-        return match decision {
-            KeyDecision::PassThrough => {
-                drop(guard);
-                event
-            }
-            KeyDecision::Suppress => std::ptr::null_mut(),
-            KeyDecision::Execute {
-                action,
-                layer_trigger,
-            } => {
-                drop(guard);
-                queue_job(WorkerJob::Action {
-                    action,
-                    layer_trigger,
-                });
-                std::ptr::null_mut()
-            }
-            // 코드 진입 (flagsChanged 경로로는 실제 발생하지 않지만 대칭 구현)
-            KeyDecision::EngageChord { trigger, key } => {
-                drop(guard);
-                // 어떤 키인지는 로그하지 않는다 — 실제 타이핑 내용 비기록 정책
-                tracing::debug!("chord engage: {trigger:?}+미매핑 키");
-                queue_job(WorkerJob::ChordEngage { trigger, key });
-                std::ptr::null_mut()
-            }
-            // 코드 해제: 물리 트리거 up(flagsChanged)을 억제하고 주입 up으로 대체.
-            // 지연 Launch는 해제 뒤에 실행 (FIFO 큐가 순서 보장)
-            KeyDecision::ReleaseChord {
-                trigger,
-                deferred_action,
-            } => {
-                drop(guard);
-                tracing::debug!("chord release: {trigger:?}");
-                queue_job(WorkerJob::ChordRelease { trigger });
-                if let Some(action) = deferred_action {
-                    queue_job(WorkerJob::Action {
-                        action,
-                        layer_trigger: None,
-                    });
-                }
-                std::ptr::null_mut()
-            }
-            // 마우스 바인딩 (flagsChanged 경로 — LShift 저속 모드 등 수정자 매핑)
-            KeyDecision::MouseEngage(mb) => {
-                drop(guard);
-                queue_job(WorkerJob::MouseEngage(mb));
-                std::ptr::null_mut()
-            }
-            KeyDecision::MouseRelease(mb) => {
-                drop(guard);
-                queue_job(WorkerJob::MouseRelease(mb));
-                std::ptr::null_mut()
-            }
-            KeyDecision::MouseStopAll => {
-                drop(guard);
-                queue_job(WorkerJob::MouseStopAll);
-                std::ptr::null_mut()
-            }
-        };
+        drop(guard);
+        return dispatch_decision(decision, event);
     }
 
     // ── keyDown / keyUp 이벤트 ──
     let is_down = type_ == CG_EVENT_KEY_DOWN;
+    let decision = guard.process_key(vkey, is_down, tick);
+    drop(guard);
+    dispatch_decision(decision, event)
+}
 
-    match guard.process_key(vkey, is_down, tick) {
-        KeyDecision::PassThrough => {
-            drop(guard);
-            event
-        }
+/// 엔진 결정을 이벤트 처리로 옮긴다 — 엔진 락을 놓은 뒤 호출한다.
+/// 반환값: 통과면 원래 이벤트, 억제면 null. 실행할 일은 워커 큐로만 보낸다.
+fn dispatch_decision(decision: KeyDecision, event: CGEventRef) -> CGEventRef {
+    match decision {
+        KeyDecision::PassThrough => event,
         KeyDecision::Suppress => std::ptr::null_mut(),
         KeyDecision::Execute {
             action,
             layer_trigger,
         } => {
-            drop(guard);
             queue_job(WorkerJob::Action {
                 action,
                 layer_trigger,
@@ -1211,18 +1166,17 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
         // 이후 이 홀드의 물리 키들은 PassThrough — OS 수정자 상태에 주입된
         // 트리거가 있으므로 트리거 조합으로 인식된다.
         KeyDecision::EngageChord { trigger, key } => {
-            drop(guard);
             // 어떤 키인지는 로그하지 않는다 — 실제 타이핑 내용 비기록 정책
             tracing::debug!("chord engage: {trigger:?}+미매핑 키");
             queue_job(WorkerJob::ChordEngage { trigger, key });
             std::ptr::null_mut()
         }
-        // 코드 해제 (keymap 토글이 코드 모드를 끊는 경우 이 경로로도 온다)
+        // 코드 해제: 물리 트리거 up을 억제하고 주입 up으로 대체 (keymap 토글이
+        // 코드 모드를 끊는 경우에도 온다). 지연 Launch는 해제 뒤에 실행 (FIFO가 순서 보장)
         KeyDecision::ReleaseChord {
             trigger,
             deferred_action,
         } => {
-            drop(guard);
             tracing::debug!("chord release: {trigger:?}");
             queue_job(WorkerJob::ChordRelease { trigger });
             if let Some(action) = deferred_action {
@@ -1234,18 +1188,16 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
             std::ptr::null_mut()
         }
         // 마우스 바인딩 — 물리 키 이벤트를 억제하고 워커에 위임
+        // (flagsChanged 경로에서도 온다 — LShift 저속 모드 등 수정자 매핑)
         KeyDecision::MouseEngage(mb) => {
-            drop(guard);
             queue_job(WorkerJob::MouseEngage(mb));
             std::ptr::null_mut()
         }
         KeyDecision::MouseRelease(mb) => {
-            drop(guard);
             queue_job(WorkerJob::MouseRelease(mb));
             std::ptr::null_mut()
         }
         KeyDecision::MouseStopAll => {
-            drop(guard);
             queue_job(WorkerJob::MouseStopAll);
             std::ptr::null_mut()
         }
@@ -1347,13 +1299,33 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             Ok(mut g) => *g = Some(action_tx),
             Err(_) => return Err("액션 큐 잠금 실패".into()),
         }
+        WORKER_MISSING_WARNED.store(false, Ordering::Relaxed);
         self.action_worker = Some(std::thread::spawn(move || {
             // 모션 워커(이동/휠 틱 스레드)와 버튼 상태는 액션 워커가 소유한다
             let motion = MouseWorker::start(MacMouseSink);
             let mut pressed_buttons: Vec<MouseBind> = Vec::new();
 
+            // 느린 레인 — 클립보드 붙여넣기(paste_swap: 330ms+ sleep)를 FIFO 하나에서
+            // 돌리면 그 뒤의 ChordRelease·MouseRelease가 그만큼 늦어 수정자가 눌린 채
+            // 남거나 포인터가 계속 움직였다. Windows의 fast/slow 레인과 같은 분리.
+            // 느린 작업끼리는 이 레인 안에서 순서가 보존된다.
+            let (slow_tx, slow_rx) = mpsc::channel::<(BindAction, Option<VKey>)>();
+            let slow_worker = std::thread::spawn(move || {
+                for (action, layer_trigger) in slow_rx {
+                    run_action(&action, layer_trigger);
+                }
+            });
+
             for job in action_rx {
                 match job {
+                    WorkerJob::Action {
+                        action,
+                        layer_trigger,
+                    } if is_slow_action(&action) => {
+                        if slow_tx.send((action, layer_trigger)).is_err() {
+                            tracing::warn!("느린 액션 워커가 종료되어 작업을 실행하지 못했습니다");
+                        }
+                    }
                     WorkerJob::Action {
                         action,
                         layer_trigger,
@@ -1394,6 +1366,8 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             for mb in pressed_buttons.drain(..) {
                 send_mouse_button(mb, false);
             }
+            drop(slow_tx);
+            let _ = slow_worker.join();
             tracing::debug!("액션 워커 종료");
         }));
 
@@ -1534,5 +1508,37 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             let _ = worker.join();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 역방향 표(물리 입력 → VKey)는 일부 키를 정책상 뺀다(`cg_to_vkey` 문서).
+    /// 그래도 **들어 있는 항목**은 정방향과 반드시 일치해야 한다 — 두 표를 손으로
+    /// 관리하므로 한쪽만 고치면 가로챈 키와 주입하는 키가 어긋난다.
+    #[test]
+    fn 역방향_표의_모든_항목은_정방향과_왕복한다() {
+        let mut mapped = 0;
+        for keycode in 0u16..=0x7F {
+            if let Some(vkey) = cg_to_vkey(keycode) {
+                mapped += 1;
+                assert_eq!(
+                    vkey_to_cg(vkey),
+                    keycode,
+                    "{vkey:?}: 역방향 0x{keycode:02X} ≠ 정방향 0x{:02X}",
+                    vkey_to_cg(vkey)
+                );
+            }
+        }
+        assert!(mapped > 40, "역방향 표가 비정상적으로 작다: {mapped}");
+    }
+
+    #[test]
+    fn 붙여넣기만_느린_레인으로_간다() {
+        assert!(is_slow_action(&BindAction::ClipPaste(1)));
+        assert!(!is_slow_action(&BindAction::SendKey(VKey::A)));
+        assert!(!is_slow_action(&BindAction::Launch("x".into())));
     }
 }

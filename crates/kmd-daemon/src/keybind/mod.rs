@@ -621,8 +621,12 @@ impl KeybindConfig {
             }
         }
 
-        let mut layers = Vec::new();
-        for (name, layer_cfg) in &cfg.layers {
+        // HashMap 순회 순서는 프로세스마다 달라, 트리거가 겹치면 실행할 때마다 다른
+        // 레이어가 이겼다(엔진은 첫 일치를 고른다). 이름순으로 고정한다.
+        let mut layer_cfgs: Vec<_> = cfg.layers.iter().collect();
+        layer_cfgs.sort_by(|a, b| a.0.cmp(b.0));
+        let mut layers: Vec<Layer> = Vec::new();
+        for (name, layer_cfg) in layer_cfgs {
             if layer_cfg.trigger.is_empty() {
                 tracing::warn!("레이어 '{name}': trigger가 비어있어 건너뜀");
                 continue;
@@ -687,6 +691,14 @@ impl KeybindConfig {
                 Vec::new()
             };
 
+            if let Some(prev) = layers.iter().find(|l| l.trigger == trigger) {
+                tracing::warn!(
+                    "레이어 '{name}': trigger '{}'가 레이어 '{}'와 겹침 — '{}'가 우선",
+                    layer_cfg.trigger,
+                    prev.name,
+                    prev.name
+                );
+            }
             layers.push(Layer {
                 name: name.clone(),
                 trigger,
@@ -734,8 +746,11 @@ impl KeybindConfig {
             }
         }
 
-        let mut tap_holds = Vec::new();
-        for (key_str, th_cfg) in &cfg.tap_holds {
+        // 레이어와 같은 이유로 키 이름순 고정 (별칭이 같은 키로 풀리면 첫 항목이 이긴다)
+        let mut th_cfgs: Vec<_> = cfg.tap_holds.iter().collect();
+        th_cfgs.sort_by(|a, b| a.0.cmp(b.0));
+        let mut tap_holds: Vec<TapHoldBinding> = Vec::new();
+        for (key_str, th_cfg) in th_cfgs {
             let Some(key) = VKey::from_name(key_str) else {
                 tracing::warn!("tap-hold 키 파싱 실패: {key_str}");
                 continue;
@@ -761,6 +776,10 @@ impl KeybindConfig {
                     }
                 },
             };
+            if tap_holds.iter().any(|t| t.key == key) {
+                tracing::warn!("tap-hold '{key_str}': 같은 키가 이미 정의됨 — 무시");
+                continue;
+            }
             tap_holds.push(TapHoldBinding {
                 key,
                 tap,

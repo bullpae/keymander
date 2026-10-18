@@ -5,7 +5,7 @@
 //! 타이밍은 호출자가 넘겨주는 밀리초 tick(u32, wrapping)만 사용하므로
 //! 테스트에서 시간을 자유롭게 시뮬레이션할 수 있다.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, MouseBind,
@@ -176,8 +176,9 @@ pub struct EngineState {
     tap_hold_down_tick: u32,
     /// tap-hold의 hold 수정자가 OS에 주입된 상태 (chord)
     tap_hold_engaged: bool,
-    /// 현재 눌려 있는 마우스 바인딩 키 — 레이어 트리거 해제 시 전체 정지용
-    mouse_keys_held: HashSet<VKey>,
+    /// 현재 눌려 있는 마우스 바인딩 키 → 바인딩. 레이어 트리거 해제 시 전체 정지,
+    /// 그리고 레이어 밖에서 온 key-up도 해제로 바꾸는 데 쓴다([`Self::step_held_mouse_release`]).
+    mouse_keys_held: HashMap<VKey, MouseBind>,
 }
 
 impl EngineState {
@@ -205,7 +206,7 @@ impl EngineState {
             active_tap_hold: None,
             tap_hold_down_tick: 0,
             tap_hold_engaged: false,
-            mouse_keys_held: HashSet::new(),
+            mouse_keys_held: HashMap::new(),
         }
     }
 
@@ -386,6 +387,9 @@ impl EngineState {
             return d;
         }
         if let Some(d) = self.step_layer_trigger(vkey, is_down, tick) {
+            return d;
+        }
+        if let Some(d) = self.step_held_mouse_release(vkey, is_up) {
             return d;
         }
         if let Some(d) = self.step_layer_mapping(vkey, is_down, tick) {
@@ -653,9 +657,13 @@ impl EngineState {
                 self.layer_key_used = false;
                 self.deactivate_layer_keys();
 
-                // 이동/버튼 키가 눌린 채 트리거를 뗐다 — 해당 키들의 keyup은
-                // 더 이상 레이어 매핑으로 오지 않으므로 여기서 전부 정지
+                // 이동/버튼 키가 눌린 채 트리거를 뗐다 — 전부 정지한다.
+                // 단 지연된 Launch가 있으면 그것을 먼저 실행한다(결정은 하나뿐이라 예전엔
+                // StopAll이 Launch를 버렸다). 이때 마우스 키는 각자의 up에서 해제된다.
                 if !self.mouse_keys_held.is_empty() {
+                    if let Some(action) = pending_launch {
+                        return Some(KeyDecision::execute(action));
+                    }
                     self.mouse_keys_held.clear();
                     return Some(KeyDecision::MouseStopAll);
                 }
@@ -669,6 +677,21 @@ impl EngineState {
                     return Some(KeyDecision::execute(action));
                 }
                 return Some(KeyDecision::Suppress);
+            }
+        }
+        None
+    }
+
+    /// 눌려 있는 마우스 바인딩 키의 up은 레이어 상태와 무관하게 해제로 처리한다.
+    ///
+    /// 예전엔 레이어 매핑(4b)만 해제를 냈다. 그래서 chord 모드 중(4-pre가 전부
+    /// PassThrough)이거나 chord 종료로 레이어가 꺼진 뒤 이동 키를 떼면 up이 OS로
+    /// 새고 포인터가 계속 움직였다(같은 레이어에서 그 키를 다시 눌러야 멈춤).
+    /// 레이어가 정상 활성일 때는 4b와 결과가 같다.
+    fn step_held_mouse_release(&mut self, vkey: VKey, is_up: bool) -> Option<KeyDecision> {
+        if is_up {
+            if let Some(mb) = self.mouse_keys_held.remove(&vkey) {
+                return Some(KeyDecision::MouseRelease(mb));
             }
         }
         None
@@ -765,18 +788,16 @@ impl EngineState {
                 // 마우스 바인딩은 상태형 — down=시작/버튼다운, up=정지/버튼업
                 if let BindAction::Mouse(mb) = action {
                     if is_down {
-                        if self.mouse_keys_held.contains(&vkey) {
+                        if self.mouse_keys_held.contains_key(&vkey) {
                             // OS 오토리피트 — 이미 활성
                             return Some(KeyDecision::Suppress);
                         }
                         self.layer_key_used = true;
                         self.layer_dt_last_key = None;
-                        self.mouse_keys_held.insert(vkey);
+                        self.mouse_keys_held.insert(vkey, mb);
                         return Some(KeyDecision::MouseEngage(mb));
                     }
-                    if self.mouse_keys_held.remove(&vkey) {
-                        return Some(KeyDecision::MouseRelease(mb));
-                    }
+                    // 눌린 키의 up은 step_held_mouse_release가 먼저 처리했다
                     // 레이어 활성 전부터 눌려 있던 키의 up — 통과 (stuck 방지)
                     return Some(KeyDecision::PassThrough);
                 }
@@ -2225,6 +2246,54 @@ mod tests {
             double_tap_mappings: HashMap::new(),
         });
         cfg
+    }
+
+    #[test]
+    fn chord_모드_중_마우스_키를_떼면_해제된다() {
+        let mut cfg = mouse_layer_config();
+        cfg.layers[0].unmapped = UnmappedBehavior::Passthrough;
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::RAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::MoveUp)
+        ));
+        // Cmd를 함께 누르고 미매핑 키 → chord 진입 (이후 4-pre가 전부 PassThrough)
+        e.process_key(VKey::LWin, true, 1100);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1150),
+            KeyDecision::EngageChord { .. }
+        ));
+        // 예전엔 PassThrough로 새서 포인터가 계속 움직였다
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1200),
+            KeyDecision::MouseRelease(MouseBind::MoveUp)
+        ));
+    }
+
+    #[test]
+    fn 마우스를_누른_채_트리거를_떼도_지연_launch가_실행된다() {
+        let mut cfg = mouse_layer_config();
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::L, BindAction::Launch("app".into()));
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::RAlt, true, 1000);
+        e.process_key(VKey::W, true, 1050); // 이동 시작
+        e.process_key(VKey::L, true, 1100); // Launch는 트리거 해제까지 지연
+        e.process_key(VKey::L, false, 1150);
+        match e.process_key(VKey::RAlt, false, 1300) {
+            KeyDecision::Execute {
+                action: BindAction::Launch(cmd),
+                ..
+            } => assert_eq!(cmd, "app"),
+            other => panic!("지연 Launch 기대 (예전엔 MouseStopAll이 버렸다), 실제: {other:?}"),
+        }
+        // 마우스는 자기 키의 up에서 멈춘다
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1350),
+            KeyDecision::MouseRelease(MouseBind::MoveUp)
+        ));
     }
 
     #[test]

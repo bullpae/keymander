@@ -670,56 +670,9 @@ fn process_request(
             },
         },
 
-        Request::Search { query, limit } => {
-            let results = match engine.lock() {
-                Ok(mut e) => {
-                    let (_mode, hits) = e.search(&query, limit);
-                    hits
-                }
-                Err(_) => {
-                    return Response::Error {
-                        message: "엔진 잠금 실패".into(),
-                    }
-                }
-            };
+        Request::Search { query, limit } => handle_search(engine, &query, limit),
 
-            let items: Vec<SearchHit> = results
-                .into_iter()
-                .map(|r| SearchHit {
-                    name: r.item.name,
-                    path: r.item.path,
-                    kind: r.item.kind.to_string(),
-                    icon: r.item.icon,
-                    score: r.score,
-                })
-                .collect();
-
-            Response::SearchResults { items }
-        }
-
-        Request::RebuildIndex => {
-            // 커넥션 스레드는 기본 우선순위라 여기서 전체 스캔을 돌리면 키훅이 살아 있는
-            // 동안 CPU를 포화시킬 수 있다(2026-08-08 사고 유형). 리프레셔와 같은 함수를
-            // 우선순위를 낮춘 전용 스레드에서 돌리고 결과만 기다린다.
-            let config = load_config();
-            let engine = Arc::clone(engine);
-            let worker = std::thread::Builder::new()
-                .name("kmd-ipc-rebuild".into())
-                .spawn(move || {
-                    lower_indexer_thread_priority();
-                    rebuild_full_index(&engine, &config)
-                });
-            match worker.map_err(|e| e.to_string()).and_then(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err("인덱스 리빌드 스레드 패닉".to_string()))
-                    .map_err(|e| e.to_string())
-            }) {
-                Ok(count) => Response::Ok {
-                    message: format!("인덱스 리빌드 완료 ({count}개 항목)"),
-                },
-                Err(message) => Response::Error { message },
-            }
-        }
+        Request::RebuildIndex => handle_rebuild_index(engine),
 
         Request::Shutdown => {
             let _ = shutdown_tx.send(());
@@ -799,34 +752,88 @@ fn process_request(
             }
         }
 
-        Request::KeybindSelfTest => {
-            #[cfg(target_os = "macos")]
-            {
-                let preset = resolve_keybind_preset(&load_config());
-                // launchd 아래에서는 stderr가 유실되므로 패닉을 삼켜 IPC 응답으로
-                // 돌려준다 — 핸들러 스레드 패닉 = 클라이언트엔 원인 불명 연결 리셋.
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    keybind::selftest::run(&preset)
-                })) {
-                    Ok(Ok(report)) => Response::Ok { message: report },
-                    Ok(Err(e)) => Response::Error { message: e },
-                    Err(panic) => {
-                        let msg = panic
-                            .downcast_ref::<String>()
-                            .map(String::as_str)
-                            .or_else(|| panic.downcast_ref::<&str>().copied())
-                            .unwrap_or("(비문자열 패닉)");
-                        Response::Error {
-                            message: format!("셀프테스트 패닉: {msg}"),
-                        }
-                    }
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            Response::Error {
-                message: "키 주입 셀프테스트는 현재 macOS 전용입니다".into(),
+        Request::KeybindSelfTest => handle_keybind_selftest(),
+    }
+}
+
+fn handle_search(engine: &Arc<Mutex<SearchEngine>>, query: &str, limit: usize) -> Response {
+    let results = match engine.lock() {
+        Ok(mut e) => {
+            let (_mode, hits) = e.search(query, limit);
+            hits
+        }
+        Err(_) => {
+            return Response::Error {
+                message: "엔진 잠금 실패".into(),
             }
         }
+    };
+
+    let items: Vec<SearchHit> = results
+        .into_iter()
+        .map(|r| SearchHit {
+            name: r.item.name,
+            path: r.item.path,
+            kind: r.item.kind.to_string(),
+            icon: r.item.icon,
+            score: r.score,
+        })
+        .collect();
+
+    Response::SearchResults { items }
+}
+
+/// IPC 인덱스 리빌드.
+///
+/// 커넥션 스레드는 기본 우선순위라 여기서 전체 스캔을 돌리면 키훅이 살아 있는
+/// 동안 CPU를 포화시킬 수 있다(2026-08-08 사고 유형). 리프레셔와 같은 함수를
+/// 우선순위를 낮춘 전용 스레드에서 돌리고 결과만 기다린다.
+fn handle_rebuild_index(engine: &Arc<Mutex<SearchEngine>>) -> Response {
+    let config = load_config();
+    let engine = Arc::clone(engine);
+    let worker = std::thread::Builder::new()
+        .name("kmd-ipc-rebuild".into())
+        .spawn(move || {
+            lower_indexer_thread_priority();
+            rebuild_full_index(&engine, &config)
+        });
+    match worker.map_err(|e| e.to_string()).and_then(|h| {
+        h.join()
+            .unwrap_or_else(|_| Err("인덱스 리빌드 스레드 패닉".to_string()))
+    }) {
+        Ok(count) => Response::Ok {
+            message: format!("인덱스 리빌드 완료 ({count}개 항목)"),
+        },
+        Err(message) => Response::Error { message },
+    }
+}
+
+fn handle_keybind_selftest() -> Response {
+    #[cfg(target_os = "macos")]
+    {
+        let preset = resolve_keybind_preset(&load_config());
+        // launchd 아래에서는 stderr가 유실되므로 패닉을 삼켜 IPC 응답으로
+        // 돌려준다 — 핸들러 스레드 패닉 = 클라이언트엔 원인 불명 연결 리셋.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            keybind::selftest::run(&preset)
+        })) {
+            Ok(Ok(report)) => Response::Ok { message: report },
+            Ok(Err(e)) => Response::Error { message: e },
+            Err(panic) => {
+                let msg = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("(비문자열 패닉)");
+                Response::Error {
+                    message: format!("셀프테스트 패닉: {msg}"),
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Response::Error {
+        message: "키 주입 셀프테스트는 현재 macOS 전용입니다".into(),
     }
 }
 
