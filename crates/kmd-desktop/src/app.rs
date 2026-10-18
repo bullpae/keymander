@@ -2829,7 +2829,7 @@ mod tests {
         let mut app = make_test_app();
         kmd_core::history::record_launch(
             &app.db,
-            "app",
+            kmd_core::ItemKind::App,
             "/Applications/Safari.app",
             Some("Safari"),
         );

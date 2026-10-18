@@ -31,9 +31,15 @@ pub fn run(target: &str) -> Result<()> {
             _ => {}
         }
 
-        // Record in history
+        // Record in history — 절대 경로로 남겨야 폴더 제안(이력 신호)이 쓸 수 있다
         if let Ok(db) = super::open_db() {
-            kmd_core::history::record_launch(&db, "file", target, None);
+            let kind = if path.is_dir() {
+                kmd_core::ItemKind::Directory
+            } else {
+                kmd_core::ItemKind::File
+            };
+            let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            kmd_core::history::record_launch(&db, kind, &abs.to_string_lossy(), None);
         }
 
         return Ok(());
@@ -51,7 +57,7 @@ pub fn run(target: &str) -> Result<()> {
                 if let Ok(db) = super::open_db() {
                     kmd_core::history::record_launch(
                         &db,
-                        &format!("{}", result.item.kind),
+                        result.item.kind,
                         &result.item.path,
                         Some(&result.item.name),
                     );

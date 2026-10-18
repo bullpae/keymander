@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use crate::db::Database;
+use crate::index::ItemKind;
 use crate::search::SearchResult;
 
 /// 부스트 계산에 사용할 최대 히스토리 행 수
@@ -21,11 +22,22 @@ const FRECENCY_BOOST_CAP: u32 = 200;
 pub type FrecencyMap = HashMap<String, (u32, String)>;
 
 /// DB에서 부스트용 frecency 맵을 로드한다.
+///
+/// 같은 value가 여러 item_type 행으로 있으면 빈도는 합산하고 시각은 최신을 쓴다
+/// (예전엔 나중 행이 앞 행을 덮어써 frecency가 낮게 잡혔다).
 pub fn load_boost_map(db: &Database) -> FrecencyMap {
-    db.query_history(HISTORY_BOOST_LIMIT)
-        .into_iter()
-        .map(|h| (h.value, (h.frequency, h.executed_at)))
-        .collect()
+    let mut map = FrecencyMap::new();
+    for h in db.query_history(HISTORY_BOOST_LIMIT) {
+        map.entry(h.value)
+            .and_modify(|(freq, at)| {
+                *freq = freq.saturating_add(h.frequency);
+                if h.executed_at > *at {
+                    *at = h.executed_at.clone();
+                }
+            })
+            .or_insert((h.frequency, h.executed_at));
+    }
+    map
 }
 
 /// Frecency 기반으로 검색 결과 점수를 부스트하고 재정렬 (매 호출마다 DB 조회)
@@ -115,9 +127,9 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
     Some(era * 146097 + doe as i64 - 719468)
 }
 
-/// Record a launch event
-pub fn record_launch(db: &Database, item_type: &str, value: &str, display: Option<&str>) {
-    if let Err(e) = db.record_launch(item_type, value, display) {
+/// Record a launch event — item_type은 [`ItemKind::history_tag`]로 정규화된다.
+pub fn record_launch(db: &Database, kind: ItemKind, value: &str, display: Option<&str>) {
+    if let Err(e) = db.record_launch(kind.history_tag(), value, display) {
         tracing::warn!("Failed to record launch history: {}", e);
     }
 }
@@ -150,7 +162,7 @@ mod tests {
 
         // "b"를 여러 번 실행 → frequency 증가, executed_at은 "방금"
         for _ in 0..5 {
-            record_launch(&db, "file", "b", None);
+            record_launch(&db, ItemKind::File, "b", None);
         }
 
         let mut results = vec![make_result("a", 500), make_result("b", 100)];
@@ -163,7 +175,7 @@ mod tests {
 
         // 더 많이 사용하면 CAP에 도달
         for _ in 0..20 {
-            record_launch(&db, "file", "b", None);
+            record_launch(&db, ItemKind::File, "b", None);
         }
         // frequency=25, recency=16 → 25*16=400 → capped 200
         // b: 100 + 200 = 300 < a: 500 → CAP 덕분에 여전히 a가 우세
@@ -178,7 +190,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
         for _ in 0..5 {
-            record_launch(&db, "file", "b", None);
+            record_launch(&db, ItemKind::File, "b", None);
         }
 
         let map = load_boost_map(&db);
@@ -286,7 +298,7 @@ mod tests {
         let db = Database::open(&dir.path().join("test.db")).unwrap();
 
         for _ in 0..100 {
-            record_launch(&db, "file", "x", None);
+            record_launch(&db, ItemKind::File, "x", None);
         }
 
         let mut results = vec![make_result("x", 0)];

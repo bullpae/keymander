@@ -383,6 +383,46 @@ impl Database {
                 .map_err(DbError::Sqlite)?;
         }
 
+        if version < 4 {
+            // v4: history.item_type 정규화 (ItemKind::history_tag). 예전엔 UI마다
+            // "App"/"app"/"Dir"/"dir"/"Directory"로 갈려 같은 경로가 여러 행이었다.
+            // 정규 태그로 묶어 빈도는 합산, 시각은 최신, 표시명은 아무거나 하나.
+            // 테이블 교체라 트랜잭션으로 묶는다 — 중간 실패 시 v3 상태 그대로 남는다.
+            self.conn
+                .execute_batch(
+                    "
+                    BEGIN;
+                    CREATE TABLE history_v4 (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        item_type   TEXT    NOT NULL,
+                        value       TEXT    NOT NULL,
+                        display     TEXT,
+                        executed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                        frequency   INTEGER NOT NULL DEFAULT 1
+                    );
+                    INSERT INTO history_v4(item_type, value, display, executed_at, frequency)
+                        SELECT tag, value, MAX(display), MAX(executed_at), SUM(frequency)
+                        FROM (
+                            SELECT CASE lower(item_type)
+                                       WHEN 'directory' THEN 'dir'
+                                       WHEN 'executable' THEN 'exe'
+                                       ELSE lower(item_type)
+                                   END AS tag,
+                                   value, display, executed_at, frequency
+                            FROM history
+                        )
+                        GROUP BY tag, value;
+                    DROP TABLE history;
+                    ALTER TABLE history_v4 RENAME TO history;
+                    CREATE UNIQUE INDEX idx_history_unique ON history(item_type, value);
+                    CREATE INDEX idx_history_executed_at ON history(executed_at);
+                    PRAGMA user_version = 4;
+                    COMMIT;
+                    ",
+                )
+                .map_err(DbError::Sqlite)?;
+        }
+
         Ok(())
     }
 }
@@ -594,7 +634,7 @@ mod tests {
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3, "DB 버전이 3으로 업그레이드");
+        assert_eq!(version, 4, "DB 버전이 4로 업그레이드");
 
         // idx_history_executed_at 인덱스 존재 확인
         let idx_exists: bool = db
@@ -606,5 +646,45 @@ mod tests {
             )
             .unwrap();
         assert!(idx_exists, "executed_at 인덱스가 존재해야 함");
+    }
+
+    #[test]
+    fn v4_마이그레이션은_갈린_item_type_행을_합친다() {
+        // v3 DB에 예전 UI들이 남긴 표기 그대로 이력을 심는다
+        let conn = Connection::open_in_memory().unwrap();
+        let v3 = Database { conn };
+        v3.migrate().unwrap();
+        v3.conn.execute_batch("DROP TABLE history;").unwrap();
+        v3.conn
+            .execute_batch(
+                "CREATE TABLE history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, item_type TEXT NOT NULL,
+                    value TEXT NOT NULL, display TEXT,
+                    executed_at TEXT NOT NULL, frequency INTEGER NOT NULL DEFAULT 1);
+                 CREATE UNIQUE INDEX idx_history_unique ON history(item_type, value);
+                 INSERT INTO history(item_type, value, display, executed_at, frequency) VALUES
+                    ('App', '/A.app', 'A', '2026-01-01T00:00:00Z', 2),
+                    ('app', '/A.app', 'A', '2026-03-01T00:00:00Z', 5),
+                    ('Dir', '/d', NULL, '2026-01-01T00:00:00Z', 1),
+                    ('Directory', '/d', 'd', '2026-02-01T00:00:00Z', 1),
+                    ('dir', '/d', 'd', '2026-01-05T00:00:00Z', 1);
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+
+        v3.migrate().unwrap();
+
+        let rows = v3.query_history(10);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let app = rows.iter().find(|h| h.value == "/A.app").unwrap();
+        assert_eq!(app.item_type, "app");
+        assert_eq!(app.frequency, 7, "빈도 합산");
+        assert_eq!(app.executed_at, "2026-03-01T00:00:00Z", "최신 시각");
+        let dir = rows.iter().find(|h| h.value == "/d").unwrap();
+        assert_eq!(dir.item_type, "dir");
+        assert_eq!(dir.frequency, 3);
+        // 정규화 후에도 유니크 키 upsert가 동작한다
+        v3.record_launch("dir", "/d", None).unwrap();
+        assert_eq!(v3.query_history(10).len(), 2);
     }
 }

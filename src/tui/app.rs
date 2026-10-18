@@ -905,227 +905,213 @@ fn execute_selected(
         return;
     };
 
-    // ── kmd 가상 항목 (도움말/설정/키맵 등 UI 내부 명령) ──
-    if result.item.kind == ItemKind::SystemCommand && result.item.keywords.starts_with("kmd:") {
-        let keywords = result.item.keywords.clone();
-        let item_name = result.item.name.clone();
-        let item_path = result.item.path.clone();
-
-        // 도움말 항목 → 시작 쿼리(퀵 템플릿)로 전환
-        if keywords.starts_with("kmd:help:") {
-            if let Some(seed) = kmd_core::query_prefix::help_query_seed(&item_name) {
-                state.query = seed.to_string();
-                state.refresh_effective_query();
-                state.selected_index = 0;
-                update_search(state, engine, db);
-            }
-            return;
-        }
-        // 셸 모드의 웹 검색 전환 힌트 (!g → @g)
-        if keywords.starts_with("kmd:bang_hint:") {
-            state.query = item_path;
+    // 무엇을 할지는 core가 분류한다(마커 해석의 정본 — 데스크톱과 공유).
+    use kmd_core::activation::Activation;
+    match kmd_core::activation::classify(&result.item) {
+        // 도움말 시드, !bang 힌트, 미지 명령 → :help, 폴더 검색 시드, @ 브라우징 힌트
+        Activation::SetQuery(seed) => {
+            state.query = seed;
             state.refresh_effective_query();
             state.selected_index = 0;
             update_search(state, engine, db);
-            return;
-        }
-        // 미지 명령 안내 → :help 로 이동
-        if keywords == "kmd:unknown_cmd" {
-            state.query = ":help".to_string();
-            state.refresh_effective_query();
-            state.selected_index = 0;
-            update_search(state, engine, db);
-            return;
         }
         // 폴더 제안 → search_paths에 추가 + config 저장 (docs/15 P2)
-        if keywords.starts_with(kmd_core::folder_suggest::SUGGEST_MARKER) {
-            if let Some(msg) =
-                kmd_core::folder_suggest::execute_suggest_action(&mut state.config, &keywords)
-            {
+        Activation::FolderSuggest => {
+            if let Some(msg) = kmd_core::folder_suggest::execute_suggest_action(
+                &mut state.config,
+                &result.item.keywords,
+            ) {
                 state.status_message = Some(msg);
             }
             state.selected_index = 0;
             update_search(state, engine, db);
-            return;
         }
         // 설정 모달 열기 (:set)
-        if keywords == "kmd:tui:open_settings" {
+        Activation::OpenSettingsModal => {
             state.settings = Some(SettingsState::new(state.config.clone()));
-            return;
         }
         // 키맵 액션 (start/stop/프로파일 전환)
-        if keywords.starts_with("kmd:keymap:") && !keywords.ends_with(":noop") {
-            if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut state.config, &keywords)
+        Activation::Keymap => {
+            if let Some(msg) =
+                kmd_core::keymap::execute_keymap_action(&mut state.config, &result.item.keywords)
             {
                 state.status_message = Some(msg);
             }
             let query = kmd_core::query_prefix::normalize_slash_command(&state.query)
                 .unwrap_or_else(|| state.query.clone());
             handle_keymap_query(&query, state);
-            return;
         }
-        // 나머지 kmd:* 항목은 안내용(noop) — 실행할 대상이 없다
-        return;
+        Activation::PromptCommit => commit_prompt_command(state, engine, db),
+        // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 브라우저가 열리지 않게)
+        Activation::TransformRun => run_transform(state),
+        // 클립보드 히스토리·데스크톱 설정은 TUI에 없다 — 안내 항목과 같이 무시
+        Activation::ClipPaste | Activation::Settings | Activation::Noop => {}
+        // 계산기·이모지 결과 → 클립보드 복사.
+        // 복사에 실패하면 실패를 알린다 — 예전에는 결과를 버리고 무조건 "Copied"라
+        // 표시해서, 클립보드가 막힌 환경에서 복사된 줄 알고 붙여넣다 낭패를 봤다.
+        Activation::Copy(text) if !text.is_empty() => {
+            state.status_message = Some(match copy_to_clipboard(&text) {
+                Ok(()) => format!("\u{2705} Copied: {text}"),
+                Err(e) => format!("\u{274C} 복사 실패: {e}"),
+            });
+        }
+        Activation::Copy(_) => execute_default(state, &result, db),
+        // Shell command — quick action은 백그라운드 실행 후 결과를 클립보드에 복사,
+        // 사용자 명령은 새 터미널 창에서 실행한다 (데스크톱과 동일한 UX).
+        // 인라인 실행의 10초 타임아웃은 즉답형 quick action에만 적합하다 —
+        // `>winget upgrade --all` 같은 장시간 명령을 중간에 죽이지 않는다.
+        Activation::ShellQuickAction => start_quick_action(state, result.item.clone()),
+        Activation::ShellTerminal => match builtin_shell::launch_in_terminal(&result.item.path) {
+            Ok(()) => {
+                state.status_message =
+                    Some(format!("\u{1F4DF} 터미널에서 실행: {}", result.item.path)); // 📟
+                if state.quit_on_launch {
+                    state.should_quit = true;
+                }
+            }
+            Err(e) => {
+                state.status_message = Some(format!("\u{274C} {}", e)); // ❌
+            }
+        },
+        Activation::Web => {
+            // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
+            if tui_try_llm_launch(state) {
+                if state.quit_on_launch {
+                    state.should_quit = true;
+                }
+                return;
+            }
+            // 웹 검색 결과 — extract_batch_urls 통합 (LLM 외 msearch/spell/translate)
+            if let Some(urls) = web::extract_batch_urls(&result.item) {
+                open_urls_and_quit(state, &urls);
+                return;
+            }
+            if !open_raw_web_query(state) {
+                execute_default(state, &result, db);
+            }
+        }
+        Activation::Execute => {
+            if !open_raw_web_query(state) {
+                execute_default(state, &result, db);
+            }
+        }
     }
+}
 
-    // Calculator result → copy to clipboard
-    // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 브라우저가 열리지 않게)
+/// `:t` 실행 — 질의로 변환 URL을 만들어 연다. 텍스트가 비면 클립보드를 쓴다.
+fn run_transform(state: &mut AppState) {
     use kmd_core::transform;
-    if result.item.keywords == transform::TRANSFORM_RUN_MARKER {
-        let trimmed = state.query.trim();
-        let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
-        let dispatch = normalized.as_deref().unwrap_or(trimmed);
-        if let Some(mut tq) = transform::parse_transform_query(dispatch) {
-            if tq.text.is_empty() {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Ok(text) = clipboard.get_text() {
-                        tq.text = text;
-                    }
-                }
-            }
-            let urls = transform::build_transform_urls(
-                &tq,
-                &state.spell_providers,
-                &state.translate_providers,
-            );
-            let kind_label = match &tq.kind {
-                transform::TransformKind::Spell => "맞춤법 검사",
-                transform::TransformKind::Translate(_) => "번역",
-            };
-            state.status_message = Some(format!(
-                "\u{2705} {} 실행 ({} 서비스)",
-                kind_label,
-                urls.len()
-            ));
-            open_urls_and_quit(state, &urls);
-        }
+    let trimmed = state.query.trim();
+    let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
+    let dispatch = normalized.as_deref().unwrap_or(trimmed);
+    let Some(mut tq) = transform::parse_transform_query(dispatch) else {
         return;
-    }
-
-    // 클립보드가 비어 실행할 수 없는 :t 안내 — 선택해도 아무 일도 하지 않는다
-    if result.item.keywords == transform::TRANSFORM_EMPTY_MARKER {
-        return;
-    }
-
-    // 계산기·이모지 결과 → 클립보드 복사.
-    // 복사에 실패하면 실패를 알린다 — 예전에는 결과를 버리고 무조건 "Copied"라
-    // 표시해서, 클립보드가 막힌 환경에서 복사된 줄 알고 붙여넣다 낭패를 봤다.
-    if matches!(result.item.kind, ItemKind::Calculator | ItemKind::Emoji)
-        && !result.item.path.is_empty()
-    {
-        state.status_message = Some(match copy_to_clipboard(&result.item.path) {
-            Ok(()) => format!("\u{2705} Copied: {}", result.item.path),
-            Err(e) => format!("\u{274C} 복사 실패: {e}"),
-        });
-        return;
-    }
-
-    // Shell command — quick action은 백그라운드 실행 후 결과를 클립보드에 복사,
-    // 사용자 명령은 새 터미널 창에서 실행한다 (데스크톱과 동일한 UX).
-    // 인라인 실행의 10초 타임아웃은 즉답형 quick action에만 적합하다 —
-    // `>winget upgrade --all` 같은 장시간 명령을 중간에 죽이지 않는다.
-    if result.item.kind == ItemKind::Shell {
-        if builtin_shell::ShellExtension::is_quick_action(&result.item.path) {
-            start_quick_action(state, result.item.clone());
-        } else {
-            match builtin_shell::launch_in_terminal(&result.item.path) {
-                Ok(()) => {
-                    state.status_message =
-                        Some(format!("\u{1F4DF} 터미널에서 실행: {}", result.item.path)); // 📟
-                    if state.quit_on_launch {
-                        state.should_quit = true;
-                    }
-                }
-                Err(e) => {
-                    state.status_message = Some(format!("\u{274C} {}", e)); // ❌
-                }
+    };
+    if tq.text.is_empty() {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            if let Ok(text) = clipboard.get_text() {
+                tq.text = text;
             }
         }
-        return;
     }
+    let urls =
+        transform::build_transform_urls(&tq, &state.spell_providers, &state.translate_providers);
+    let kind_label = match &tq.kind {
+        transform::TransformKind::Spell => "맞춤법 검사",
+        transform::TransformKind::Translate(_) => "번역",
+    };
+    state.status_message = Some(format!(
+        "\u{2705} {} 실행 ({} 서비스)",
+        kind_label,
+        urls.len()
+    ));
+    open_urls_and_quit(state, &urls);
+}
 
-    // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
-    if result.item.kind == ItemKind::WebSearch && tui_try_llm_launch(state) {
-        if state.quit_on_launch {
-            state.should_quit = true;
-        }
-        return;
-    }
-
-    // 웹 검색 결과 — extract_batch_urls 통합 (LLM 외 msearch/spell/translate)
-    if result.item.kind == ItemKind::WebSearch {
-        if let Some(urls) = web::extract_batch_urls(&result.item) {
-            open_urls_and_quit(state, &urls);
+/// `:prompt add/rm` Enter 확정 — 현재 질의를 다시 해석해 적용·저장한다.
+/// 성공하면 `:prompt` 목록으로 돌아가 결과를 바로 보여 준다.
+fn commit_prompt_command(
+    state: &mut AppState,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) {
+    let cmd = kmd_core::prompt::parse_command(state.query.trim());
+    // 디스크 최신 설정 위에 적용한다 (save_config_change 규칙) — 검증 실패면 저장하지 않는다.
+    let mut preview = state.config.launcher.prompt_templates.clone();
+    let msg = match kmd_core::prompt::apply_command(&cmd, &mut preview) {
+        Err(e) => {
+            state.status_message = Some(e);
             return;
         }
-    }
-
-    // 원시 입력 웹 쿼리 폴백 — classify_web_query 통합 분류기 사용
-    {
-        let cfg = web::WebQueryConfig {
-            spell_prefixes: &state.spell_prefixes,
-            translate_prefixes: &state.translate_prefixes,
-            multi_llm_prefixes: &state.multi_llm_prefixes,
-            multi_llm_ids: &state.selected_llm_providers,
-            multi_web_prefixes: &state.multi_web_prefixes,
-            multi_web_ids: &state.selected_multi_web_providers,
-        };
-        match web::classify_web_query(&state.query, &cfg) {
-            web::WebQueryResult::MultiLlm(services, q) if !q.is_empty() => {
-                let urls: Vec<String> = services
-                    .iter()
-                    .map(|s| web::build_search_url(s, &q))
-                    .collect();
-                open_urls_and_quit(state, &urls);
-                return;
-            }
-            web::WebQueryResult::MultiWeb(services, q) if !q.is_empty() => {
-                let urls: Vec<String> = services
-                    .iter()
-                    .map(|s| web::build_search_url(s, &q))
-                    .collect();
-                open_urls_and_quit(state, &urls);
-                return;
-            }
-            web::WebQueryResult::Spell(q) if !q.is_empty() => {
-                let items = web::spell_result_items(&q, &state.spell_providers, state.use_emoji);
-                if let Some(first) = items.first() {
-                    if let Some(urls) = web::extract_batch_urls(first) {
-                        open_urls_and_quit(state, &urls);
-                    }
-                }
-                return;
-            }
-            web::WebQueryResult::Translate(dir, q) if !q.is_empty() => {
-                let items = web::translate_result_items(
-                    &q,
-                    dir,
-                    &state.translate_providers,
-                    state.use_emoji,
-                );
-                if let Some(first) = items.first() {
-                    if let Some(urls) = web::extract_batch_urls(first) {
-                        open_urls_and_quit(state, &urls);
-                    }
-                }
-                return;
-            }
-            web::WebQueryResult::Single(service, q) if !q.is_empty() => {
-                let url = web::build_search_url(service, &q);
-                open_urls_and_quit(state, &[url]);
-                return;
-            }
-            _ => {}
+        Ok(msg) => msg,
+    };
+    let saved = save_config_change(state, move |latest| {
+        let _ = kmd_core::prompt::apply_command(&cmd, &mut latest.launcher.prompt_templates);
+    });
+    match saved {
+        Ok(()) => {
+            state.query = ":prompt".to_string();
+            state.refresh_effective_query();
+            state.selected_index = 0;
+            update_search(state, engine, db);
+            state.status_message = Some(msg);
         }
+        Err(e) => state.status_message = Some(format!("\u{274C} 저장 실패: {e}")),
     }
+}
 
-    // Normal execution
-    match action::execute(&result) {
+/// 원시 입력 웹 쿼리 폴백 — classify_web_query 통합 분류기로 URL을 연다.
+/// 열었으면 true.
+fn open_raw_web_query(state: &mut AppState) -> bool {
+    let cfg = web::WebQueryConfig {
+        spell_prefixes: &state.spell_prefixes,
+        translate_prefixes: &state.translate_prefixes,
+        multi_llm_prefixes: &state.multi_llm_prefixes,
+        multi_llm_ids: &state.selected_llm_providers,
+        multi_web_prefixes: &state.multi_web_prefixes,
+        multi_web_ids: &state.selected_multi_web_providers,
+    };
+    let urls: Vec<String> = match web::classify_web_query(&state.query, &cfg) {
+        web::WebQueryResult::MultiLlm(services, q) | web::WebQueryResult::MultiWeb(services, q)
+            if !q.is_empty() =>
+        {
+            services
+                .iter()
+                .map(|s| web::build_search_url(s, &q))
+                .collect()
+        }
+        web::WebQueryResult::Spell(q) if !q.is_empty() => {
+            web::spell_result_items(&q, &state.spell_providers, state.use_emoji)
+                .first()
+                .and_then(web::extract_batch_urls)
+                .unwrap_or_default()
+        }
+        web::WebQueryResult::Translate(dir, q) if !q.is_empty() => {
+            web::translate_result_items(&q, dir, &state.translate_providers, state.use_emoji)
+                .first()
+                .and_then(web::extract_batch_urls)
+                .unwrap_or_default()
+        }
+        web::WebQueryResult::Single(service, q) if !q.is_empty() => {
+            vec![web::build_search_url(service, &q)]
+        }
+        _ => return false,
+    };
+    // Spell/Translate는 URL이 없어도 처리한 것으로 본다 (예전 동작)
+    if !urls.is_empty() {
+        open_urls_and_quit(state, &urls);
+    }
+    true
+}
+
+/// 기본 실행 — `action::execute` 후 성공하면 실행 이력을 남긴다.
+fn execute_default(state: &mut AppState, result: &SearchResult, db: Option<&kmd_core::Database>) {
+    match action::execute(result) {
         action::ActionResult::Launched => {
             if let Some(db) = db {
                 kmd_core::history::record_launch(
                     db,
-                    &result.item.kind.to_string(),
+                    result.item.kind,
                     &result.item.path,
                     Some(&result.item.name),
                 );
@@ -1340,96 +1326,16 @@ fn handle_transform_query(query: &str, state: &mut AppState) {
 }
 
 /// Handle :prompt / :pt prefix (프롬프트 템플릿 관리)
+/// `:prompt` — 입력 중에는 미리보기만 한다. add/rm 확정은 Enter
+/// (`execute_selected` → `commit_prompt_command`)에서만 일어난다.
+/// 캐시된 설정을 쓴다 — 매 키 입력마다 디스크를 읽지 않는다.
 fn handle_prompt_query(query: &str, state: &mut AppState) {
-    let sub = query
-        .strip_prefix(":prompt")
-        .or_else(|| query.strip_prefix(":pt"))
-        .unwrap_or("")
-        .trim();
-
-    // 캐시된 설정을 쓴다 — 매 키 입력마다 디스크를 읽지 않는다.
-    // 아래 add/remove는 캐시를 직접 고치고 저장하므로 캐시가 어긋나지 않는다.
-    let templates = state.config.launcher.prompt_templates.clone();
-
-    // :prompt add <name> <body>
-    if sub.starts_with("add ") {
-        let rest = sub.strip_prefix("add ").unwrap_or("").trim();
-        if let Some(pos) = rest.find(char::is_whitespace) {
-            let name = &rest[..pos];
-            let body = rest[pos..].trim();
-            if !kmd_core::prompt::validate_template_name(name) {
-                state.status_message =
-                    Some("❌ 이름은 영문/숫자/하이픈만 사용 가능 (최대 32자)".to_string());
-            } else if body.is_empty() {
-                state.status_message = Some("❌ 본문이 비어 있습니다".to_string());
-            } else {
-                let (nm, bd) = (name.to_string(), body.to_string());
-                state.status_message = Some(
-                    match save_config_change(state, move |latest| {
-                        latest
-                            .launcher
-                            .prompt_templates
-                            .retain(|t| !t.name.eq_ignore_ascii_case(&nm));
-                        latest
-                            .launcher
-                            .prompt_templates
-                            .push(kmd_core::config::PromptTemplate { name: nm, body: bd });
-                    }) {
-                        Ok(()) => format!("✅ 템플릿 '{name}' 저장됨"),
-                        Err(e) => format!("❌ 저장 실패: {e}"),
-                    },
-                );
-            }
-        } else {
-            state.status_message = Some("사용법: :prompt add <name> <body>".to_string());
-        }
-        state.results.clear();
-        state.selected_index = 0;
-        return;
-    }
-
-    // :prompt remove <name>
-    if sub.starts_with("remove ") || sub.starts_with("rm ") || sub.starts_with("del ") {
-        let name = sub
-            .strip_prefix("remove ")
-            .or_else(|| sub.strip_prefix("rm "))
-            .or_else(|| sub.strip_prefix("del "))
-            .unwrap_or("")
-            .trim();
-        if name.is_empty() {
-            state.status_message = Some("사용법: :prompt remove <name>".to_string());
-        } else {
-            let exists = state
-                .config
-                .launcher
-                .prompt_templates
-                .iter()
-                .any(|t| t.name.eq_ignore_ascii_case(name));
-            if exists {
-                let nm = name.to_string();
-                state.status_message = Some(
-                    match save_config_change(state, move |latest| {
-                        latest
-                            .launcher
-                            .prompt_templates
-                            .retain(|t| !t.name.eq_ignore_ascii_case(&nm));
-                    }) {
-                        Ok(()) => format!("✅ 템플릿 '{name}' 삭제됨"),
-                        Err(e) => format!("❌ 저장 실패: {e}"),
-                    },
-                );
-            } else {
-                state.status_message = Some(format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"));
-            }
-        }
-        state.results.clear();
-        state.selected_index = 0;
-        return;
-    }
-
-    // :prompt list 또는 :prompt (필터링)
-    let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
-    let items = kmd_core::prompt::list_templates_as_items(&templates, filter, state.use_emoji);
+    let cmd = kmd_core::prompt::parse_command(query);
+    let items = kmd_core::prompt::command_items(
+        &cmd,
+        &state.config.launcher.prompt_templates,
+        state.use_emoji,
+    );
     state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
@@ -1495,7 +1401,7 @@ fn handle_settings_query(state: &mut AppState) {
             "[SET]"
         }
         .to_string(),
-        keywords: "kmd:tui:open_settings".to_string(),
+        keywords: kmd_core::activation::TUI_OPEN_SETTINGS_MARKER.to_string(),
         icon_path: None,
     };
     state.results = items_to_results(std::iter::once(item), SCORE_CALC);
@@ -1737,15 +1643,7 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
     state.results = history
         .into_iter()
         .map(|h| {
-            let kind = match h.item_type.as_str() {
-                "App" => ItemKind::App,
-                "File" => ItemKind::File,
-                "Dir" => ItemKind::Directory,
-                "Exe" => ItemKind::Executable,
-                "System" => ItemKind::SystemCommand,
-                "Web" => ItemKind::WebSearch,
-                _ => ItemKind::App,
-            };
+            let kind = ItemKind::from_history_tag(&h.item_type).unwrap_or(ItemKind::App);
             let path_buf = PathBuf::from(&h.value);
             let base_icon = match kind {
                 ItemKind::Directory => dir_icon(state.use_emoji),
@@ -2194,6 +2092,42 @@ mod tests {
         state.results = vec![item];
         state.selected_index = 0;
         execute_selected(state, engine, None);
+    }
+
+    #[test]
+    fn 웹_브라우징_가상_항목을_실행하면_해당_모드로_전환한다() {
+        // 예전 TUI는 이 항목을 action::execute로 넘겨 "URL이 없습니다" 오류가 났다
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        let mut item = sysitem("@llm", "여러 LLM에 동시에 질문", "kmd:web_hint:multi_llm");
+        item.item.kind = ItemKind::WebSearch;
+        run_selected(&mut state, &mut engine, item);
+        assert_eq!(state.query, "@llm ");
+        assert!(state.status_message.is_none(), "{:?}", state.status_message);
+    }
+
+    #[test]
+    fn prompt_입력_중에는_설정이_바뀌지_않는다() {
+        let mut state = test_state();
+        state.config.launcher.prompt_templates = vec![
+            kmd_core::config::PromptTemplate {
+                name: "a".into(),
+                body: "A".into(),
+            },
+            kmd_core::config::PromptTemplate {
+                name: "ab".into(),
+                body: "AB".into(),
+            },
+        ];
+        for q in [":prompt rm", ":prompt rm a", ":prompt rm ab"] {
+            handle_prompt_query(q, &mut state);
+        }
+        assert_eq!(state.config.launcher.prompt_templates.len(), 2);
+        assert_eq!(
+            state.results[0].item.keywords,
+            kmd_core::prompt::PROMPT_COMMIT_MARKER,
+            "확정은 Enter에서"
+        );
     }
 
     #[test]

@@ -42,6 +42,44 @@ pub enum ItemKind {
     Shell,
 }
 
+impl ItemKind {
+    /// 실행 이력(history.item_type)에 저장하는 정규 태그.
+    ///
+    /// 예전엔 UI마다 표기가 달라(TUI/CLI `"App"`·`"Dir"`, 데스크톱 `"app"`·`"dir"`·`"misc"`,
+    /// CLI 경로 실행 `"file"`) 같은 경로가 유니크 키 `(item_type, value)`에서 두 행으로
+    /// 갈리고 frecency가 낮게 잡혔다. 기록은 반드시 이 태그로 한다(db v4가 기존 행 정규화).
+    pub fn history_tag(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::File => "file",
+            Self::Executable => "exe",
+            Self::SystemCommand => "system",
+            Self::WebSearch => "web",
+            Self::Directory => "dir",
+            Self::Calculator => "calc",
+            Self::Emoji => "emoji",
+            Self::Shell => "shell",
+        }
+    }
+
+    /// 이력 태그 → ItemKind. 대소문자와 예전 표기(`Directory`, `Exe` 등)를 허용하고,
+    /// 모르는 태그(예전 데스크톱의 `misc`)는 None.
+    pub fn from_history_tag(tag: &str) -> Option<Self> {
+        Some(match tag.to_ascii_lowercase().as_str() {
+            "app" => Self::App,
+            "file" => Self::File,
+            "exe" | "executable" => Self::Executable,
+            "system" => Self::SystemCommand,
+            "web" => Self::WebSearch,
+            "dir" | "directory" => Self::Directory,
+            "calc" => Self::Calculator,
+            "emoji" => Self::Emoji,
+            "shell" => Self::Shell,
+            _ => return None,
+        })
+    }
+}
+
 impl std::fmt::Display for ItemKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

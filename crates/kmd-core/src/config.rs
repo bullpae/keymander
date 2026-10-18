@@ -474,7 +474,7 @@ pub struct DoubleTapToml {
 }
 
 /// 재사용 가능한 프롬프트 템플릿. `@ll :name question` 형태로 LLM에 전달.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PromptTemplate {
     /// 고유 이름 (영문/숫자/하이픈, 예: code-review)
     pub name: String,

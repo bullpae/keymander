@@ -450,7 +450,7 @@ pub fn unknown_command_hint(query: &str, use_emoji: bool) -> Option<IndexItem> {
         kind: ItemKind::SystemCommand,
         source: Source::Plugin,
         icon: if use_emoji { "\u{2753}" } else { "[?]" }.to_string(),
-        keywords: "kmd:unknown_cmd".to_string(),
+        keywords: crate::activation::UNKNOWN_CMD_MARKER.to_string(),
         icon_path: None,
     })
 }
@@ -516,15 +516,7 @@ pub fn recent_items(db: &crate::Database, limit: usize, use_emoji: bool) -> Vec<
     db.query_history(limit)
         .into_iter()
         .map(|h| {
-            let kind = match h.item_type.as_str() {
-                "App" => ItemKind::App,
-                "File" => ItemKind::File,
-                "Dir" => ItemKind::Directory,
-                "Exe" => ItemKind::Executable,
-                "System" => ItemKind::SystemCommand,
-                "Web" => ItemKind::WebSearch,
-                _ => ItemKind::App,
-            };
+            let kind = ItemKind::from_history_tag(&h.item_type).unwrap_or(ItemKind::App);
             let base_icon = match kind {
                 ItemKind::Directory => {
                     if use_emoji {
@@ -627,7 +619,12 @@ mod tests {
     #[test]
     fn 최근_항목은_이력_표시를_달고_나온다() {
         let db = crate::Database::open_in_memory().unwrap();
-        crate::history::record_launch(&db, "app", "/Applications/Safari.app", Some("Safari"));
+        crate::history::record_launch(
+            &db,
+            ItemKind::App,
+            "/Applications/Safari.app",
+            Some("Safari"),
+        );
 
         let items = recent_items(&db, 10, false);
         assert_eq!(items.len(), 1);

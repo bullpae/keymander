@@ -4,6 +4,7 @@
 //! for the keymander keyboard launcher.
 
 pub mod action;
+pub mod activation;
 pub mod config;
 pub mod content_index;
 pub mod db;

@@ -146,13 +146,12 @@ fn suggest_from_history(
     let mut by_parent: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
 
     for h in dbs.iter().flat_map(|db| db.query_history(HISTORY_SCAN)) {
-        // 경로가 있는 항목만. 예전 이력은 item_type 표기가 데스크톱(소문자)과
-        // TUI(대문자)로 갈려 있어 대소문자를 무시한다.
-        let kind = h.item_type.to_ascii_lowercase();
-        let is_dir = kind == "dir" || kind == "directory";
-        if !(is_dir || kind == "file") {
-            continue;
-        }
+        // 경로가 있는 항목만 (태그는 대소문자·예전 표기를 허용해 해석).
+        let is_dir = match crate::index::ItemKind::from_history_tag(&h.item_type) {
+            Some(crate::index::ItemKind::Directory) => true,
+            Some(crate::index::ItemKind::File) => false,
+            _ => continue,
+        };
         let p = PathBuf::from(&h.value);
         if !p.is_absolute() {
             continue;
