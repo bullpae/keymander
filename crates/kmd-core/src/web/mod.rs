@@ -12,11 +12,11 @@ pub mod services;
 // ── re-export — 기존 `web::*` 임포트를 깨뜨리지 않도록 ──────────────────────
 
 pub use items::{
-    build_llm_launch_plan, build_search_url, build_translate_url, extract_batch_urls,
+    browse_items, build_llm_launch_plan, build_search_url, build_translate_url, extract_batch_urls,
     extract_multi_llm_urls, extract_multi_web_urls, extract_spell_urls, extract_translate_urls,
     list_services_as_items, llm_plan_all_urls, multi_llm_result_items, multi_web_result_items,
     search_result_item, spell_result_items, translate_result_items, url_encode,
-    web_browse_hint_seed, LlmLaunchPlan,
+    web_browse_hint_seed, web_query_items, LlmLaunchPlan,
 };
 
 pub use parsers::{
@@ -36,6 +36,35 @@ pub use services::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 브라우징_목록은_멀티_진입점을_필터와_무관하게_보인다() {
+        let items = browse_items("google", false);
+        for hint in ["kmd:web_hint:multi_llm", "kmd:web_hint:multi_web"] {
+            let n = items
+                .iter()
+                .filter(|i| i.keywords.lines().next() == Some(hint))
+                .count();
+            assert_eq!(n, 1, "{hint}는 정확히 한 번: {items:?}");
+        }
+        // 빈 필터(모든 가상 항목이 이미 포함)에서도 중복되지 않는다
+        let all = browse_items("", false);
+        let n = all
+            .iter()
+            .filter(|i| i.keywords.starts_with("kmd:web_hint:multi_llm"))
+            .count();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn 웹_질의_항목은_목록_여부를_알려준다() {
+        let launcher = crate::config::LauncherConfig::default();
+        let (_, listing) = web_query_items("@", &launcher, false);
+        assert!(listing);
+        let (items, listing) = web_query_items("@g rust", &launcher, false);
+        assert!(!listing);
+        assert_eq!(items.len(), 1);
+    }
 
     #[test]
     fn test_parse_google() {

@@ -93,28 +93,30 @@ const PROVIDER_GROUPS: &[ProviderGroup] = &[
 ];
 
 impl App {
-    /// 군별 현재 선택 목록(App 상태 쪽 정본)에 대한 읽기 접근.
+    /// 군별 현재 선택 목록(`runtime_config.launcher`가 정본)에 대한 읽기 접근.
     fn provider_selection(&self, kind: ProviderKind) -> &Vec<String> {
+        let launcher = &self.runtime_config.launcher;
         match kind {
-            ProviderKind::Llm => &self.selected_llm_providers,
-            ProviderKind::MultiWeb => &self.selected_multi_web_providers,
-            ProviderKind::Spell => &self.spell_providers,
-            ProviderKind::Translate => &self.translate_providers,
+            ProviderKind::Llm => &launcher.multi_llm_providers,
+            ProviderKind::MultiWeb => &launcher.multi_web_providers,
+            ProviderKind::Spell => &launcher.spell_providers,
+            ProviderKind::Translate => &launcher.translate_providers,
         }
     }
 
     /// 프로바이더 하나를 켜고 끈다. 전부 꺼지면 해당 군의 기본값(모든 멤버)으로
     /// 되돌린다 — `@llm`/`@sp` 같은 프리픽스가 빈 목록으로 무력화되지 않게 한다.
-    /// App 상태와 `runtime_config`를 함께 갱신하고 config에 저장한다.
+    /// `runtime_config`를 갱신하고 config에 저장한다.
     fn toggle_provider(&mut self, group: &ProviderGroup, target: &str) {
         if target.is_empty() {
             return;
         }
+        let launcher = &mut self.runtime_config.launcher;
         let selected = match group.kind {
-            ProviderKind::Llm => &mut self.selected_llm_providers,
-            ProviderKind::MultiWeb => &mut self.selected_multi_web_providers,
-            ProviderKind::Spell => &mut self.spell_providers,
-            ProviderKind::Translate => &mut self.translate_providers,
+            ProviderKind::Llm => &mut launcher.multi_llm_providers,
+            ProviderKind::MultiWeb => &mut launcher.multi_web_providers,
+            ProviderKind::Spell => &mut launcher.spell_providers,
+            ProviderKind::Translate => &mut launcher.translate_providers,
         };
 
         if selected.iter().any(|v| v.eq_ignore_ascii_case(target)) {
@@ -131,33 +133,16 @@ impl App {
         }
 
         let selected = selected.clone();
-        let failure = match group.kind {
-            ProviderKind::Llm => {
-                self.runtime_config.launcher.multi_llm_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.multi_llm_providers = selected)
+        let kind = group.kind;
+        self.status_message = save_config(move |cfg| {
+            let l = &mut cfg.launcher;
+            match kind {
+                ProviderKind::Llm => l.multi_llm_providers = selected,
+                ProviderKind::MultiWeb => l.multi_web_providers = selected,
+                ProviderKind::Spell => l.spell_providers = selected,
+                ProviderKind::Translate => l.translate_providers = selected,
             }
-            ProviderKind::MultiWeb => {
-                self.runtime_config.launcher.multi_web_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.multi_web_providers = selected)
-            }
-            ProviderKind::Spell => {
-                self.runtime_config.launcher.spell_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.spell_providers = selected)
-            }
-            ProviderKind::Translate => {
-                self.runtime_config.launcher.translate_providers = selected.clone();
-                save_config(move |cfg| cfg.launcher.translate_providers = selected)
-            }
-        };
-        self.status_message = failure;
-    }
-
-    fn set_clipboard(text: &str) {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            if let Err(e) = clipboard.set_text(text.to_string()) {
-                tracing::warn!("클립보드 쓰기 실패: {e}");
-            }
-        }
+        });
     }
 
     /// LLM 실행(@gpt/@llm) 라우팅. LLM 쿼리가 아니면 None을 반환해 일반 경로에 맡긴다.
@@ -169,8 +154,8 @@ impl App {
     pub(super) fn try_llm_launch(&self) -> Option<Task<Message>> {
         let (services, prompt) = web::parse_any_llm_query(
             &self.query,
-            &self.selected_llm_providers,
-            &self.multi_llm_prefixes,
+            &self.runtime_config.launcher.multi_llm_providers,
+            &self.runtime_config.launcher.multi_llm_prefixes,
         )?;
         if services.is_empty() {
             return None;
@@ -209,7 +194,9 @@ impl App {
 
         // 폴백: 전 서비스 URL 열기 + (붙여넣기형 있으면) 클립보드
         if has_paste && !final_prompt.is_empty() {
-            Self::set_clipboard(&final_prompt);
+            if let Err(e) = kmd_core::clipboard::set_text(&final_prompt) {
+                tracing::warn!("클립보드 쓰기 실패: {e}");
+            }
         }
         for url in web::llm_plan_all_urls(&plan) {
             let _ = kmd_core::action::open_url(&url);

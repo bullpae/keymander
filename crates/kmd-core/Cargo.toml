@@ -30,6 +30,9 @@ bincode = { version = "2", features = ["serde"] }
 # Paths
 dirs = "6"
 
+# 시스템 클립보드 — 데스크톱·TUI·CLI가 각자 감싸던 것을 clipboard 모듈로 모은다
+arboard = "3.6.1"
+
 # Error
 thiserror = "2"
 

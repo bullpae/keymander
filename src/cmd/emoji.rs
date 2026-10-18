@@ -77,7 +77,7 @@ pub fn run(query: &str, list: bool, json: bool, copy_nth: Option<usize>) -> Resu
     if let Some(idx) = copy_index {
         if idx >= 1 && idx <= results.len() {
             let emoji = &results[idx - 1].path;
-            match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(emoji.clone())) {
+            match kmd_core::clipboard::set_text(emoji) {
                 Ok(()) => {
                     println!("\n  ✅ Copied: {}", emoji);
                 }

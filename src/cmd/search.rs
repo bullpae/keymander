@@ -5,158 +5,9 @@ use color_eyre::Result;
 pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     let config = super::load_config()?;
 
-    // Check spelling query (@sp / @spell)
-    if let Some(spell_query) =
-        kmd_core::web::parse_spell_query_with_prefixes(query, &config.launcher.spell_prefixes)
-    {
-        let items = kmd_core::web::spell_result_items(
-            &spell_query,
-            &config.launcher.spell_providers,
-            config.general.emoji_icons,
-        );
-        if json {
-            print_items_json(&items)?;
-        } else if spell_query.is_empty() {
-            println!("Configured spelling providers:");
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-            let usage = config
-                .launcher
-                .spell_prefixes
-                .first()
-                .map(String::as_str)
-                .unwrap_or("@sp");
-            println!("\nUsage: {} <text>", usage);
-        } else {
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-        }
-        return Ok(());
-    }
-
-    // Check translate query (@tr / @trko / @tren)
-    if let Some((direction, tr_query)) = kmd_core::web::parse_translate_query_with_prefixes(
-        query,
-        &config.launcher.translate_prefixes,
-    ) {
-        let items = kmd_core::web::translate_result_items(
-            &tr_query,
-            direction,
-            &config.launcher.translate_providers,
-            config.general.emoji_icons,
-        );
-        if json {
-            print_items_json(&items)?;
-        } else if tr_query.is_empty() {
-            println!("Configured translate providers:");
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-            let usage = config
-                .launcher
-                .translate_prefixes
-                .first()
-                .map(String::as_str)
-                .unwrap_or("@tr");
-            println!("\nUsage: {} <text>", usage);
-        } else {
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-        }
-        return Ok(());
-    }
-
-    // Check for multi-LLM query (@llm / @multi / @cmp)
-    if let Some((_services, llm_query)) = kmd_core::web::parse_multi_llm_query_with_prefixes(
-        query,
-        &config.launcher.multi_llm_providers,
-        &config.launcher.multi_llm_prefixes,
-    ) {
-        let items = kmd_core::web::multi_llm_result_items(
-            &llm_query,
-            &config.launcher.multi_llm_providers,
-            config.general.emoji_icons,
-        );
-        if json {
-            print_items_json(&items)?;
-        } else if llm_query.is_empty() {
-            println!("Configured multi-LLM providers:");
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-            let usage = config
-                .launcher
-                .multi_llm_prefixes
-                .first()
-                .map(String::as_str)
-                .unwrap_or("@llm");
-            println!("\nUsage: {} <prompt>", usage);
-        } else {
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-        }
-        return Ok(());
-    }
-
-    // Check for multi-web query (@msearch / @multisearch / @searchall / @krsearch)
-    if let Some((_services, web_query)) = kmd_core::web::parse_multi_web_query_with_prefixes(
-        query,
-        &config.launcher.multi_web_providers,
-        &config.launcher.multi_web_prefixes,
-    ) {
-        let items = kmd_core::web::multi_web_result_items(
-            &web_query,
-            &config.launcher.multi_web_providers,
-            config.general.emoji_icons,
-        );
-        if json {
-            print_items_json(&items)?;
-        } else if web_query.is_empty() {
-            println!("Configured multi-web engines:");
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-            let usage = config
-                .launcher
-                .multi_web_prefixes
-                .first()
-                .map(String::as_str)
-                .unwrap_or("@msearch");
-            println!("\nUsage: {} <query>", usage);
-        } else {
-            for item in &items {
-                println!("  {} {}", item.icon, item.name);
-            }
-        }
-        return Ok(());
-    }
-
-    // Check for web query (@prefix)
-    if let Some((service, web_query)) = kmd_core::web::parse_web_query(query) {
-        if web_query.is_empty() {
-            // List services
-            let items = kmd_core::web::list_services_as_items("", config.general.emoji_icons);
-            if json {
-                print_items_json(&items)?;
-            } else {
-                for item in &items {
-                    println!("  {} {}", item.icon, item.name);
-                }
-            }
-        } else {
-            let item =
-                kmd_core::web::search_result_item(service, &web_query, config.general.emoji_icons);
-            let url = kmd_core::web::build_search_url(service, &web_query);
-            if json {
-                print_items_json(&[item])?;
-            } else {
-                println!("  {} {} → {}", service.icon, service.name, url);
-            }
-        }
+    // 웹 프리픽스 질의 — 데스크톱/TUI와 같은 통합 분류기를 쓴다
+    // (예전엔 parse_* 체인을 따로 들고 있던 세 번째 라우터였다).
+    if run_web_query(query, &config, json)? {
         return Ok(());
     }
 
@@ -199,4 +50,97 @@ fn print_items_json(items: &[kmd_core::index::IndexItem]) -> color_eyre::Result<
     let json = serde_json::to_string_pretty(items)?;
     println!("{}", json);
     Ok(())
+}
+
+/// `@...` 웹 질의를 처리했으면 true. 서비스에 매칭되지 않는 `@xyz`는 일반 검색으로 넘긴다.
+fn run_web_query(query: &str, config: &kmd_core::Config, json: bool) -> Result<bool> {
+    use kmd_core::web::{self, WebQueryResult};
+
+    let l = &config.launcher;
+    let emoji = config.general.emoji_icons;
+    // (빈 질의일 때 제목, 사용법 별칭 목록, 기본 별칭, 인자 이름, 질의, 항목)
+    let (title, prefixes, fallback, arg, q, items) =
+        match web::classify_web_query(query, &web::WebQueryConfig::from_launcher(l)) {
+            WebQueryResult::Spell(q) => {
+                let items = web::spell_result_items(&q, &l.spell_providers, emoji);
+                (
+                    "spelling providers",
+                    &l.spell_prefixes,
+                    "@sp",
+                    "<text>",
+                    q,
+                    items,
+                )
+            }
+            WebQueryResult::Translate(dir, q) => {
+                let items = web::translate_result_items(&q, dir, &l.translate_providers, emoji);
+                (
+                    "translate providers",
+                    &l.translate_prefixes,
+                    "@tr",
+                    "<text>",
+                    q,
+                    items,
+                )
+            }
+            WebQueryResult::MultiLlm(_, q) => {
+                let items = web::multi_llm_result_items(&q, &l.multi_llm_providers, emoji);
+                (
+                    "multi-LLM providers",
+                    &l.multi_llm_prefixes,
+                    "@llm",
+                    "<prompt>",
+                    q,
+                    items,
+                )
+            }
+            WebQueryResult::MultiWeb(_, q) => {
+                let items = web::multi_web_result_items(&q, &l.multi_web_providers, emoji);
+                (
+                    "multi-web engines",
+                    &l.multi_web_prefixes,
+                    "@msearch",
+                    "<query>",
+                    q,
+                    items,
+                )
+            }
+            WebQueryResult::Single(_, q) if q.is_empty() => {
+                let items = web::list_services_as_items("", emoji);
+                if json {
+                    print_items_json(&items)?;
+                } else {
+                    for item in &items {
+                        println!("  {} {}", item.icon, item.name);
+                    }
+                }
+                return Ok(true);
+            }
+            WebQueryResult::Single(service, q) => {
+                if json {
+                    print_items_json(&[web::search_result_item(service, &q, emoji)])?;
+                } else {
+                    let url = web::build_search_url(service, &q);
+                    println!("  {} {} → {}", service.icon, service.name, url);
+                }
+                return Ok(true);
+            }
+            WebQueryResult::Browse(_) => return Ok(false),
+        };
+
+    if json {
+        print_items_json(&items)?;
+        return Ok(true);
+    }
+    if q.is_empty() {
+        println!("Configured {title}:");
+    }
+    for item in &items {
+        println!("  {} {}", item.icon, item.name);
+    }
+    if q.is_empty() {
+        let usage = prefixes.first().map(String::as_str).unwrap_or(fallback);
+        println!("\nUsage: {usage} {arg}");
+    }
+    Ok(true)
 }

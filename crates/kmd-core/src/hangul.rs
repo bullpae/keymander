@@ -616,15 +616,20 @@ fn decompose_syllable(ch: char) -> Option<(u32, u32, u32)> {
 /// Check if a character is already a Korean character (syllable or jamo).
 /// Used to detect when the system IME is active and we should pass through.
 pub fn is_korean_char(c: char) -> bool {
-    let code = c as u32;
     // Hangul Syllables: U+AC00..U+D7AF
-    // Hangul Jamo: U+1100..U+11FF
-    // Hangul Compatibility Jamo: U+3131..U+3163
-    // Hangul Jamo Extended-A: U+A960..U+A97F
-    // Hangul Jamo Extended-B: U+D7B0..U+D7FF
-    (0xAC00..=0xD7AF).contains(&code)
-        || (0x1100..=0x11FF).contains(&code)
-        || (0x3131..=0x3163).contains(&code)
+    (0xAC00..=0xD7AF).contains(&(c as u32)) || is_jamo(c)
+}
+
+/// 완성 음절이 아닌 한글 자모인지 (IME 조합 중간 상태 판정용).
+///
+/// - Hangul Jamo: U+1100..U+11FF
+/// - Hangul Compatibility Jamo: U+3131..U+318E (옛한글 포함 — IME가 낼 수 있다)
+/// - Hangul Jamo Extended-A: U+A960..U+A97F
+/// - Hangul Jamo Extended-B: U+D7B0..U+D7FF
+pub fn is_jamo(c: char) -> bool {
+    let code = c as u32;
+    (0x1100..=0x11FF).contains(&code)
+        || (0x3131..=0x318E).contains(&code)
         || (0xA960..=0xA97F).contains(&code)
         || (0xD7B0..=0xD7FF).contains(&code)
 }

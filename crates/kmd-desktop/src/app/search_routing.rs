@@ -68,48 +68,13 @@ impl App {
 
     /// classify_web_query 통합 분류기 사용
     pub(super) fn handle_web_query(&mut self, query: &str) {
-        let emoji = self.use_emoji;
-        let cfg = web::WebQueryConfig {
-            spell_prefixes: &self.spell_prefixes,
-            translate_prefixes: &self.translate_prefixes,
-            multi_llm_prefixes: &self.multi_llm_prefixes,
-            multi_llm_ids: &self.selected_llm_providers,
-            multi_web_prefixes: &self.multi_web_prefixes,
-            multi_web_ids: &self.selected_multi_web_providers,
-        };
-
-        let results = match web::classify_web_query(query, &cfg) {
-            web::WebQueryResult::Spell(q) => {
-                items_to_results(web::spell_result_items(&q, &self.spell_providers, emoji))
-            }
-            web::WebQueryResult::Translate(dir, q) => items_to_results(
-                web::translate_result_items(&q, dir, &self.translate_providers, emoji),
-            ),
-            web::WebQueryResult::MultiLlm(_svcs, q) => items_to_results(
-                web::multi_llm_result_items(&q, &self.selected_llm_providers, emoji),
-            ),
-            web::WebQueryResult::MultiWeb(_svcs, q) => items_to_results(
-                web::multi_web_result_items(&q, &self.selected_multi_web_providers, emoji),
-            ),
-            web::WebQueryResult::Single(service, q) => {
-                if q.is_empty() {
-                    let mut items = web::list_services_as_items("", emoji);
-                    ensure_multi_llm_hint(&mut items, emoji);
-                    ensure_multi_web_hint(&mut items, emoji);
-                    items_to_results(items)
-                } else {
-                    let item = web::search_result_item(service, &q, emoji);
-                    items_to_results(std::iter::once(item))
-                }
-            }
-            web::WebQueryResult::Browse(filter) => {
-                let mut items = web::list_services_as_items(&filter, emoji);
-                ensure_multi_llm_hint(&mut items, emoji);
-                ensure_multi_web_hint(&mut items, emoji);
-                items_to_results(items)
-            }
-        };
-        self.commit_results(results, kmd_core::SearchMode::Contains, true);
+        let (items, _listing) =
+            web::web_query_items(query, &self.runtime_config.launcher, self.use_emoji);
+        self.commit_results(
+            items_to_results(items),
+            kmd_core::SearchMode::Contains,
+            true,
+        );
     }
 
     pub(super) fn handle_version_query(&mut self) {
@@ -125,21 +90,14 @@ impl App {
     pub(super) fn handle_transform_query(&mut self, query: &str) {
         use kmd_core::transform;
 
-        match transform::parse_transform_query(query) {
-            Some(mut tq) => {
-                if tq.text.is_empty() {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Ok(text) = clipboard.get_text() {
-                            tq.text = text;
-                        }
-                    }
-                }
+        match transform::parse_transform_query_or_clipboard(query) {
+            Some(tq) => {
                 // 검색 중에는 열지 않는다 — 타이핑하는 동안 키마다 탭이 열린다.
                 // 실행 항목 하나만 보여주고, 실제 열기는 Enter에서 한다.
                 let count = transform::build_transform_urls(
                     &tq,
-                    &self.spell_providers,
-                    &self.translate_providers,
+                    &self.runtime_config.launcher.spell_providers,
+                    &self.runtime_config.launcher.translate_providers,
                 )
                 .len();
                 let item = transform::run_item(&tq, count, self.use_emoji);
@@ -386,7 +344,11 @@ impl App {
             .collect();
         items.extend(web_items);
 
-        let multi_items = web::multi_llm_result_items(query, &self.selected_llm_providers, emoji);
+        let multi_items = web::multi_llm_result_items(
+            query,
+            &self.runtime_config.launcher.multi_llm_providers,
+            emoji,
+        );
         if let Some(multi_item) = multi_items.into_iter().next() {
             items.insert(
                 5,

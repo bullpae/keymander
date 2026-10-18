@@ -176,24 +176,81 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
         let matched =
             filter_lower.is_empty() || entry.match_terms.iter().any(|t| t.contains(&filter_lower));
         if matched {
-            items.push(IndexItem {
-                name: entry.name.to_string(),
-                path: entry.path.to_string(),
-                kind: ItemKind::WebSearch,
-                source: Source::Plugin,
-                icon: if use_emoji {
-                    entry.emoji_icon
-                } else {
-                    entry.ascii_icon
-                }
-                .to_string(),
-                keywords: format!("{}\n{}", entry.hint, entry.keywords),
-                icon_path: None,
-            });
+            items.push(virtual_entry_item(entry, use_emoji));
         }
     }
 
     items
+}
+
+fn virtual_entry_item(entry: &VirtualBrowseEntry, use_emoji: bool) -> IndexItem {
+    IndexItem {
+        name: entry.name.to_string(),
+        path: entry.path.to_string(),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji {
+            entry.emoji_icon
+        } else {
+            entry.ascii_icon
+        }
+        .to_string(),
+        keywords: format!("{}\n{}", entry.hint, entry.keywords),
+        icon_path: None,
+    }
+}
+
+/// `@` 브라우징 목록 — 필터와 무관하게 멀티 LLM·멀티 웹검색 진입점은 항상 보인다.
+///
+/// 두 기능은 프리픽스를 모르면 발견할 길이 없어, 필터에 걸리지 않아도 목록 끝에 붙인다.
+/// (예전엔 데스크톱이 같은 문구를 손으로 복제해 붙였고 문구가 이미 어긋나 있었다.)
+pub fn browse_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
+    let mut items = list_services_as_items(filter, use_emoji);
+    for hint in ["kmd:web_hint:multi_llm", "kmd:web_hint:multi_web"] {
+        let present = items
+            .iter()
+            .any(|it| it.keywords.lines().next() == Some(hint));
+        if !present {
+            if let Some(entry) = VIRTUAL_BROWSE_ENTRIES.iter().find(|e| e.hint == hint) {
+                items.push(virtual_entry_item(entry, use_emoji));
+            }
+        }
+    }
+    items
+}
+
+/// `@...` 질의의 결과 항목 — 두 UI가 각자 `classify_web_query`를 match하던 것을 모았다.
+/// 두 번째 값은 서비스 목록(브라우징)인지 여부 — UI가 점수 정책을 달리 줄 때 쓴다.
+pub fn web_query_items(
+    query: &str,
+    launcher: &crate::config::LauncherConfig,
+    use_emoji: bool,
+) -> (Vec<IndexItem>, bool) {
+    use super::parsers::{classify_web_query, WebQueryConfig, WebQueryResult};
+    let cfg = WebQueryConfig::from_launcher(launcher);
+    match classify_web_query(query, &cfg) {
+        WebQueryResult::Spell(q) => (
+            spell_result_items(&q, &launcher.spell_providers, use_emoji),
+            false,
+        ),
+        WebQueryResult::Translate(dir, q) => (
+            translate_result_items(&q, dir, &launcher.translate_providers, use_emoji),
+            false,
+        ),
+        WebQueryResult::MultiLlm(_, q) => (
+            multi_llm_result_items(&q, &launcher.multi_llm_providers, use_emoji),
+            false,
+        ),
+        WebQueryResult::MultiWeb(_, q) => (
+            multi_web_result_items(&q, &launcher.multi_web_providers, use_emoji),
+            false,
+        ),
+        WebQueryResult::Single(_, q) if q.is_empty() => (browse_items("", use_emoji), true),
+        WebQueryResult::Single(service, q) => {
+            (vec![search_result_item(service, &q, use_emoji)], false)
+        }
+        WebQueryResult::Browse(filter) => (browse_items(&filter, use_emoji), true),
+    }
 }
 
 /// 단일 서비스 검색 결과 아이템

@@ -5,6 +5,7 @@
 
 pub mod action;
 pub mod activation;
+pub mod clipboard;
 pub mod config;
 pub mod content_index;
 pub mod db;

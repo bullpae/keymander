@@ -93,24 +93,8 @@ pub struct AppState {
     pub is_portable: bool,
     /// Use emoji icons (mirrors config.general.emoji_icons)
     pub use_emoji: bool,
-    /// Selected LLM providers used by @llm multi prompt.
-    pub selected_llm_providers: Vec<String>,
-    /// Command aliases used for multi LLM query.
-    pub multi_llm_prefixes: Vec<String>,
     /// LLM 오토파일럿(데몬 키 주입 자동 제출) opt-in 여부.
     pub llm_autopilot: bool,
-    /// Selected search engines used by @msearch multi web.
-    pub selected_multi_web_providers: Vec<String>,
-    /// Command aliases used for multi web query.
-    pub multi_web_prefixes: Vec<String>,
-    /// Providers used for spelling check.
-    pub spell_providers: Vec<String>,
-    /// Command aliases used for spelling check.
-    pub spell_prefixes: Vec<String>,
-    /// Providers used for translation.
-    pub translate_providers: Vec<String>,
-    /// Command aliases used for translation.
-    pub translate_prefixes: Vec<String>,
     /// 로드된 설정 — **키 입력마다 디스크를 다시 읽지 않기 위한 캐시**.
     /// 예전에는 `:keys`/`:keymap`/`:prompt`/`?` 핸들러가 매 키 입력마다
     /// `load_config()`로 config.toml을 읽었다 (데스크톱은 캐시를 쓴다).
@@ -157,15 +141,22 @@ impl AppState {
         self.show_preview = general.show_preview;
         self.preview_width_percent = general.preview_width_percent;
         self.quit_on_launch = launcher.quit_on_launch;
-        self.selected_llm_providers = launcher.multi_llm_providers.clone();
-        self.multi_llm_prefixes = launcher.multi_llm_prefixes.clone();
         self.llm_autopilot = launcher.llm_autopilot;
-        self.selected_multi_web_providers = launcher.multi_web_providers.clone();
-        self.multi_web_prefixes = launcher.multi_web_prefixes.clone();
-        self.spell_providers = launcher.spell_providers.clone();
-        self.spell_prefixes = launcher.spell_prefixes.clone();
-        self.translate_providers = launcher.translate_providers.clone();
-        self.translate_prefixes = launcher.translate_prefixes.clone();
+    }
+
+    /// 저장된 설정으로 캐시를 교체하고 파생 필드를 다시 채운다.
+    ///
+    /// 미리보기 표시는 Ctrl+P로 바꾸는 **런타임 상태**이기도 하다 — 예전엔 아무 설정
+    /// 저장(`:prompt add` 등)에도 config 값으로 덮어써 사용자가 켠 미리보기가 꺼졌다.
+    /// 설정의 show_preview 값 자체가 바뀐 경우에만 반영한다.
+    fn replace_config(&mut self, saved: kmd_core::Config) {
+        let preview_changed = saved.general.show_preview != self.config.general.show_preview;
+        let runtime_preview = self.show_preview;
+        self.config = saved;
+        self.sync_config_mirrors();
+        if !preview_changed {
+            self.show_preview = runtime_preview;
+        }
     }
 
     pub fn search_mode_label(&self) -> &str {
@@ -214,8 +205,8 @@ fn items_to_results(
 /// `instance_guard` is the single-instance RAII guard obtained in `main()`.
 /// The event loop checks it on every tick for external quit signals.
 ///
-/// `center_window` — if true, re-centre the console after entering the
-/// alternate screen buffer, ensuring a stable position on hotkey launch.
+/// `_show_on_ready` — Windows 콘솔 표시 시점 제어용으로 받지만 현재는 쓰지 않는다
+/// (창 중앙 배치는 Windows Terminal의 `centerOnLaunch`가 맡는다).
 pub fn run_app(
     instance_guard: Option<kmd_core::single_instance::Guard>,
     _show_on_ready: bool,
@@ -259,15 +250,7 @@ pub fn run_app(
         settings: None,
         is_portable: kmd_core::portable::is_portable(),
         use_emoji: config.general.emoji_icons,
-        selected_llm_providers: Vec::new(),
-        multi_llm_prefixes: Vec::new(),
         llm_autopilot: false,
-        selected_multi_web_providers: Vec::new(),
-        multi_web_prefixes: Vec::new(),
-        spell_providers: Vec::new(),
-        spell_prefixes: Vec::new(),
-        translate_providers: Vec::new(),
-        translate_prefixes: Vec::new(),
         config: config.clone(),
         frecency: db
             .as_ref()
@@ -485,11 +468,10 @@ fn apply_settings_action(
             };
 
             // 여기부터는 파일이 확실히 새 값이다. 메모리도 저장된 것으로 맞춘다.
-            state.config = saved;
             settings_state.dirty = false;
 
             // Apply immediate settings — config 파생 필드는 한 곳에서 다시 채운다.
-            state.sync_config_mirrors();
+            state.replace_config(saved);
             engine.set_kind_weights(state.config.launcher.kind_weights.clone());
 
             if needs_rebuild {
@@ -715,7 +697,6 @@ fn handle_paste(
 
 // ── Execute ──────────────────────────────────────────────────────────────────
 
-/// URL 목록을 브라우저로 열고, quit_on_launch 설정 시 종료 플래그 설정
 /// 디스크의 최신 설정에 변경분만 얹어 저장하고, 성공하면 메모리 캐시를
 /// 저장된 설정으로 교체한다.
 ///
@@ -731,19 +712,13 @@ fn save_config_change(
     };
     match kmd_core::Config::update_and_save(&path, edit) {
         Ok(saved) => {
-            state.config = saved;
-            state.sync_config_mirrors();
+            state.replace_config(saved);
             Ok(())
         }
         Err(e) => Err(e.to_string()),
     }
 }
 
-/// 클립보드에 쓰고 실패를 그대로 돌려준다.
-///
-/// 예전에는 호출부마다 `let _ = clipboard.set_text(..)`로 결과를 버리고 무조건
-/// "Copied"라고 표시했다 — 클립보드가 막힌 환경(원격 세션·권한 제한)에서
-/// 복사된 줄 알고 붙여넣다 낭패를 본다.
 /// quick action을 워커 스레드에서 시작한다. 결과는 `poll_pending_shell`이 받는다.
 fn start_quick_action(state: &mut AppState, item: kmd_core::IndexItem) {
     // 겹쳐 실행하지 않는다 — 두 결과가 클립보드를 번갈아 덮어쓰면 사용자는
@@ -784,7 +759,7 @@ fn apply_quick_action_result(state: &mut AppState, action: kmd_core::plugin::Ext
     match action {
         kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
             let first_line = output.lines().next().unwrap_or("(no output)").to_string();
-            state.status_message = Some(match copy_to_clipboard(&output) {
+            state.status_message = Some(match kmd_core::clipboard::set_text(&output) {
                 Ok(()) => format!("\u{2705} {first_line}"),
                 Err(e) => format!("\u{274C} 실행은 됐으나 복사 실패: {e}"),
             });
@@ -796,13 +771,7 @@ fn apply_quick_action_result(state: &mut AppState, action: kmd_core::plugin::Ext
     }
 }
 
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|e| e.to_string())
-}
-
+/// URL 목록을 브라우저로 열고, quit_on_launch 설정 시 종료 플래그 설정
 fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
     for url in urls {
         let _ = action::open_url(url);
@@ -817,8 +786,8 @@ fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
 fn tui_try_llm_launch(state: &mut AppState) -> bool {
     let Some((services, prompt)) = web::parse_any_llm_query(
         &state.query,
-        &state.selected_llm_providers,
-        &state.multi_llm_prefixes,
+        &state.config.launcher.multi_llm_providers,
+        &state.config.launcher.multi_llm_prefixes,
     ) else {
         return false;
     };
@@ -850,12 +819,12 @@ fn tui_try_llm_launch(state: &mut AppState) -> bool {
 
     // 폴백: 전 서비스 URL + (붙여넣기형 있으면) 클립보드
     if has_paste && !final_prompt.is_empty() {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(&final_prompt);
-        }
-        state.status_message = Some(
-            "✅ 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)".to_string(),
-        );
+        // 실패를 숨기지 않는다 — 복사됐다고 믿고 붙여넣으면 빈 프롬프트가 나간다.
+        state.status_message = Some(match kmd_core::clipboard::set_text(&final_prompt) {
+            Ok(()) => "✅ 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)"
+                .to_string(),
+            Err(e) => format!("❌ 프롬프트 복사 실패: {e} — 서비스 창에 직접 입력하세요"),
+        });
     }
     for url in web::llm_plan_all_urls(&plan) {
         let _ = action::open_url(&url);
@@ -950,7 +919,7 @@ fn execute_selected(
         // 복사에 실패하면 실패를 알린다 — 예전에는 결과를 버리고 무조건 "Copied"라
         // 표시해서, 클립보드가 막힌 환경에서 복사된 줄 알고 붙여넣다 낭패를 봤다.
         Activation::Copy(text) if !text.is_empty() => {
-            state.status_message = Some(match copy_to_clipboard(&text) {
+            state.status_message = Some(match kmd_core::clipboard::set_text(&text) {
                 Ok(()) => format!("\u{2705} Copied: {text}"),
                 Err(e) => format!("\u{274C} 복사 실패: {e}"),
             });
@@ -1004,18 +973,14 @@ fn run_transform(state: &mut AppState) {
     let trimmed = state.query.trim();
     let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
     let dispatch = normalized.as_deref().unwrap_or(trimmed);
-    let Some(mut tq) = transform::parse_transform_query(dispatch) else {
+    let Some(tq) = transform::parse_transform_query_or_clipboard(dispatch) else {
         return;
     };
-    if tq.text.is_empty() {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            if let Ok(text) = clipboard.get_text() {
-                tq.text = text;
-            }
-        }
-    }
-    let urls =
-        transform::build_transform_urls(&tq, &state.spell_providers, &state.translate_providers);
+    let urls = transform::build_transform_urls(
+        &tq,
+        &state.config.launcher.spell_providers,
+        &state.config.launcher.translate_providers,
+    );
     let kind_label = match &tq.kind {
         transform::TransformKind::Spell => "맞춤법 검사",
         transform::TransformKind::Translate(_) => "번역",
@@ -1063,14 +1028,8 @@ fn commit_prompt_command(
 /// 원시 입력 웹 쿼리 폴백 — classify_web_query 통합 분류기로 URL을 연다.
 /// 열었으면 true.
 fn open_raw_web_query(state: &mut AppState) -> bool {
-    let cfg = web::WebQueryConfig {
-        spell_prefixes: &state.spell_prefixes,
-        translate_prefixes: &state.translate_prefixes,
-        multi_llm_prefixes: &state.multi_llm_prefixes,
-        multi_llm_ids: &state.selected_llm_providers,
-        multi_web_prefixes: &state.multi_web_prefixes,
-        multi_web_ids: &state.selected_multi_web_providers,
-    };
+    let launcher = &state.config.launcher;
+    let cfg = web::WebQueryConfig::from_launcher(launcher);
     let urls: Vec<String> = match web::classify_web_query(&state.query, &cfg) {
         web::WebQueryResult::MultiLlm(services, q) | web::WebQueryResult::MultiWeb(services, q)
             if !q.is_empty() =>
@@ -1081,13 +1040,13 @@ fn open_raw_web_query(state: &mut AppState) -> bool {
                 .collect()
         }
         web::WebQueryResult::Spell(q) if !q.is_empty() => {
-            web::spell_result_items(&q, &state.spell_providers, state.use_emoji)
+            web::spell_result_items(&q, &launcher.spell_providers, state.use_emoji)
                 .first()
                 .and_then(web::extract_batch_urls)
                 .unwrap_or_default()
         }
         web::WebQueryResult::Translate(dir, q) if !q.is_empty() => {
-            web::translate_result_items(&q, dir, &state.translate_providers, state.use_emoji)
+            web::translate_result_items(&q, dir, &launcher.translate_providers, state.use_emoji)
                 .first()
                 .and_then(web::extract_batch_urls)
                 .unwrap_or_default()
@@ -1234,55 +1193,13 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
 
 /// Handle @prefix web service queries — classify_web_query 통합 분류기 사용
 fn handle_web_query(query: &str, state: &mut AppState) {
-    let emoji = state.use_emoji;
-    let cfg = web::WebQueryConfig {
-        spell_prefixes: &state.spell_prefixes,
-        translate_prefixes: &state.translate_prefixes,
-        multi_llm_prefixes: &state.multi_llm_prefixes,
-        multi_llm_ids: &state.selected_llm_providers,
-        multi_web_prefixes: &state.multi_web_prefixes,
-        multi_web_ids: &state.selected_multi_web_providers,
+    let (items, listing) = web::web_query_items(query, &state.config.launcher, state.use_emoji);
+    let score = if listing {
+        SCORE_WEB_LIST
+    } else {
+        SCORE_WEB_SEARCH
     };
-
-    match web::classify_web_query(query, &cfg) {
-        web::WebQueryResult::Spell(q) => {
-            state.results = items_to_results(
-                web::spell_result_items(&q, &state.spell_providers, emoji),
-                SCORE_WEB_SEARCH,
-            );
-        }
-        web::WebQueryResult::Translate(dir, q) => {
-            state.results = items_to_results(
-                web::translate_result_items(&q, dir, &state.translate_providers, emoji),
-                SCORE_WEB_SEARCH,
-            );
-        }
-        web::WebQueryResult::MultiLlm(_svcs, q) => {
-            state.results = items_to_results(
-                web::multi_llm_result_items(&q, &state.selected_llm_providers, emoji),
-                SCORE_WEB_SEARCH,
-            );
-        }
-        web::WebQueryResult::MultiWeb(_svcs, q) => {
-            state.results = items_to_results(
-                web::multi_web_result_items(&q, &state.selected_multi_web_providers, emoji),
-                SCORE_WEB_SEARCH,
-            );
-        }
-        web::WebQueryResult::Single(service, q) => {
-            if q.is_empty() {
-                state.results =
-                    items_to_results(web::list_services_as_items("", emoji), SCORE_WEB_LIST);
-            } else {
-                let item = web::search_result_item(service, &q, emoji);
-                state.results = items_to_results(std::iter::once(item), SCORE_WEB_SEARCH);
-            }
-        }
-        web::WebQueryResult::Browse(filter) => {
-            state.results =
-                items_to_results(web::list_services_as_items(&filter, emoji), SCORE_WEB_LIST);
-        }
-    }
+    state.results = items_to_results(items, score);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }
@@ -1291,23 +1208,14 @@ fn handle_web_query(query: &str, state: &mut AppState) {
 fn handle_transform_query(query: &str, state: &mut AppState) {
     use kmd_core::transform;
 
-    match transform::parse_transform_query(query) {
-        Some(mut tq) => {
-            // 텍스트가 비어있으면 클립보드에서 가져오기
-            if tq.text.is_empty() {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Ok(text) = clipboard.get_text() {
-                        tq.text = text;
-                    }
-                }
-            }
-
+    match transform::parse_transform_query_or_clipboard(query) {
+        Some(tq) => {
             // 검색 중에는 열지 않는다 — 실행 항목만 보여주고 Enter에서 연다.
             // (데스크톱과 같은 규칙: "검색은 순수하게, 실행은 Enter에서")
             let count = transform::build_transform_urls(
                 &tq,
-                &state.spell_providers,
-                &state.translate_providers,
+                &state.config.launcher.spell_providers,
+                &state.config.launcher.translate_providers,
             )
             .len();
             let item = transform::run_item(&tq, count, state.use_emoji);
@@ -1548,6 +1456,8 @@ fn drill_into_folder(state: &mut AppState) {
     state.drill_path = Some(dir_path);
     state.search_mode = SearchMode::Contains;
     state.query.clear();
+    // 캐시된 유효 쿼리도 함께 비운다 — 안 그러면 입력창 플레이스홀더 판정이 낡은 값을 본다
+    state.refresh_effective_query();
 }
 
 /// Go back from drill-down to the previous state
@@ -1560,6 +1470,7 @@ fn drill_back(state: &mut AppState) {
             .min(state.results.len().saturating_sub(1));
         state.search_mode = prev.search_mode;
         state.drill_path = prev.parent_drill_path;
+        state.refresh_effective_query();
     }
 }
 
@@ -1694,15 +1605,7 @@ mod tests {
             settings: None,
             is_portable: false,
             use_emoji: true,
-            selected_llm_providers: Vec::new(),
-            multi_llm_prefixes: Vec::new(),
             llm_autopilot: false,
-            selected_multi_web_providers: Vec::new(),
-            multi_web_prefixes: Vec::new(),
-            spell_providers: Vec::new(),
-            spell_prefixes: Vec::new(),
-            translate_providers: Vec::new(),
-            translate_prefixes: Vec::new(),
             config: kmd_core::Config::default(),
             frecency: Default::default(),
             pending_shell: None,
@@ -1958,7 +1861,7 @@ mod tests {
     #[test]
     fn 변환질의는_검색중_실행되지_않고_실행항목을_세운다() {
         let mut state = test_state();
-        state.spell_providers = vec!["naver_spell".into()];
+        state.config.launcher.spell_providers = vec!["naver_spell".into()];
         handle_transform_query(":t spell 안녕하세요", &mut state);
 
         assert_eq!(state.results.len(), 1, "실행 항목 하나만 선다");
@@ -1980,7 +1883,7 @@ mod tests {
     #[test]
     fn 변환질의_타이핑_도중에도_항목만_바뀐다() {
         let mut state = test_state();
-        state.spell_providers = vec!["naver_spell".into()];
+        state.config.launcher.spell_providers = vec!["naver_spell".into()];
         // "안", "안녕", "안녕하" … 한 글자씩 늘려도 매번 항목 하나뿐이어야 한다
         for partial in ["안", "안녕", "안녕하"] {
             handle_transform_query(&format!(":t spell {partial}"), &mut state);
@@ -2011,14 +1914,6 @@ mod tests {
         state.config.general.preview_width_percent = 55;
         state.config.launcher.quit_on_launch = true;
         state.config.launcher.llm_autopilot = true;
-        state.config.launcher.multi_llm_providers = vec!["claude".into()];
-        state.config.launcher.multi_llm_prefixes = vec!["@llm".into()];
-        state.config.launcher.multi_web_providers = vec!["google".into()];
-        state.config.launcher.multi_web_prefixes = vec!["@ms".into()];
-        state.config.launcher.spell_providers = vec!["naver_spell".into()];
-        state.config.launcher.spell_prefixes = vec!["@sp".into()];
-        state.config.launcher.translate_providers = vec!["papago".into()];
-        state.config.launcher.translate_prefixes = vec!["@tr".into()];
 
         state.sync_config_mirrors();
 
@@ -2026,17 +1921,6 @@ mod tests {
         assert_eq!(state.preview_width_percent, 55);
         assert!(state.quit_on_launch);
         assert!(state.llm_autopilot);
-        assert_eq!(state.selected_llm_providers, vec!["claude".to_string()]);
-        assert_eq!(state.multi_llm_prefixes, vec!["@llm".to_string()]);
-        assert_eq!(
-            state.selected_multi_web_providers,
-            vec!["google".to_string()]
-        );
-        assert_eq!(state.multi_web_prefixes, vec!["@ms".to_string()]);
-        assert_eq!(state.spell_providers, vec!["naver_spell".to_string()]);
-        assert_eq!(state.spell_prefixes, vec!["@sp".to_string()]);
-        assert_eq!(state.translate_providers, vec!["papago".to_string()]);
-        assert_eq!(state.translate_prefixes, vec!["@tr".to_string()]);
     }
 
     #[test]
@@ -2049,10 +1933,26 @@ mod tests {
             state.preview_width_percent,
             cfg.general.preview_width_percent
         );
-        assert_eq!(
-            state.selected_llm_providers,
-            cfg.launcher.multi_llm_providers
-        );
+    }
+
+    #[test]
+    fn 설정_저장은_ctrl_p로_바꾼_미리보기를_되돌리지_않는다() {
+        let mut state = test_state();
+        state.sync_config_mirrors();
+        state.show_preview = !state.config.general.show_preview; // Ctrl+P
+        let toggled = state.show_preview;
+
+        let mut saved = state.config.clone();
+        saved.launcher.quit_on_launch = !saved.launcher.quit_on_launch; // 무관한 설정 저장
+        state.replace_config(saved);
+        assert_eq!(state.show_preview, toggled);
+
+        // 설정에서 show_preview 자체를 바꿨다면 그 값을 따른다
+        let mut saved = state.config.clone();
+        saved.general.show_preview = !saved.general.show_preview;
+        let wanted = saved.general.show_preview;
+        state.replace_config(saved);
+        assert_eq!(state.show_preview, wanted);
     }
 
     fn type_str(state: &mut AppState, engine: &mut SearchEngine, s: &str) {

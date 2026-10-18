@@ -1158,9 +1158,25 @@ pub fn execute_keymap_action(config: &mut Config, keywords: &str) -> Option<Stri
         if !path.exists() {
             return Some(format!("프로파일 파일이 없습니다: {}", path.display()));
         }
-        config.launcher.keymap.active_profile = profile_name.clone();
-        let _ = config.save();
-        return Some(format!("active profile 변경: {profile_name}"));
+        // 디스크 최신 설정 위에 이 필드만 얹어 저장한다 (folder_suggest와 같은 규칙).
+        // 예전엔 메모리 설정 전체를 save()해 그 사이 다른 곳의 변경을 되돌렸고,
+        // 실패도 버린 채 "변경" 메시지를 냈다.
+        let Some(cfg_path) = config.config_path.clone() else {
+            config.launcher.keymap.active_profile = profile_name.clone();
+            return Some(format!("active profile 변경: {profile_name}"));
+        };
+        let name = profile_name.clone();
+        return Some(
+            match Config::update_and_save(&cfg_path, move |latest| {
+                latest.launcher.keymap.active_profile = name;
+            }) {
+                Ok(saved) => {
+                    *config = saved;
+                    format!("active profile 변경: {profile_name}")
+                }
+                Err(e) => format!("프로파일 변경 저장 실패: {e}"),
+            },
+        );
     }
     None
 }

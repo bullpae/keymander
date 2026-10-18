@@ -3,14 +3,6 @@
 use super::context_actions_for;
 use super::*;
 
-/// 클립보드에 쓰고 실패를 그대로 돌려준다 — 호출부가 사용자에게 알릴 수 있게.
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|e| e.to_string())
-}
-
 impl App {
     /// Enter 실행 진입점 (KeyEvent에서 호출). 클립보드 결과에서 Cmd(macOS)/
     /// Ctrl+Enter는 붙여넣지 않고 시스템 클립보드에 **복사만** 하며, 그 외에는
@@ -99,10 +91,10 @@ impl App {
     }
 
     pub(super) fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {
-        let Some(result) = self.results.get(self.selected) else {
+        let Some(item) = self.results.get(self.selected).map(|r| r.item.clone()) else {
             return Task::none();
         };
-        let item = &result.item;
+        let item = &item;
 
         match action {
             ContextAction::Open => self.launch_selected(),
@@ -145,26 +137,26 @@ impl App {
                 }
                 exit_launcher()
             }
-            ContextAction::CopyPath => {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&item.path) {
-                        tracing::warn!("클립보드 쓰기 실패: {e}");
-                    }
-                }
-                exit_launcher()
-            }
+            ContextAction::CopyPath => self.copy_then_exit(&item.path),
             ContextAction::CopyName => {
                 let text = if item.kind == ItemKind::Calculator || item.kind == ItemKind::Emoji {
                     item.path.clone()
                 } else {
                     item.name.clone()
                 };
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&text) {
-                        tracing::warn!("클립보드 쓰기 실패: {e}");
-                    }
-                }
-                exit_launcher()
+                self.copy_then_exit(&text)
+            }
+        }
+    }
+
+    /// 복사 후 창을 닫는다. 복사에 실패하면 닫지 않고 알린다 — 닫아버리면 복사된 줄 안다.
+    fn copy_then_exit(&mut self, text: &str) -> Task<Message> {
+        match kmd_core::clipboard::set_text(text) {
+            Ok(()) => exit_launcher(),
+            Err(e) => {
+                tracing::warn!("클립보드 쓰기 실패: {e}");
+                self.status_message = Some(format!("복사 실패: {e}"));
+                Task::none()
             }
         }
     }
@@ -275,16 +267,8 @@ impl App {
             // 계산기·이모지 결과: 값을 클립보드에 복사 후 종료.
             // (core의 action::execute는 이 둘을 Launched로만 돌려준다 — 클립보드는
             // UI의 몫이라 여기서 처리한다.) 복사에 실패하면 창을 닫지 않는다.
-            Activation::Copy(text) => {
-                if !text.is_empty() {
-                    if let Err(e) = copy_to_clipboard(&text) {
-                        tracing::warn!("클립보드 복사 실패: {e}");
-                        self.status_message = Some(format!("복사 실패: {e}"));
-                        return Task::none();
-                    }
-                }
-                exit_launcher()
-            }
+            Activation::Copy(text) if text.is_empty() => exit_launcher(),
+            Activation::Copy(text) => self.copy_then_exit(&text),
             Activation::Web => {
                 // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
                 if let Some(task) = self.try_llm_launch() {
@@ -312,20 +296,13 @@ impl App {
         let trimmed = self.query.trim();
         let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
         let dispatch = normalized.as_deref().unwrap_or(trimmed);
-        let Some(mut tq) = kmd_core::transform::parse_transform_query(dispatch) else {
+        let Some(tq) = kmd_core::transform::parse_transform_query_or_clipboard(dispatch) else {
             return Vec::new();
         };
-        if tq.text.is_empty() {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                if let Ok(text) = clipboard.get_text() {
-                    tq.text = text;
-                }
-            }
-        }
         kmd_core::transform::build_transform_urls(
             &tq,
-            &self.spell_providers,
-            &self.translate_providers,
+            &self.runtime_config.launcher.spell_providers,
+            &self.runtime_config.launcher.translate_providers,
         )
     }
 

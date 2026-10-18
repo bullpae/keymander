@@ -254,14 +254,6 @@ pub struct App {
     window_id: Option<window::Id>,
     raw_window_id: Option<u64>,
     use_emoji: bool,
-    selected_llm_providers: Vec<String>,
-    multi_llm_prefixes: Vec<String>,
-    selected_multi_web_providers: Vec<String>,
-    multi_web_prefixes: Vec<String>,
-    spell_providers: Vec<String>,
-    spell_prefixes: Vec<String>,
-    translate_providers: Vec<String>,
-    translate_prefixes: Vec<String>,
     daemon_autostart_enabled: Option<bool>,
     daemon_autostart_last_checked_at: Option<std::time::Instant>,
     daemon_autostart_check_in_flight: bool,
@@ -548,11 +540,7 @@ impl App {
             .chars()
             .rev()
             .find(|c| !c.is_whitespace())
-            .is_some_and(Self::is_hangul_jamo)
-    }
-
-    fn is_hangul_jamo(ch: char) -> bool {
-        is_hangul_jamo(ch)
+            .is_some_and(kmd_core::hangul::is_jamo)
     }
 
     fn kind_code(kind: ItemKind) -> u8 {
@@ -669,14 +657,6 @@ impl App {
         };
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
-        let selected_llm_providers = config.launcher.multi_llm_providers.clone();
-        let multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
-        let selected_multi_web_providers = config.launcher.multi_web_providers.clone();
-        let multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
-        let spell_providers = config.launcher.spell_providers.clone();
-        let spell_prefixes = config.launcher.spell_prefixes.clone();
-        let translate_providers = config.launcher.translate_providers.clone();
-        let translate_prefixes = config.launcher.translate_prefixes.clone();
         let reset_ime = config.general.reset_ime_on_launch;
         let ui = UiScale::new(config.general.font_size, config.general.visible_rows);
         let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
@@ -702,14 +682,6 @@ impl App {
             window_id: None,
             raw_window_id: None,
             use_emoji,
-            selected_llm_providers,
-            multi_llm_prefixes,
-            selected_multi_web_providers,
-            multi_web_prefixes,
-            spell_providers,
-            spell_prefixes,
-            translate_providers,
-            translate_prefixes,
             daemon_autostart_enabled: None,
             daemon_autostart_last_checked_at: None,
             daemon_autostart_check_in_flight: false,
@@ -1189,18 +1161,9 @@ impl App {
 
         if let Some(res) = loaded {
             let EngineLoadResult { engine, config } = res;
-            let launcher = &config.launcher;
             self.engine = engine;
             self.full_engine_loaded = true;
             self.use_emoji = config.general.emoji_icons;
-            self.selected_llm_providers = launcher.multi_llm_providers.clone();
-            self.selected_multi_web_providers = launcher.multi_web_providers.clone();
-            self.multi_llm_prefixes = launcher.multi_llm_prefixes.clone();
-            self.multi_web_prefixes = launcher.multi_web_prefixes.clone();
-            self.spell_providers = launcher.spell_providers.clone();
-            self.spell_prefixes = launcher.spell_prefixes.clone();
-            self.translate_providers = launcher.translate_providers.clone();
-            self.translate_prefixes = launcher.translate_prefixes.clone();
             self.runtime_config = config;
             self.loading = false;
             tracing::info!("Search engine ready");
@@ -1330,7 +1293,7 @@ impl App {
     /// 코드 검증을 추가해도 GUI에서는 오류를 볼 수 없었다.
     fn handle_shell_done(&mut self, result: Result<String, String>) -> Task<Message> {
         match result {
-            Ok(output) => match copy_shell_output(&output) {
+            Ok(output) => match kmd_core::clipboard::set_text(&output) {
                 Ok(()) => {
                     let first_line = output.lines().next().unwrap_or("(no output)");
                     tracing::info!("Shell output copied: {first_line}");
@@ -1548,7 +1511,7 @@ fn relaxed_hangul_query(query: &str) -> Option<String> {
     let mut chars: Vec<char> = query.chars().collect();
     let original_len = chars.len();
     while let Some(last) = chars.last() {
-        if is_hangul_jamo(*last) {
+        if kmd_core::hangul::is_jamo(*last) {
             chars.pop();
         } else {
             break;
@@ -1562,14 +1525,6 @@ fn relaxed_hangul_query(query: &str) -> Option<String> {
     Some(chars.into_iter().collect())
 }
 
-fn is_hangul_jamo(ch: char) -> bool {
-    let code = ch as u32;
-    (0x1100..=0x11FF).contains(&code)
-        || (0x3131..=0x318E).contains(&code)
-        || (0xA960..=0xA97F).contains(&code)
-        || (0xD7B0..=0xD7FF).contains(&code)
-}
-
 fn items_to_results(
     items: impl IntoIterator<Item = kmd_core::IndexItem>,
 ) -> Vec<kmd_core::SearchResult> {
@@ -1580,60 +1535,6 @@ fn items_to_results(
             score: SCORE_PLUGIN,
         })
         .collect()
-}
-
-fn ensure_multi_llm_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
-    if items
-        .iter()
-        .any(|item| item.name.starts_with("@ll") || item.name.starts_with("@llm"))
-    {
-        return;
-    }
-    items.push(IndexItem {
-        name: "@ll         Compare multiple LLMs with one prompt".to_string(),
-        path: "Open selected LLM providers in parallel tabs".to_string(),
-        kind: ItemKind::WebSearch,
-        source: Source::Plugin,
-        icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
-        keywords: "kmd:web_hint:multi_llm\n@ll @llm @multi @cmp multi llm compare".to_string(),
-        icon_path: None,
-    });
-}
-
-fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
-    if items
-        .iter()
-        .any(|item| item.name.starts_with("@m ") || item.name.starts_with("@msearch"))
-    {
-        return;
-    }
-    items.push(IndexItem {
-        name: "@m          Search multiple engines at once".to_string(),
-        path: "Open Google/Naver/Daum in parallel tabs".to_string(),
-        kind: ItemKind::WebSearch,
-        source: Source::Plugin,
-        icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
-        keywords:
-            "kmd:web_hint:multi_web\n@m @mw @msearch @multisearch @searchall @krsearch multi web"
-                .to_string(),
-        icon_path: None,
-    });
-}
-
-/// 설정 파일을 디스크에서 다시 읽어 해당 필드만 고쳐 저장한다.
-///
-/// 통째로 덮어쓰지 않는 이유: 데몬이나 다른 인스턴스가 같은 파일을 만졌을 때
-/// 우리 메모리 캐시로 그 변경을 지워버리지 않기 위해서다.
-///
-/// 실패하면 사용자에게 보여줄 메시지를 돌려준다 — 조용히 로그만 남기면
-/// 사용자는 설정이 저장된 줄 안다.
-/// Quick Action 출력을 클립보드에 쓴다. 실패는 그대로 돌려준다 —
-/// 호출부가 창을 닫을지 알릴지 정한다.
-fn copy_shell_output(text: &str) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|e| e.to_string())
 }
 
 /// 런처를 닫는다 — 닫기 전에 할 일을 한 곳에서.
@@ -1671,7 +1572,12 @@ fn config_save_path() -> std::path::PathBuf {
 }
 
 /// 설정 파일을 디스크에서 다시 읽어 **바꾸는 항목만** 고쳐 저장한다.
-/// 실패하면 사용자에게 보여줄 메시지를 돌려준다.
+///
+/// 통째로 덮어쓰지 않는 이유: 데몬이나 다른 인스턴스가 같은 파일을 만졌을 때
+/// 우리 메모리 캐시로 그 변경을 지워버리지 않기 위해서다.
+///
+/// 실패하면 사용자에게 보여줄 메시지를 돌려준다 — 조용히 로그만 남기면
+/// 사용자는 설정이 저장된 줄 안다.
 fn save_config(f: impl FnOnce(&mut kmd_core::Config)) -> Option<String> {
     let path = config_save_path();
     match kmd_core::Config::update_and_save(&path, f) {
@@ -2863,7 +2769,7 @@ mod tests {
     #[test]
     fn 변환질의는_검색중_실행되지_않고_실행항목을_세운다() {
         let mut app = make_test_app();
-        app.spell_providers = vec!["naver_spell".into()];
+        app.runtime_config.launcher.spell_providers = vec!["naver_spell".into()];
         app.query = ":t spell 안녕하세요".into();
         app.handle_transform_query(":t spell 안녕하세요");
 
@@ -2878,7 +2784,7 @@ mod tests {
     #[test]
     fn 변환질의_타이핑_도중에도_항목만_바뀐다() {
         let mut app = make_test_app();
-        app.spell_providers = vec!["naver_spell".into()];
+        app.runtime_config.launcher.spell_providers = vec!["naver_spell".into()];
         for partial in ["안", "안녕", "안녕하"] {
             let q = format!(":t spell {partial}");
             app.query = q.clone();
@@ -3011,7 +2917,7 @@ mod tests {
             run_settings_action(&mut app, &format!("kmd:settings:spell:toggle:{id}"));
         }
         assert_eq!(
-            app.spell_providers,
+            app.runtime_config.launcher.spell_providers,
             vec!["naver_spell".to_string(), "pusan_spell".to_string()],
             "전부 끄면 기본값으로 되돌아와야 @sp가 계속 동작한다"
         );
