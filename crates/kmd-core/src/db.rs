@@ -45,7 +45,7 @@ impl Database {
     /// Open database file (creates parent dirs if needed)
     pub fn open(path: &Path) -> Result<Self, DbError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(DbError::Io)?;
+            std::fs::create_dir_all(parent)?;
             // 이 DB는 실행/검색 히스토리를 담고, WAL 모드라 kmd.db-wal/-shm
             // 사이드카까지 같은 디렉터리에 생긴다. 포터블 설치 위치는 상위 경로가
             // 0755라 다른 사용자가 읽을 수 있으므로, 데이터 디렉터리를 0700으로
@@ -58,16 +58,13 @@ impl Database {
             }
         }
 
-        let conn = Connection::open(path).map_err(DbError::Sqlite)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(DbError::Sqlite)?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(DbError::Sqlite)?;
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         // 데몬(본문 인덱싱 쓰기)과 데스크톱/TUI(frecency 읽기)가 같은 파일을
         // 다른 프로세스에서 연다. WAL이라 읽기-쓰기 동시성은 되지만, 쓰기 겹침
         // 순간의 SQLITE_BUSY 즉시 실패를 피하려면 대기 시간이 필요하다.
-        conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(DbError::Sqlite)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
         let db = Self { conn };
         db.migrate()?;
@@ -80,9 +77,11 @@ impl Database {
         &self.conn
     }
 
-    /// Open in-memory database (for testing)
+    /// Open in-memory database (for testing) — 파일 DB와 같은 pragma를 건다
+    /// (예전엔 foreign_keys를 건너뛰어 테스트 환경이 실제와 달랐다).
     pub fn open_in_memory() -> Result<Self, DbError> {
-        let conn = Connection::open_in_memory().map_err(DbError::Sqlite)?;
+        let conn = Connection::open_in_memory()?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -97,17 +96,15 @@ impl Database {
         value: &str,
         display: Option<&str>,
     ) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT INTO history(item_type, value, display, frequency)
+        self.conn.execute(
+            "INSERT INTO history(item_type, value, display, frequency)
                  VALUES (?1, ?2, ?3, 1)
                  ON CONFLICT(item_type, value) DO UPDATE SET
                    frequency = frequency + 1,
                    display = COALESCE(?3, display),
                    executed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-                rusqlite::params![item_type, value, display],
-            )
-            .map_err(DbError::Sqlite)?;
+            rusqlite::params![item_type, value, display],
+        )?;
 
         // 매 20회 호출당 1회 pruning.
         // 기존의 subsec_nanos() % 20 방식은 Windows 시계 해상도가 100ns
@@ -232,20 +229,16 @@ impl Database {
 
     /// Clear all history
     pub fn clear_history(&self) -> Result<(), DbError> {
-        self.conn
-            .execute("DELETE FROM history", [])
-            .map_err(DbError::Sqlite)?;
+        self.conn.execute("DELETE FROM history", [])?;
         Ok(())
     }
 
     /// Add a bookmark
     pub fn add_bookmark(&self, name: &str, value: &str, item_type: &str) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO bookmarks(name, value, item_type) VALUES (?1, ?2, ?3)",
-                rusqlite::params![name, value, item_type],
-            )
-            .map_err(DbError::Sqlite)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO bookmarks(name, value, item_type) VALUES (?1, ?2, ?3)",
+            rusqlite::params![name, value, item_type],
+        )?;
         Ok(())
     }
 
@@ -289,15 +282,13 @@ impl Database {
 
     /// Set a value in kv_store
     pub fn kv_set(&self, key: &str, value: &str) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT INTO kv_store(key, value) VALUES (?1, ?2)
+        self.conn.execute(
+            "INSERT INTO kv_store(key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET
                    value = ?2,
                    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-                rusqlite::params![key, value],
-            )
-            .map_err(DbError::Sqlite)?;
+            rusqlite::params![key, value],
+        )?;
         Ok(())
     }
 
@@ -305,8 +296,7 @@ impl Database {
     fn migrate(&self) -> Result<(), DbError> {
         let version: i32 = self
             .conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(DbError::Sqlite)?;
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
 
         if version < 1 {
             self.conn
@@ -339,23 +329,16 @@ impl Database {
                         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
                     );
                     ",
-                )
-                .map_err(DbError::Sqlite)?;
-            self.conn
-                .pragma_update(None, "user_version", 1)
-                .map_err(DbError::Sqlite)?;
+                )?;
+            self.conn.pragma_update(None, "user_version", 1)?;
         }
 
         if version < 2 {
             // v2: frecency 쿼리 성능을 위한 executed_at 인덱스
-            self.conn
-                .execute_batch(
-                    "CREATE INDEX IF NOT EXISTS idx_history_executed_at ON history(executed_at);",
-                )
-                .map_err(DbError::Sqlite)?;
-            self.conn
-                .pragma_update(None, "user_version", 2)
-                .map_err(DbError::Sqlite)?;
+            self.conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_history_executed_at ON history(executed_at);",
+            )?;
+            self.conn.pragma_update(None, "user_version", 2)?;
         }
 
         if version < 3 {
@@ -363,9 +346,8 @@ impl Database {
             // content_fts의 rowid는 content_files.id와 수동으로 동기화한다
             // (트리거 없음 — 삽입/삭제는 content_index 모듈이 한 트랜잭션에서 수행).
             // bundled SQLite에 FTS5가 포함되어 있어 별도 확장 로드는 불필요.
-            self.conn
-                .execute_batch(
-                    "
+            self.conn.execute_batch(
+                "
                     CREATE TABLE IF NOT EXISTS content_files (
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         path       TEXT    NOT NULL UNIQUE,
@@ -376,11 +358,8 @@ impl Database {
                     CREATE VIRTUAL TABLE IF NOT EXISTS content_fts
                         USING fts5(body, tokenize='unicode61');
                     ",
-                )
-                .map_err(DbError::Sqlite)?;
-            self.conn
-                .pragma_update(None, "user_version", 3)
-                .map_err(DbError::Sqlite)?;
+            )?;
+            self.conn.pragma_update(None, "user_version", 3)?;
         }
 
         if version < 4 {
@@ -416,11 +395,15 @@ impl Database {
                     ALTER TABLE history_v4 RENAME TO history;
                     CREATE UNIQUE INDEX idx_history_unique ON history(item_type, value);
                     CREATE INDEX idx_history_executed_at ON history(executed_at);
+                    -- bookmarks: add_bookmark의 INSERT OR REPLACE가 동작하려면 이름이
+                    -- 유일해야 한다 (예전엔 제약이 없어 같은 이름이 쌓였다). 최신만 남긴다.
+                    DELETE FROM bookmarks
+                        WHERE id NOT IN (SELECT MAX(id) FROM bookmarks GROUP BY name);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_name ON bookmarks(name);
                     PRAGMA user_version = 4;
                     COMMIT;
                     ",
-                )
-                .map_err(DbError::Sqlite)?;
+                )?;
         }
 
         Ok(())
@@ -516,6 +499,11 @@ mod tests {
         let bookmarks = db.query_bookmarks();
         assert_eq!(bookmarks.len(), 1);
         assert_eq!(bookmarks[0].name, "Firefox");
+        // 같은 이름은 교체된다 (UNIQUE 없던 시절엔 쌓였다)
+        db.add_bookmark("Firefox", "firefox-dev", "app").unwrap();
+        let bookmarks = db.query_bookmarks();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].value, "firefox-dev");
     }
 
     // ── Pruning 테스트 ─────────────────────────────────────

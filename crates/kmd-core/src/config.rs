@@ -2,7 +2,7 @@
 //!
 //! Launcher-focused config with keybindings and provider settings.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -377,11 +377,15 @@ pub struct KeymapConfig {
     pub active_profile: String,
 
     /// 단순 리맵 (항상 활성). 키이름 = "대상키" 또는 "Ctrl+키"
+    ///
+    /// 이 파일의 맵은 전부 BTreeMap이다 — HashMap이면 직렬화(저장)할 때마다 키
+    /// 순서가 달라져 config.toml diff가 요동치고, 순회 순서에 기대는 코드가 실행마다
+    /// 다르게 동작한다.
     #[serde(default)]
-    pub remaps: HashMap<String, String>,
+    pub remaps: BTreeMap<String, String>,
     /// 레이어 정의. 이름 = { trigger, mappings, ... }
     #[serde(default)]
-    pub layers: HashMap<String, LayerToml>,
+    pub layers: BTreeMap<String, LayerToml>,
     /// 수정자+키 콤보 (예: Shift+Space → Hangul)
     #[serde(default)]
     pub combos: Vec<ComboToml>,
@@ -391,7 +395,7 @@ pub struct KeymapConfig {
     /// tap-hold(모드탭): 키이름 = { tap, hold, timeout_ms }
     /// 짧게 탭 = tap 키, 홀드 중 다른 키 = hold 수정자 조합 (HHKB 스타일)
     #[serde(default)]
-    pub tap_holds: HashMap<String, TapHoldToml>,
+    pub tap_holds: BTreeMap<String, TapHoldToml>,
 }
 
 impl Default for KeymapConfig {
@@ -401,11 +405,11 @@ impl Default for KeymapConfig {
             kanata_path: None,
             profile_dir: None,
             active_profile: "vim-nav".to_string(),
-            remaps: HashMap::new(),
-            layers: HashMap::new(),
+            remaps: BTreeMap::new(),
+            layers: BTreeMap::new(),
             combos: Vec::new(),
             double_taps: Vec::new(),
-            tap_holds: HashMap::new(),
+            tap_holds: BTreeMap::new(),
         }
     }
 }
@@ -437,9 +441,9 @@ pub struct LayerToml {
     /// 그대로 OS로, 예: Alt+Tab 유지) | "block"(억제)
     pub unmapped: Option<String>,
     /// 레이어 내 키 매핑: 키이름 = "대상" (예: H = "Left", P = "Ctrl+V")
-    pub mappings: HashMap<String, String>,
+    pub mappings: BTreeMap<String, String>,
     /// 레이어 내 더블탭: 키이름 = { single, double, timeout_ms }
-    pub double_taps: HashMap<String, LayerDoubleTapToml>,
+    pub double_taps: BTreeMap<String, LayerDoubleTapToml>,
 }
 
 /// TOML 레이어 내 더블탭 설정
@@ -785,6 +789,7 @@ impl Config {
         // 않고 전용 리스트 편집 UI가 직접 다룬다. 저장 경로도 그 둘만 따로
         // 비교해 반영한다.
         const EXPLICIT_KEYS: &[&str] = &[
+            "general.editor",
             "launcher.everything_path",
             "launcher.multi_llm_providers",
             "launcher.multi_llm_prefixes",
@@ -952,25 +957,10 @@ impl Config {
             }
             // kind_weights
             "launcher.multi_llm_providers" => {
-                self.launcher.multi_llm_providers = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                self.launcher.multi_llm_providers = parse_csv_lower(value)
             }
             "launcher.multi_llm_prefixes" => {
-                self.launcher.multi_llm_prefixes = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| {
-                        if s.starts_with('@') {
-                            s
-                        } else {
-                            format!("@{s}")
-                        }
-                    })
-                    .collect();
+                self.launcher.multi_llm_prefixes = parse_at_prefixes(value)
             }
             "launcher.llm_autopilot" => {
                 self.launcher.llm_autopilot = matches!(
@@ -979,67 +969,18 @@ impl Config {
                 );
             }
             "launcher.multi_web_providers" => {
-                self.launcher.multi_web_providers = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                self.launcher.multi_web_providers = parse_csv_lower(value)
             }
             "launcher.multi_web_prefixes" => {
-                self.launcher.multi_web_prefixes = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| {
-                        if s.starts_with('@') {
-                            s
-                        } else {
-                            format!("@{s}")
-                        }
-                    })
-                    .collect();
+                self.launcher.multi_web_prefixes = parse_at_prefixes(value)
             }
-            "launcher.spell_providers" => {
-                self.launcher.spell_providers = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-            "launcher.spell_prefixes" => {
-                self.launcher.spell_prefixes = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| {
-                        if s.starts_with('@') {
-                            s
-                        } else {
-                            format!("@{s}")
-                        }
-                    })
-                    .collect();
-            }
+            "launcher.spell_providers" => self.launcher.spell_providers = parse_csv_lower(value),
+            "launcher.spell_prefixes" => self.launcher.spell_prefixes = parse_at_prefixes(value),
             "launcher.translate_providers" => {
-                self.launcher.translate_providers = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                self.launcher.translate_providers = parse_csv_lower(value)
             }
             "launcher.translate_prefixes" => {
-                self.launcher.translate_prefixes = value
-                    .split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| {
-                        if s.starts_with('@') {
-                            s
-                        } else {
-                            format!("@{s}")
-                        }
-                    })
-                    .collect();
+                self.launcher.translate_prefixes = parse_at_prefixes(value)
             }
             "launcher.keymap.backend" => self.launcher.keymap.backend = value.to_string(),
             "launcher.keymap.kanata_path" => {
@@ -1072,13 +1013,6 @@ impl Config {
             .join("kmd")
     }
 
-    /// Return the OS-standard data directory (ignoring portable mode).
-    pub fn system_data_dir() -> PathBuf {
-        dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("kmd")
-    }
-
     /// Return the config directory for kmd.
     ///
     /// In portable mode (`kmd-data/` next to exe) this returns the portable
@@ -1089,9 +1023,7 @@ impl Config {
                 return dir;
             }
         }
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("kmd")
+        Self::system_config_dir()
     }
 
     /// Return the data directory for kmd.
@@ -1109,7 +1041,8 @@ impl Config {
 
     /// 포터블 여부와 상관없는 OS 표준 데이터 디렉터리 (`%APPDATA%\kmd`,
     /// `~/.local/share/kmd` 등). winget 패키지 폴더처럼 업그레이드 때 정리될 수
-    /// 있는 곳을 피해야 하는 작은 상태 파일용.
+    /// 있는 곳을 피해야 하는 작은 상태 파일용. (예전엔 본문이 같은
+    /// `system_data_dir`가 따로 있었다 — 하나로 합쳤다.)
     pub fn standard_data_dir() -> PathBuf {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -1142,6 +1075,29 @@ pub enum ConfigError {
 /// 기존 문서를 기준으로 값만 갈아끼우므로 키에 붙은 주석(decor)이 그대로 남는다.
 /// 기존 문서가 깨져서 파싱되지 않으면 병합을 포기하고 새 직렬화 결과를 쓴다 —
 /// 저장 자체를 실패시키는 것보다 낫다.
+/// `"a, B ,c"` → `["a","b","c"]` (소문자·공백 제거·빈 항목 제외) — 공급자 ID 목록용.
+fn parse_csv_lower(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// [`parse_csv_lower`] + 각 항목에 `@`를 보장 — 명령 별칭 목록용 (`sp` → `@sp`).
+fn parse_at_prefixes(value: &str) -> Vec<String> {
+    parse_csv_lower(value)
+        .into_iter()
+        .map(|s| {
+            if s.starts_with('@') {
+                s
+            } else {
+                format!("@{s}")
+            }
+        })
+        .collect()
+}
+
 fn merge_into_document(existing: &str, fresh: &str) -> Result<String, ConfigError> {
     use toml_edit::DocumentMut;
 
@@ -1215,56 +1171,9 @@ fn seed_config(config_path: &Path, exe_dir: &Path) {
     let _ = write_atomic(config_path, &content);
 }
 
-/// 임시 파일 → flush/sync → rename 으로 원자적으로 쓴다.
-///
-/// 두 가지를 막는다.
-/// - 저장 도중 프로세스가 죽거나 디스크가 차서 **반쪽 파일**이 남는 것
-/// - 데몬의 주기적 config 재로드가 그 반쪽 파일을 읽고 기본값으로 폴백하는 창
-///
-/// 같은 디렉터리에 임시 파일을 만들어야 rename이 같은 파일시스템 안에서
-/// 원자적으로 동작한다.
 fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
-    use std::io::Write;
-
-    // 임시 파일명은 프로세스·스레드별로 고유해야 한다. 고정 이름(config.toml.tmp)을
-    // 쓰면 데몬·데스크톱·TUI가 동시에 저장할 때 서로의 임시 파일을 덮어써
-    // 뒤섞인 내용이 rename될 수 있다.
-    let unique = format!(
-        "toml.tmp.{}.{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    );
-    // ThreadId의 Debug는 "ThreadId(2)" 꼴이라 경로에 쓰기 나쁜 문자를 지운다.
-    let unique: String = unique
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let tmp = path.with_extension(unique);
-    let io_err = |e| ConfigError::Io(path.to_path_buf(), e);
-
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(io_err)?;
-        f.write_all(content.as_bytes()).map_err(io_err)?;
-        f.flush().map_err(io_err)?;
-        f.sync_all().map_err(io_err)?;
-    }
-
-    // Rust의 fs::rename은 Windows에서도 기존 파일을 덮어쓴다(MOVEFILE_REPLACE_EXISTING).
-    // 예전에 넣었던 "교체 전 remove_file"은 불필요했고, 오히려 파일이 없는 순간을
-    // 만들어 원자성을 깨뜨렸다 — 실측으로 확인하고 제거했다 (2026-08-28).
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            Err(ConfigError::Io(path.to_path_buf(), e))
-        }
-    }
+    crate::fsutil::write_atomic(path, content.as_bytes(), false)
+        .map_err(|e| ConfigError::Io(path.to_path_buf(), e))
 }
 
 #[cfg(test)]

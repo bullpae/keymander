@@ -79,7 +79,24 @@ pub const MIN_QUERY_CHARS: usize = 2;
 /// 내장 기본 파일명 제외 마커 — 시크릿성 파일(dotfile이 아니어서 숨김 필터를
 /// 통과하는 credentials.json, secrets.yaml 등)의 본문이 인덱스 DB에 평문으로
 /// 복제되지 않게 한다. config `content_search.exclude_names`로 통째 대체 가능.
-const DEFAULT_EXCLUDE_NAME_MARKERS: &[&str] = &["secret", "credential", "password", "passwd"];
+const DEFAULT_EXCLUDE_NAME_MARKERS: &[&str] = &[
+    "secret",
+    "credential",
+    "password",
+    "passwd",
+    // API 토큰·키 파일. 단순 "token"은 tokenizer.py 같은 소스까지 걸러 좁게 잡는다.
+    "access_token",
+    "auth_token",
+    "token.json",
+    "tokens.json",
+    "apikey",
+    "api_key",
+    "api-key",
+    "private_key",
+    "private-key",
+    "id_rsa",
+    "id_ed25519",
+];
 
 /// 파일명(소문자)이 제외 마커에 걸리는지.
 /// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
@@ -95,6 +112,53 @@ pub(crate) fn excluded_name(cs: &crate::config::ContentSearchConfig, name_lower:
     }
 }
 
+/// 무시 패턴 집합 (`launcher.ignore_patterns`) — 순회 필터용 빌림 집합.
+pub(crate) fn ignore_set(launcher: &LauncherConfig) -> HashSet<&str> {
+    launcher
+        .ignore_patterns
+        .iter()
+        .map(|s| s.as_str())
+        .collect()
+}
+
+/// 본문 인덱싱 관점의 디렉터리 순회 — 무시·숨김 폴더는 내려가지 않는다.
+///
+/// depth 0(루트 자신)은 무시 규칙에서 제외한다 — 사용자가 숨김 폴더를 의도적으로
+/// search_paths에 넣은 경우까지 걸러버리지 않게. (본문 인덱스와 폴더 제안이 같은
+/// 순회를 쓴다 — 예전엔 같은 체인이 두 곳에 복제돼 있었다.)
+pub(crate) fn walk_entries<'a>(
+    root: &Path,
+    max_depth: usize,
+    ignore_set: &'a HashSet<&'a str>,
+) -> impl Iterator<Item = walkdir::DirEntry> + 'a {
+    walkdir::WalkDir::new(root)
+        .max_depth(max_depth)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(move |e| {
+            e.depth() == 0 || !crate::index::files::is_ignored_dir(e, ignore_set)
+        })
+        .flatten()
+}
+
+/// 순회 항목이 본문 인덱싱 대상 파일인지 — 일반 파일·비숨김·허용 확장자·제외 이름 아님.
+pub(crate) fn is_candidate_file(
+    entry: &walkdir::DirEntry,
+    allowed: &HashSet<String>,
+    cs: &crate::config::ContentSearchConfig,
+) -> bool {
+    if !entry.file_type().is_file() || crate::fsutil::is_hidden_walk_entry(entry) {
+        return false;
+    }
+    let name = entry.file_name().to_str().unwrap_or("");
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    allowed.contains(&ext) && !excluded_name(cs, &name.to_lowercase())
+}
+
 /// 유효 확장자 집합 — 설정이 비어 있으면 내장 기본 목록.
 /// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
 pub(crate) fn allowed_extensions(cs: &crate::config::ContentSearchConfig) -> HashSet<String> {
@@ -107,6 +171,9 @@ pub(crate) fn allowed_extensions(cs: &crate::config::ContentSearchConfig) -> Has
 
 /// 배치 트랜잭션 크기 — fsync 횟수를 줄인다.
 const TXN_BATCH: usize = 200;
+/// 배치 본문 바이트 상한 — 건수만 보면 큰 파일(max_file_kb)이 몰릴 때 배치 하나가
+/// 수백 MB까지 메모리에 쌓인다(200 × 1MB). 둘 중 먼저 닿는 쪽에서 커밋한다.
+const TXN_BATCH_BYTES: usize = 16 * 1024 * 1024;
 
 /// 본문 검색 결과 1건.
 #[derive(Debug, Clone)]
@@ -152,11 +219,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
 
     let allowed = allowed_extensions(cs);
     let max_bytes = cs.max_file_kb.saturating_mul(1024);
-    let ignore_set: HashSet<&str> = launcher
-        .ignore_patterns
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let ignore_set = ignore_set(launcher);
 
     // 1. 기존 인덱스 상태 로드 (path → (id, size, mtime))
     let mut existing: HashMap<String, (i64, u64, i64)> = HashMap::new();
@@ -180,6 +243,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
     // 2. 스캔 + 증분 upsert (배치 트랜잭션)
     let mut seen: HashSet<String> = HashSet::new();
     let mut pending: Vec<(String, u64, i64, String)> = Vec::new(); // (path, size, mtime, body)
+    let mut pending_bytes = 0usize;
     let mut truncated = false;
     // 일시 소실된 루트(외장 디스크 언마운트 등) — 하위 인덱스를 지우지 않는다
     let mut missing_roots: Vec<&std::path::PathBuf> = Vec::new();
@@ -189,32 +253,8 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
             missing_roots.push(root);
             continue;
         }
-        // depth 0(루트 자신)은 무시 규칙에서 제외 — 사용자가 숨김 폴더를
-        // 의도적으로 search_paths에 넣은 경우까지 걸러버리지 않게.
-        let walker = walkdir::WalkDir::new(root)
-            .max_depth(launcher.search_depth)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                e.depth() == 0 || !crate::index::files::is_ignored_dir(e, &ignore_set)
-            });
-        for entry in walker.flatten() {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let name = entry.file_name().to_str().unwrap_or("");
-            if crate::fsutil::is_hidden_walk_entry(&entry) {
-                continue;
-            }
-            let ext = Path::new(name)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
-                .unwrap_or_default();
-            if !allowed.contains(&ext) {
-                continue;
-            }
-            if excluded_name(cs, &name.to_lowercase()) {
+        for entry in walk_entries(root, launcher.search_depth, &ignore_set) {
+            if !is_candidate_file(&entry, &allowed, cs) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -248,17 +288,27 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
             }
 
             match read_text(entry.path(), size as usize) {
-                Some(body) => pending.push((path_str, size, mtime, body)),
-                None => {
+                ReadOutcome::Text(body) => {
+                    pending_bytes += body.len();
+                    pending.push((path_str, size, mtime, body));
+                }
+                ReadOutcome::NotText => {
                     stats.failed += 1;
                     // 과거에 인덱싱됐던 파일이 바이너리로 바뀐 경우 제거 대상으로.
-                    // seen에서 빼두면 4단계 삭제 로직이 정리한다.
-                    seen.remove(&entry.path().to_string_lossy().to_string());
+                    // seen에서 빼두면 삭제 단계가 정리한다.
+                    seen.remove(&path_str);
+                }
+                ReadOutcome::ReadFailed => {
+                    // 일시적 읽기 실패(Windows에서 다른 프로세스가 잠근 파일 등)는
+                    // 기존 인덱스를 지우지 않는다 — 지우면 다음 sync에 재인덱싱돼
+                    // 삭제↔재인덱싱 churn이 생긴다. seen에 남겨 보존한다.
+                    stats.failed += 1;
                 }
             }
 
-            if pending.len() >= TXN_BATCH {
+            if pending.len() >= TXN_BATCH || pending_bytes >= TXN_BATCH_BYTES {
                 stats.indexed += flush_batch(db, &mut pending)?;
+                pending_bytes = 0;
             }
         }
     }
@@ -341,21 +391,37 @@ fn flush_batch(
     Ok(n)
 }
 
-/// 파일을 텍스트로 읽는다. UTF-8 → EUC-KR 폴백, 바이너리는 None.
-fn read_text(path: &Path, size_hint: usize) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+/// [`read_text`] 결과 — 텍스트가 아님(삭제 대상)과 읽기 실패(보존)를 구분한다.
+#[derive(Debug)]
+enum ReadOutcome {
+    Text(String),
+    /// 바이너리·잡음·크기 상한 초과 — 인덱스에서 빼야 한다
+    NotText,
+    /// 읽지 못함(잠김·권한 등 일시적일 수 있음) — 기존 인덱스를 보존한다
+    ReadFailed,
+}
+
+/// 파일을 텍스트로 읽는다. UTF-8 → EUC-KR 폴백.
+fn read_text(path: &Path, size_hint: usize) -> ReadOutcome {
+    let Ok(bytes) = std::fs::read(path) else {
+        return ReadOutcome::ReadFailed;
+    };
     // stat→read 사이에 파일이 커졌으면(TOCTOU) 크기 상한을 우회하지 못하게 배제
     if bytes.len() > size_hint.saturating_add(4096) {
-        return None;
+        return ReadOutcome::NotText;
     }
     // NUL 스니핑: 텍스트 파일에 NUL이 들어갈 일은 사실상 없다
     let sniff = &bytes[..bytes.len().min(8192)];
     if sniff.contains(&0) {
-        return None;
+        return ReadOutcome::NotText;
     }
     // 치환문자 비율로 "진짜 CP949"인지 판정 — 잡음 바이너리 배제
     let decoded = crate::textenc::decode_utf8_or_cp949(bytes);
-    (!decoded.mostly_garbage).then_some(decoded.text)
+    if decoded.mostly_garbage {
+        ReadOutcome::NotText
+    } else {
+        ReadOutcome::Text(decoded.text)
+    }
 }
 
 /// 본문 검색 — bm25 랭킹 + snippet. 질의가 짧으면(2자 미만) 빈 결과.
@@ -1035,12 +1101,57 @@ mod tests {
     }
 
     #[test]
+    fn 토큰_키_파일명도_기본_제외하되_소스는_남긴다() {
+        let cs = crate::config::ContentSearchConfig::default();
+        for name in [
+            "github_token.json",
+            "api_key.txt",
+            "my-apikey.md",
+            "access_token.yaml",
+        ] {
+            assert!(excluded_name(&cs, name), "{name}은 제외돼야 한다");
+        }
+        assert!(
+            !excluded_name(&cs, "tokenizer.py"),
+            "소스 파일까지 거르면 안 된다"
+        );
+    }
+
+    #[test]
+    fn 읽기_실패는_기존_인덱스를_보존한다() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "locked.md", b"original body keep");
+        let db = Database::open_in_memory().unwrap();
+        let launcher = test_launcher(dir.path());
+        assert_eq!(sync(&db, &launcher).unwrap().indexed, 1);
+        assert!(matches!(
+            read_text(&dir.path().join("nope.md"), 10),
+            ReadOutcome::ReadFailed
+        ));
+
+        // 내용을 바꾸고(mtime/size 변경) 읽기 권한을 없애 '일시적 읽기 실패'를 만든다
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&p, b"changed body that cannot be read").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let readable_anyway = std::fs::read(&p).is_ok(); // root로 돌면 권한 무시
+            let s = sync(&db, &launcher).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+            if !readable_anyway {
+                assert_eq!(s.removed, 0, "읽기 실패로 지우면 churn: {s:?}");
+                assert_eq!(search(&db, "original", 10).unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[test]
     fn 읽기_시점_크기_초과는_배제() {
         let dir = tempfile::tempdir().unwrap();
         let p = write_file(dir.path(), "grow.txt", &[b'x'; 64 * 1024]);
         // stat 시점 크기(size_hint)보다 훨씬 커진 파일 — TOCTOU 상한 우회 차단
-        assert!(read_text(&p, 1024).is_none());
-        assert!(read_text(&p, 64 * 1024).is_some());
+        assert!(matches!(read_text(&p, 1024), ReadOutcome::NotText));
+        assert!(matches!(read_text(&p, 64 * 1024), ReadOutcome::Text(_)));
     }
 
     #[test]

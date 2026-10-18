@@ -339,11 +339,7 @@ fn scan_root(
     now: SystemTime,
     budget: &mut usize,
 ) -> Vec<FolderSuggestion> {
-    let ignore_set: HashSet<&str> = launcher
-        .ignore_patterns
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let ignore_set = crate::content_index::ignore_set(launcher);
     let allowed = crate::content_index::allowed_extensions(&launcher.content_search);
     let recent_cutoff = now - Duration::from_secs(RECENT_DAYS * 24 * 3600);
 
@@ -406,32 +402,12 @@ fn count_recent_files(
     budget: &mut usize,
 ) -> usize {
     let mut count = 0usize;
-    let walker = walkdir::WalkDir::new(root)
-        .max_depth(SCAN_DEPTH)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| e.depth() == 0 || !crate::index::files::is_ignored_dir(e, ignore_set));
-    for entry in walker.flatten() {
+    for entry in crate::content_index::walk_entries(root, SCAN_DEPTH, ignore_set) {
         if *budget == 0 {
             break;
         }
         *budget -= 1;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_str().unwrap_or("");
-        if crate::fsutil::is_hidden_walk_entry(&entry) {
-            continue;
-        }
-        let ext = Path::new(name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .unwrap_or_default();
-        if !allowed.contains(&ext) {
-            continue;
-        }
-        if crate::content_index::excluded_name(cs, &name.to_lowercase()) {
+        if !crate::content_index::is_candidate_file(&entry, allowed, cs) {
             continue;
         }
         let recent = entry

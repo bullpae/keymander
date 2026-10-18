@@ -140,6 +140,46 @@ fn path_within_ignore_case(path: &Path, root: &Path) -> bool {
     true
 }
 
+/// 원자적 파일 쓰기 — 고유 tmp에 쓰고 `sync_all` 후 rename.
+///
+/// - tmp 이름은 프로세스·스레드별로 고유하다. 고정 이름이면 데몬·데스크톱·TUI가
+///   동시에 저장할 때 서로의 tmp를 덮어써 뒤섞인 내용이 rename될 수 있다.
+/// - `private`이면 unix에서 0600으로 만든다 (인덱스 캐시처럼 경로 목록을 담는 파일).
+/// - Rust의 `fs::rename`은 Windows에서도 기존 파일을 덮어쓴다(MOVEFILE_REPLACE_EXISTING).
+///   교체 전 remove_file은 파일이 없는 순간을 만들어 원자성을 깨뜨린다 (2026-08-28 실측).
+///
+/// (예전엔 config와 인덱스 캐시가 각자 구현을 들고 있었고 캐시 쪽은 sync_all이 없었다.)
+pub fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let tid = format!("{:?}", std::thread::current().id());
+    let tid: String = tid.chars().filter(|c| c.is_alphanumeric()).collect();
+    let tmp = path.with_extension(format!("tmp.{}.{tid}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp); // 같은 pid·스레드의 이전 크래시 잔여물
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+
+    let written = (|| -> std::io::Result<()> {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+        f.sync_all()
+    })();
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, path)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

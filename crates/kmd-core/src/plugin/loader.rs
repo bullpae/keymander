@@ -47,10 +47,8 @@ fn load_manifest(path: &Path) -> Result<PluginManifest, String> {
     toml::from_str(&content).map_err(|e| e.to_string())
 }
 
-/// Get the default plugin directory
+/// Get the default plugin directory — 포터블 모드면 `kmd-data/plugins`
+/// (예전엔 OS 데이터 폴더를 직접 조합해 포터블 설치에서도 시스템 경로를 봤다).
 pub fn default_plugin_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("kmd")
-        .join("plugins")
+    crate::Config::default_data_dir().join("plugins")
 }

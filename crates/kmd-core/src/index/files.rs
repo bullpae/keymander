@@ -141,7 +141,9 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
             .max_depth(*depth)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !is_ignored_dir(e, &ignore_set));
+            // 루트(depth 0)는 무시 규칙 예외 — 숨김 폴더를 search_paths에 직접 넣으면
+            // 본문 인덱스엔 들어가는데 파일명 인덱스에선 통째로 빠지던 불일치 해소
+            .filter_entry(|e| e.depth() == 0 || !is_ignored_dir(e, &ignore_set));
 
         walkdir_into_items(walker, &mut items, &mut seen, limit, config.use_emoji);
 
