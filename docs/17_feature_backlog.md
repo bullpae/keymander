@@ -1,6 +1,6 @@
 # 기능 백로그 — 계획·누락 전수 조사
 
-> **상태: 작업 목록** — 2026-10-05, v0.16.8 기준으로 `docs/*.md`에 적힌 모든
+> **상태: 작업 목록** — 2026-10-05, v0.16.8 기준으로 (2026-10-18 v0.16.12 재확인 — 아래 항목 상태 그대로, §5 갱신) `docs/*.md`에 적힌 모든
 > "향후·예정·보류·미구현·P2~P4" 항목을 뽑아 **코드와 대조**한 결과다.
 > `docs/11_refactor_backlog.md`가 "코드 모양"을 다루는 문서라면, 이 문서는
 > **"약속했는데 없는 기능"**을 다룬다.
@@ -112,15 +112,11 @@
 | D10 | `docs/05_theming.md:128-138` + §3 전체 | "예정 테마 7종(catppuccin×2/nord/tokyo-night/gruvbox/solarized)" | 실제 내장은 **데스크톱 5종**(`kmd-desktop/src/theme.rs:66-166` midnight/obsidian/snow/rose_pine/nord). 문서 목록과 전혀 다르다. 또한 §3이 "TUI 테마"를 전제하는데 **TUI는 `general.theme`를 읽지 않는다**(F15) |
 | D11 | `docs/01_prd.md:328` | 공식 플러그인 kmd-todo/memo/clipboard | clipboard만 **네이티브로** 구현(`;`/`:clip`), 플러그인 형태 아님. todo/memo는 0건 |
 
-## 5. 다음 릴리스 묶음 (2026-10-05 현재)
+## 5. 다음 릴리스 묶음 (2026-10-18 현재)
 
-`main`에 들어갔고 아직 릴리스되지 않은 것 — `CHANGELOG.md`의 `[Unreleased]`가 정본:
-
-- 폴더 제안 신호 ② — 실행 이력 기반 (`6a59437`)
-- 문서 정합 D1~D11 (`48fd449`)
-- 리팩토링 저비용 묶음 — TUI quick action 무응답 제거, `:f` 열거 상한,
-  TUI frecency 캐시, IPC 연결 상한, 엔진 생성 통합 ([11](11_refactor_backlog.md)
-  「코드 건강 재점검」)
+2026-10-05 묶음(폴더 제안 신호 ②, 문서 정합 D1~D11, 저비용 리팩토링)은 v0.16.9로
+릴리스됐다. 지금 `[Unreleased]`에는 2026-10-18 전수 리뷰의 버그 수정·구조 정리가
+있다 — [11](11_refactor_backlog.md) 「2026-10-18 전수 리뷰」와 `CHANGELOG.md`가 정본.
 
 그다음 릴리스 후보: **F3**(기본 프리셋 passthrough — 주석 해제 + 테스트),
 **F9**(`KMD_CONFIG_DIR`/`KMD_DATA_DIR` — F10·F11을 푸는 선행 작업).

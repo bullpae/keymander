@@ -28,10 +28,10 @@
 
 | 문서 | 상태 | 구현 위치 |
 |---|---|---|
-| [08_layer_passthrough_plan.md](08_layer_passthrough_plan.md) | ✅ v0.9.3 (P0–P3) | `crates/kmd-daemon/src/keybind/engine.rs` |
+| [08_layer_passthrough_plan.md](08_layer_passthrough_plan.md) | ✅ v0.9.3 (P0–P3) · 실기기 검증·P4 대기 | `crates/kmd-daemon/src/keybind/engine.rs` |
 | [09_llm_autopilot_plan.md](09_llm_autopilot_plan.md) | ✅ v0.10.0 (Windows 전용) | `crates/kmd-daemon/src/autopilot.rs` |
 | [13_capslock_trigger.md](13_capslock_trigger.md) | ✅ v0.13.0부터 **기본 트리거** | `crates/kmd-core/src/keymap.rs`, `keybind/macos.rs` |
-| [15_content_search_plan.md](15_content_search_plan.md) | ✅ v0.15.0 (P1+P3) | `crates/kmd-core/src/content_index.rs` |
+| [15_content_search_plan.md](15_content_search_plan.md) | ✅ P0~P3 (v0.15.0~v0.16.9) · P4 조건부 | `crates/kmd-core/src/content_index.rs` |
 | [12_clipboard_plan.md](12_clipboard_plan.md) | ✅ v0.13.x (P1–P3) | `crates/kmd-daemon/src/clipboard.rs` |
 | [14_testing_plan.md](14_testing_plan.md) | ✅ Tier 1 + Tier 2(E2E 키 주입) | `crates/kmd-daemon/tests/`, `.github/workflows/ci.yml` |
 
@@ -40,8 +40,8 @@
 | 문서 | 상태 |
 |---|---|
 | [17_feature_backlog.md](17_feature_backlog.md) | **기능 백로그** — 계획·누락 기능 전수 조사(2026-10-05, v0.16.8). 어떤 "향후"가 진짜 미구현이고 어떤 게 이미 됐는지, 무엇을 영구 보류할지 |
-| [11_refactor_backlog.md](11_refactor_backlog.md) | **리팩토링·코드건강 백로그** — 코드 모양·블로킹 지점 (2026-10-05 재점검 반영, 진행 중) |
-| [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-10-05 / v0.16.8 재확인 — 코드 0건) |
+| [11_refactor_backlog.md](11_refactor_backlog.md) | **리팩토링·코드건강 백로그** — 코드 모양·블로킹 지점 (2026-10-18 전수 리뷰 반영, 진행 중) |
+| [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-10-18 / v0.16.12 재확인 — 코드 0건) |
 | [deferred-ideas.md](deferred-ideas.md) | v0.3 로드맵에서 보류한 아이디어 모음 — 재검토용 |
 
 ## 변경 이력

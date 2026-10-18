@@ -88,8 +88,7 @@
 `:t`가 검색 단계에서 URL을 열어 **타이핑 중 키마다 탭이 열리던 것**(이제 실행
 항목 + Enter), 데스크톱 `:emoji` Enter가 **아무것도 복사하지 않던 것**.
 
-남은 것: 엔진 생성 3곳의 배선 통합. 동작 차이가 아니라 순수 중복이라 언제든
-가능하지만 이득이 작다.
+~~남은 것: 엔진 생성 3곳의 배선 통합.~~ ✅ 2026-10-05 (아래 표 R3-3 — 실제로는 6곳).
 
 ## 정확성·동시성 정리 (2026-09-20, 외부 분석 REF-01~04)
 
@@ -126,9 +125,18 @@ v0.16.5 재검토에서 **남은 구멍 5개**가 지적됐고 전부 사실이�
 남은 것(REF-05~08): UI 작업 비동기화, 실행 액션 타입화, UI 상태 분리,
 IPC 연결 상한. 아래 착수 순서에 반영했다.
 
-## 권장 착수 순서 (2026-10-05 갱신)
+## 권장 착수 순서 (2026-10-18 갱신)
 
-REF-08과 REF-05의 체감 큰 부분은 끝났다(아래 「코드 건강 재점검」). 남은 순서:
+REF-06과 `handle_prompt_query` 통합은 끝났다(아래 「2026-10-18 전수 리뷰」). 남은 순서:
+
+1. **REF-07 데스크톱 App 상태 분리** — 설정 미러 필드 8개는 제거했다. 남은 건
+   검색·창 크기·포커스·부팅 상태의 경계 결정
+2. 프리픽스 디스패치 2벌 — 웹 질의는 core `web_query_items`로 합쳤다. 남은 건
+   블로킹/비블로킹으로 갈린 arm(`?`, `:f`, `:clip`)
+3. Windows 어댑터 정리(아래 「Windows 전용 — 로컬 검증 불가로 보류」)
+4. REF-05 잔여(`?` FTS 매 키 등 수십 ms급) — 체감 문제가 보고되면
+
+### 이전 순서 (2026-10-05)
 
 1. **REF-06 실행 액션 타입화** — 설계 결정(마커 정본·크레이트 배치)이 먼저
 2. **REF-07 데스크톱 App 상태 분리** — `struct App` 59필드. 경계 결정이 먼저
@@ -242,11 +250,11 @@ REF-05를 "UI 비동기화"로만 적어두면 어디부터 할지 모른다. �
 | ID | 상태 | 설계 결정 필요? |
 |---|---|---|
 | REF-05 UI 비동기화 | 🔶 **체감 큰 3건 완료** (2026-10-05) — 폴더 제안 백그라운드화, `:f` 열거 상한, TUI frecency 캐시, TUI quick action 워커화. 남은 것: `?` 본문 검색(FTS 매 키)·TUI 드릴다운·설정 저장의 동기 I/O — 전부 수십 ms급이라 급하지 않다 | 아니오 — 패턴 기정 |
-| REF-06 실행 액션 타입화 | ⬜ `LauncherAction` 부재. `kmd:*` 마커 10종 이상을 두 UI가 각자 재파싱(`tui/app.rs:842~890` ↔ `app/launch.rs:188~316`), 한쪽 전용 마커도 섞여 있다 | **예** — 마커 집합의 정본 + 크레이트 배치 |
-| REF-07 데스크톱 App 상태 분리 | ⬜ `app.rs:248` `struct App` 필드 **59개**(검색·엔진·창·포커스·부팅·설정·클립보드 혼재). 파일은 R2-2 작성 시점보다 **더 커졌다** | **예** — 경계를 어디에 그을지 |
+| REF-06 실행 액션 타입화 | ✅ 2026-10-18 — core `activation::classify → Activation`. 결정: **마커 정본은 core**, 오토파일럿·클립보드처럼 UI 문맥이 필요한 단계는 분류만 하고 실행은 UI. 통합 과정에서 이미 어긋나 있던 2건이 드러났다(TUI가 `@` 가상 항목·폴더 검색 시드를 몰라 오류, 데스크톱이 모르는 `kmd:*` 안내 항목을 시스템 명령으로 실행) | — |
+| REF-07 데스크톱 App 상태 분리 | 🔶 2026-10-18 — 설정 미러 필드 8개 제거(`runtime_config.launcher`가 정본), `app.rs` 책임별 파일 분할. 남은 것: 검색·창·포커스·부팅 상태 경계 | **예** — 경계를 어디에 그을지 |
 | REF-08 IPC 연결 상한 | ✅ 2026-10-05 — `ConnectionSlot`(RAII) + 상한 64. 초과 연결은 즉시 닫아 클라이언트가 무한 대기하지 않는다. 핸들러 패닉에도 반납됨을 테스트로 고정 | — |
 | R3-3 엔진 생성 | ✅ 2026-10-05 — `SearchEngine::with_items`/`reload`. 조사에선 3곳으로 봤는데 실제로는 **6곳**(CLI `cmd/mod.rs`, 데몬 IPC 리빌드 경로 포함)이었다. TUI 설정 저장의 `set_kind_weights`는 항목 재적재 없이 가중치만 바꾸는 정당한 용도라 유지 | — |
-| R3-3 프리픽스 디스패치 2벌 | ⬜ 16-arm match 중복(`search_routing.rs:38-57` ↔ `tui/app.rs:1144-1160`). arm 이름은 같고 구현이 블로킹/비블로킹으로 갈림 | 일부 — `Clipboard`가 TUI에선 일반 검색으로 흐름(`tui/app.rs:1159`) |
+| R3-3 프리픽스 디스패치 2벌 | 🔶 웹 질의 arm은 core `web::web_query_items`로 통합(2026-10-18). 나머지 ⬜ 16-arm match 중복(`search_routing.rs:38-57` ↔ `tui/app.rs:1144-1160`). arm 이름은 같고 구현이 블로킹/비블로킹으로 갈림 | 일부 — `Clipboard`가 TUI에선 일반 검색으로 흐름(`tui/app.rs:1159`) |
 | R3-4 `ExtensionAction` 확장 | ⬜ docs/17 F14와 동일 작업 | 예 |
 | R1-4 데몬 `.app` 번들화 | ⬜ | 예 — 할지 말지부터 |
 
@@ -263,7 +271,7 @@ REF-05를 "UI 비동기화"로만 적어두면 어디부터 할지 모른다. �
 | 5 | REF-08 | ✅ 위 표 |
 | 6 | 데스크톱 config 중복 파싱 | ✅ `EngineLoadResult`가 파생 필드 9개 대신 **config 자체**를 넘긴다. 두 번 읽는 사이 파일이 바뀌면 엔진과 설정이 서로 다른 config를 보던 경합도 함께 사라졌다 |
 | 7 | `macos.rs` `allow(dead_code)` | ✅ **삭제**. 지우고 빌드해 보니 경고 0건 — 블록의 선언은 전부 사용 중이었고 억제가 애초에 필요 없었다. 이제 미사용 선언이 생기면 컴파일러가 잡는다 |
-| 8 | `handle_prompt_query` 통합 | ⬜ 남음 — 두 UI의 결과 표현(결과 항목 vs 상태 메시지)을 맞추는 작업이라 저비용 묶음에서 뺐다 |
+| 8 | `handle_prompt_query` 통합 | ✅ 2026-10-18 — core `prompt::{parse_command, command_items, apply_command}`. 통합하다 **버그**가 드러났다: 두 UI 모두 검색 경로(키 입력마다)에서 add/rm을 실행해, 글자마다 config가 저장되고 `rm ab`를 치는 도중 `a`가 지워졌다. 이제 검색은 미리보기만, 확정은 Enter |
 | 9 | `check-encoding.sh` macOS | ✅ 원인이 **두 개**였다. ① `mapfile`(bash 4+) → `while read`. ② 그걸 고치자 **오탐 28건** — macOS `iconv`는 출력이 `/dev/null`이면 유효한 파일에도 `Inappropriate ioctl for device`로 실패한다. 파이프(`\| cat >/dev/null`)로 우회, `pipefail`로 실패는 그대로 전달. CP949 바이트를 여전히 잡는지 확인했다. 이제 macOS에서 150개 파일 통과 |
 
 **부수 발견**: 로컬 rustc(1.94)는 테스트 함수 이름의 대문자 `NOT`을
@@ -345,7 +353,7 @@ OS 특성상 정당 / 통합 가능한 복붙 / **같아야 하는데 갈라진 
 
 ### 통합 가능한 중복 (상위)
 
-- 데몬 `KeyDecision → 주입` 분기: macOS 안에서도 두 벌(`1112-1170`, `1176-1235`) + Windows → mod.rs 순수 함수 `plan()`
+- 데몬 `KeyDecision → 주입` 분기: ~~macOS 안 두 벌~~ ✅ 2026-10-18 `dispatch_decision`. Windows 쪽과의 공통 `plan()`은 ⬜ (아래 Windows 보류)
 - ~~훅 상실·종료 복구~~ ✅ `8c235e4` 엔진 `on_hook_lost()`
 - 마우스 잡 디스패치·일회성 표 → `mouse.rs`
 - ~~`CREATE_NO_WINDOW` 상수·블록 13곳~~ ✅ `a652f98` `process::HideConsole`
@@ -359,3 +367,60 @@ pattern`으로 걸렸다. 로컬 교차 검사는 SQLite C 빌드 때문에 안 
 코드를 고친 커밋은 **CI 결과까지 보고** 다음으로 넘어간다. 또 하나 — 부분 커밋할
 때 파일 단위로 add하면 같은 파일의 다른 변경이 딸려 간다(`d08b514`가 process.rs
 없이 커밋돼 단독 빌드 불가). 독립 변경은 작업 트리를 비운 뒤 시작한다.
+
+## 2026-10-18 전수 리뷰 (v0.16.12, 5영역 병렬 + 코드 재확인)
+
+desktop / TUI·CLI / daemon / core / 문서 백로그를 나눠 보고, 버그 주장은 전부
+코드로 다시 확인한 뒤 고쳤다. clippy 0건, TODO 0건은 그대로였다.
+
+**확인된 버그 (전부 수정)**
+
+| 항목 | 무엇이 문제였나 |
+|---|---|
+| `:prompt add/rm` | 검색 경로에서 실행 — 글자마다 config 저장, `rm ab` 입력 중 `a` 삭제 (위 #8) |
+| 실행 이력 `item_type` | UI마다 `"App"`/`"app"`/`"Dir"`/`"dir"`/`"file"`/`"misc"` — 유니크 키가 갈려 같은 경로가 여러 행, frecency 과소. `ItemKind::history_tag` + db v4가 기존 행 합산 |
+| 폴더 제안 신호 ② | 공유 `kmd.db`만 읽어 데스크톱 이력(`desktop/kmd.db`)을 못 봄 → `DbRole` + 두 DB 합산 |
+| `kmd <서브커맨드>` | 단일 인스턴스 검사가 CLI 파싱 전이라 열린 TUI를 토글 종료시킴 |
+| 훅 Mutex poison | 엔진 패닉 후 모든 이벤트가 `Err(_) => 통과` — 리맵이 로그 없이 영구 비활성. `engine::lock_engine`이 복구 + 일시 상태 정리 |
+| IPC `RebuildIndex` | 리프레셔 코드 복붙 + 저우선순위 미적용(키훅 중 CPU 포화 위험) |
+| 아이콘 캐시 | OS 아이콘 추출 동안 락 보유 → 렌더 스레드 대기 |
+| 마우스 해제 | chord 모드 중/종료 뒤 이동 키 up이 OS로 새 포인터가 계속 움직임 |
+| 지연 Launch | 마우스를 누른 채 트리거를 떼면 `MouseStopAll`이 Launch를 버림 |
+| macOS 워커 | ClipPaste(330ms+)가 같은 FIFO의 ChordRelease·MouseRelease를 막음 → 느린 레인 |
+| 레이어 순서 | config가 HashMap이라 겹친 트리거의 승자가 실행마다 바뀜 → BTreeMap |
+| `preview_body` | 바이트 슬라이스 — 한글 혼합 템플릿 본문에서 패닉 |
+| glob 매처 | 재귀 백트래킹 — `*a*a*a*b` 류 질의에서 항목마다 지수 시간 |
+| bookmarks | `INSERT OR REPLACE`인데 UNIQUE 없음 |
+| 본문 인덱스 | 일시적 읽기 실패(잠긴 파일)에 기존 인덱스 삭제 → churn / 배치가 건수만 봐 최악 ~200MB |
+| TUI | 설정 저장이 Ctrl+P 미리보기 상태를 되돌림, 드릴다운 후 유효 쿼리 캐시 미갱신, 프롬프트 복사 실패를 숨김 |
+| 데스크톱 | 경로/이름 복사 실패에도 창을 닫음, 폴더 제안 추가 결과가 로그뿐 |
+| keymap 프로파일 전환 | 메모리 설정 전체 `save()`(다른 곳 변경 되돌림) + 실패 무시 |
+
+**구조 정리**: core `clipboard`(6벌→1), `transform::parse_transform_query_or_clipboard`(4벌),
+`web::web_query_items`/`browse_items`/`WebQueryConfig::from_launcher`(CLI 포함 3벌),
+`hangul::is_jamo`, `fsutil::write_atomic`(2벌), `content_index::walk_entries`/`is_candidate_file`
+(folder_suggest와 공유), config CSV 파서, `Database::open_default(DbRole)`,
+server `process_request` 핸들러 분리, 큰 파일 3개(desktop `app.rs`, TUI `app.rs`, `config.rs`) 모듈 분할.
+
+### Windows 전용 — 로컬 검증 불가로 보류
+
+로컬 교차 검사는 SQLite C 헤더 때문에 안 된다(교훈 6). 아래는 CI에서 하나씩
+확인하며 진행한다.
+
+- `windows.rs` Execute·deferred_action의 lane 분기 두 벌(`dispatch_action` 추출)
+- inline 경로의 `unreachable!` → `InlineAction` 타입 분리
+- 플랫폼 공통: Launch 실행(capture_foreground→resolve→spawn), 일회성 마우스 펄스,
+  `HOOK_STATE` 교체, 마우스 버튼 pressed 관리 → mod.rs/mouse.rs
+- 훅 콜백의 이벤트마다 전역 Mutex 잠금 + Sender clone(`queue_fast`/`queue_slow`, macOS `queue_job`도 동일)
+
+### 그 밖에 남은 것
+
+- engine 핫패스 clone(`double_tap_mappings.get().cloned()` 등) → `Arc<BindAction>`
+- engine bool 3개 + Option 인덱스 → `enum Hold` (불가능한 조합 제거)
+- macOS `stop()`이 `start()` 직후면 run loop 저장 전이라 join이 멈출 수 있음(실호출은 종료 1회)
+- `single_instance::Guard::drop`이 flock을 쥔 채 lock 파일 삭제 — 종료 중 경쟁
+- `search::filter_contains` 질의마다 항목별 HashSet 할당
+- `db::migrate` 버전 블록 → 배열 + 단계별 트랜잭션
+- TUI `load_history_into_results` ↔ core `recent_items` (아이콘 규칙 차이로 보류)
+- 테스트 공백: `index/apps.rs`(Linux `.desktop` 파서), `merge_table` 배열형 테이블 주석 보존
+

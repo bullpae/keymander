@@ -1,6 +1,8 @@
 # 레이어 패스쓰루(VIA/QMK KC_TRNS 스타일) 도입 검토 및 단계별 전략
 
-> **상태: 구현 완료 (P0–P3, v0.9.3 릴리스).** 이 문서는 **설계 이력**이다 —
+> **상태: P0–P3 구현 완료 (v0.9.3 릴리스) · P2(Windows)/P3(macOS) 실기기 검증 대기 ·
+> P4 미완** — 기본 프리셋 passthrough(F3)·`:keymap` 표시(F5)는
+> [17_feature_backlog.md](17_feature_backlog.md) 참조. 이 문서는 **설계 이력**이다 —
 > 왜 이 구조를 골랐는지와 검토했던 대안이 남아 있다. 현재 동작의 정본은
 > `crates/kmd-daemon/src/keybind/engine.rs` 와 CHANGELOG의 0.9.3–0.9.5 항목이다.
 > 아래 "단계별 전략"의 미래형 서술은 당시 계획 시점의 표현이다.
