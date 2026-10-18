@@ -653,11 +653,8 @@ impl App {
         // 유휴 시점에 full 인덱스 워밍업 (spawn_full_engine_load_task)
         tracing::info!("Booting with empty engine — quick index loads asynchronously");
         let engine = kmd_core::SearchEngine::new();
-        let db_path = db_path_override.unwrap_or_else(|| {
-            kmd_core::Config::default_data_dir()
-                .join("desktop")
-                .join("kmd.db")
-        });
+        let db_path =
+            db_path_override.unwrap_or_else(|| kmd_core::db::DbRole::Desktop.default_path());
         let db = match kmd_core::db::Database::open(&db_path) {
             Ok(db) => db,
             Err(e) => {

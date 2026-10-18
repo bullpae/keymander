@@ -264,14 +264,31 @@ fn main() -> color_eyre::Result<()> {
         win_console::hide();
     }
 
-    // ── 2. Single-instance check ─────────────────────────────────────────
-    let data_dir = kmd_core::Config::default_data_dir();
-    let instance_guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
-        kmd_core::single_instance::InstanceAction::Acquired(guard) => Some(guard),
-        kmd_core::single_instance::InstanceAction::SignalledExisting => {
-            // Existing instance was told to quit — exit with hidden console.
-            return Ok(());
+    // ── 2. Parse CLI, then single-instance check (TUI only) ──────────────
+    // 서브커맨드(`kmd search` 등)는 열린 TUI를 토글 종료시키면 안 되므로
+    // 인스턴스 잠금은 TUI 경로에서만 잡는다.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            #[cfg(windows)]
+            if owns_console {
+                win_console::show();
+            }
+            e.exit();
         }
+    };
+
+    let instance_guard = if cli.command.is_none() {
+        let data_dir = kmd_core::Config::default_data_dir();
+        match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
+            kmd_core::single_instance::InstanceAction::Acquired(guard) => Some(guard),
+            kmd_core::single_instance::InstanceAction::SignalledExisting => {
+                // Existing instance was told to quit — exit with hidden console.
+                return Ok(());
+            }
+        }
+    } else {
+        None
     };
 
     // ── 3. Set up UTF-8 / VT processing ─────────────────────────────────
@@ -296,8 +313,6 @@ fn main() -> color_eyre::Result<()> {
         )
         .with_target(false)
         .init();
-
-    let cli = Cli::parse();
 
     // For non-TUI commands launched from a hotkey/shortcut, we need the
     // console visible for output.  TUI mode keeps it hidden until ready.

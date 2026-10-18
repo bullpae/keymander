@@ -22,6 +22,33 @@ pub struct HookLossCleanup {
     pub stop_mouse: bool,
 }
 
+/// 엔진 Mutex를 잠근다 — poison이면 복구하고 일시 상태를 정리한다.
+///
+/// 훅 콜백의 `catch_unwind`는 엔진 패닉을 잡지만 그때 guard를 쥐고 있으므로
+/// Mutex가 poison된다. 예전엔 이후 모든 이벤트가 `Err(_) => 패스스루`로 빠져
+/// 리맵이 로그 한 줄 없이 영구히 꺼졌다(status는 정상). 이제는 내부 값을 꺼내
+/// poison을 지우고, 패닉 시점의 반쯤 전진한 상태를 [`EngineState::on_hook_lost`]로
+/// 초기화한다. 반환된 정리(눌린 트리거 해제·마우스 정지)는 어댑터가 실행한다.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+pub fn lock_engine(
+    state: &std::sync::Mutex<EngineState>,
+) -> (
+    std::sync::MutexGuard<'_, EngineState>,
+    Option<HookLossCleanup>,
+) {
+    match state.lock() {
+        Ok(guard) => (guard, None),
+        Err(poisoned) => {
+            state.clear_poison();
+            let mut guard = poisoned.into_inner();
+            let cleanup = guard.on_hook_lost();
+            // 패닉 직후 1회만 도달한다(poison을 지웠으므로) — 동기 로그 IO 허용.
+            tracing::error!("키 엔진 패닉 후 Mutex poison 복구 — 일시 상태 초기화");
+            (guard, Some(cleanup))
+        }
+    }
+}
+
 /// 키 이벤트 처리 결정
 #[derive(Debug, Clone)]
 pub enum KeyDecision {
@@ -1736,6 +1763,33 @@ mod tests {
             e.process_key(VKey::W, false, 1100),
             KeyDecision::MouseRelease(_)
         ));
+    }
+
+    #[test]
+    fn 패닉으로_poison된_엔진은_복구되고_마우스를_멈춘다() {
+        let state = std::sync::Mutex::new(EngineState::new(mouse_layer_config()));
+        {
+            let mut e = state.lock().unwrap();
+            e.process_key(VKey::RAlt, true, 1000);
+            e.process_key(VKey::W, true, 1050);
+        }
+        // 훅 콜백이 guard를 쥔 채 패닉한 상황 재현
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.lock().unwrap();
+            panic!("engine panic");
+        }));
+        assert!(state.is_poisoned());
+
+        let (guard, recovered) = lock_engine(&state);
+        drop(guard);
+        assert!(recovered.is_some_and(|c| c.stop_mouse));
+        assert!(
+            !state.is_poisoned(),
+            "poison을 지워 다음 이벤트는 정상 경로"
+        );
+        let (guard, again) = lock_engine(&state);
+        drop(guard);
+        assert!(again.is_none());
     }
 
     #[test]

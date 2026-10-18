@@ -28,7 +28,7 @@ pub mod web;
 
 /// Re-export commonly used types
 pub use config::Config;
-pub use db::Database;
+pub use db::{Database, DbRole};
 pub use index::{Index, IndexItem, ItemKind, Source};
 pub use search::{SearchEngine, SearchMode, SearchResult};
 

@@ -9,7 +9,39 @@ pub struct Database {
     conn: Connection,
 }
 
+/// 기본 위치 DB의 역할.
+///
+/// 데스크톱 런처는 실행 이력을 자체 파일(`desktop/kmd.db`)에 남기고, TUI·CLI·데몬은
+/// 공유 파일(`kmd.db`, 본문 인덱스 포함)을 쓴다. 경로를 곳곳에서 손으로 조합하면
+/// 한쪽 파일만 보는 버그가 생긴다(폴더 제안이 데스크톱 이력을 못 보던 문제).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbRole {
+    /// 공유 DB — TUI/CLI 이력, 본문 인덱스(데몬이 씀)
+    Shared,
+    /// 데스크톱 런처 전용 이력 DB
+    Desktop,
+}
+
+impl DbRole {
+    /// 모든 역할 — 이력을 합산해 읽을 때 쓴다.
+    pub const ALL: [DbRole; 2] = [DbRole::Shared, DbRole::Desktop];
+
+    /// 기본 데이터 디렉터리 기준 DB 파일 경로
+    pub fn default_path(self) -> std::path::PathBuf {
+        let dir = crate::Config::default_data_dir();
+        match self {
+            DbRole::Shared => dir.join(crate::DB_FILENAME),
+            DbRole::Desktop => dir.join("desktop").join(crate::DB_FILENAME),
+        }
+    }
+}
+
 impl Database {
+    /// 기본 위치의 역할별 DB를 연다 (없으면 생성).
+    pub fn open_default(role: DbRole) -> Result<Self, DbError> {
+        Self::open(&role.default_path())
+    }
+
     /// Open database file (creates parent dirs if needed)
     pub fn open(path: &Path) -> Result<Self, DbError> {
         if let Some(parent) = path.parent() {

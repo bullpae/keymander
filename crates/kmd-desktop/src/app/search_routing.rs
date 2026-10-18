@@ -469,8 +469,7 @@ impl App {
     /// `?질의` — 문서 본문 검색 (FTS5, docs/15). 공유 kmd.db를 지연 오픈해 읽는다.
     pub(super) fn handle_content_search(&mut self, raw: &str) {
         if self.content_db.is_none() && self.runtime_config.launcher.content_search.enabled {
-            let path = kmd_core::Config::default_data_dir().join(kmd_core::DB_FILENAME);
-            match kmd_core::db::Database::open(&path) {
+            match kmd_core::db::Database::open_default(kmd_core::db::DbRole::Shared) {
                 Ok(db) => self.content_db = Some(db),
                 Err(e) => tracing::warn!("본문 검색 DB 열기 실패: {e}"),
             }

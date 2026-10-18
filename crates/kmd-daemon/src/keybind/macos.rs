@@ -5,7 +5,7 @@
 //!
 //! 필수: 시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 권한
 
-use super::engine::{EngineState, KeyDecision};
+use super::engine::{lock_engine, EngineState, HookLossCleanup, KeyDecision};
 use super::mouse::{MouseSink, MouseWorker};
 use super::{
     resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
@@ -907,6 +907,16 @@ fn clear_hidutil_remap() {
 
 static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 
+/// 훅 상실·엔진 poison 복구 정리를 워커 큐에 넣는다 (눌린 트리거 해제·마우스 정지).
+fn apply_hook_loss_cleanup(cleanup: HookLossCleanup) {
+    if let Some(trigger) = cleanup.release_trigger {
+        queue_job(WorkerJob::ChordRelease { trigger });
+    }
+    if cleanup.stop_mouse {
+        queue_job(WorkerJob::MouseStopAll);
+    }
+}
+
 /// CGEventTap 포인터 — 타임아웃 후 재활성화에 사용
 /// 탭 타임아웃 서킷 브레이커 — 이 시간(ms) 안에 MAX_RETRIES를 넘으면 재활성화 포기
 const TAP_TIMEOUT_WINDOW_MS: u32 = 10_000;
@@ -1030,16 +1040,12 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
         // 어느 경로든 정리한다 (stuck modifier·stuck mouse 방지). 무엇을 풀지는
         // 엔진이 정한다 — Windows 훅 재설치와 같은 규칙(engine::on_hook_lost).
         // 예전엔 상태만 리셋해서, 레이어 chord 중이면 주입해 둔 Option이 눌린 채 남았다.
-        let cleanup = HOOK_STATE
-            .get()
-            .and_then(|state| state.lock().ok().map(|mut guard| guard.on_hook_lost()));
+        let cleanup = HOOK_STATE.get().map(|state| {
+            let (mut guard, recovered) = lock_engine(state);
+            recovered.unwrap_or_else(|| guard.on_hook_lost())
+        });
         if let Some(cleanup) = cleanup {
-            if let Some(trigger) = cleanup.release_trigger {
-                queue_job(WorkerJob::ChordRelease { trigger });
-            }
-            if cleanup.stop_mouse {
-                queue_job(WorkerJob::MouseStopAll);
-            }
+            apply_hook_loss_cleanup(cleanup);
         }
 
         if count > TAP_TIMEOUT_MAX_RETRIES {
@@ -1090,10 +1096,10 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
             return event;
         }
     };
-    let mut guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return event,
-    };
+    let (mut guard, recovered) = lock_engine(state);
+    if let Some(cleanup) = recovered {
+        apply_hook_loss_cleanup(cleanup);
+    }
 
     let tick = tick_ms();
 
@@ -1497,15 +1503,14 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         // 무엇을 풀지는 엔진이 정한다(engine::on_hook_lost, Windows stop과 같은 규칙).
         // 마우스는 아래 워커 정리 경로가 멈춘다.
         if let Some(state) = HOOK_STATE.get() {
-            if let Ok(mut guard) = state.lock() {
-                let held = guard.held_modifiers();
-                let cleanup = guard.on_hook_lost();
-                for vkey in &held {
-                    send_key_event(vkey_to_cg(*vkey), false, 0);
-                }
-                if let Some(trigger) = cleanup.release_trigger.filter(|t| !held.contains(t)) {
-                    send_key_event(vkey_to_cg(trigger), false, 0);
-                }
+            let (mut guard, recovered) = lock_engine(state);
+            let held = guard.held_modifiers();
+            let cleanup = recovered.unwrap_or_else(|| guard.on_hook_lost());
+            for vkey in &held {
+                send_key_event(vkey_to_cg(*vkey), false, 0);
+            }
+            if let Some(trigger) = cleanup.release_trigger.filter(|t| !held.contains(t)) {
+                send_key_event(vkey_to_cg(trigger), false, 0);
             }
         }
 
