@@ -193,6 +193,7 @@ impl Index {
             search_depth: config.search_depth,
             search_paths: config.search_paths.clone(),
             ignore_patterns: config.ignore_patterns.clone(),
+            ignore_extensions: config.ignored_extension_set(),
             everything_path: config.everything_path.clone(),
             scan_drives: config.scan_drives,
             drive_scan_depth: config.drive_scan_depth,
@@ -216,8 +217,17 @@ impl Index {
         items.extend(general_files);
 
         // 6. Deduplicate by path (preserve order — priority files come first)
+        //    + 제외 확장자 — walkdir 스캔은 순회 중에 거르지만 fd·Everything 등
+        //    외부 프로바이더 결과는 여기서 걸러야 한다. 파일 프로바이더 결과만 대상
+        //    (앱·PATH 실행 파일은 사용자가 고른 스캔 범위가 아니다), 폴더는 제외.
         let mut seen_paths = HashSet::new();
-        items.retain(|item| seen_paths.insert(item.path.clone()));
+        let ignore_ext = &provider_config.ignore_extensions;
+        items.retain(|item| {
+            let ignored = item.source == Source::FileProvider
+                && item.kind != ItemKind::Directory
+                && files::has_ignored_extension(std::path::Path::new(&item.path), ignore_ext);
+            !ignored && seen_paths.insert(item.path.clone())
+        });
 
         tracing::info!("Total index items after dedup: {}", items.len());
 

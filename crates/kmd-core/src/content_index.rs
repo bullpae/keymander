@@ -159,14 +159,20 @@ pub(crate) fn is_candidate_file(
     allowed.contains(&ext) && !excluded_name(cs, &name.to_lowercase())
 }
 
-/// 유효 확장자 집합 — 설정이 비어 있으면 내장 기본 목록.
+/// 유효 확장자 집합 — 설정이 비어 있으면 내장 기본 목록, 거기서
+/// `launcher.ignore_extensions`를 뺀다(런처 인덱스와 같은 제외 규칙).
 /// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
-pub(crate) fn allowed_extensions(cs: &crate::config::ContentSearchConfig) -> HashSet<String> {
-    if cs.extensions.is_empty() {
+pub(crate) fn allowed_extensions(launcher: &LauncherConfig) -> HashSet<String> {
+    let cs = &launcher.content_search;
+    let mut allowed: HashSet<String> = if cs.extensions.is_empty() {
         DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
     } else {
         cs.extensions.iter().map(|s| s.to_lowercase()).collect()
+    };
+    for ext in launcher.ignored_extension_set() {
+        allowed.remove(&ext);
     }
+    allowed
 }
 
 /// 배치 트랜잭션 크기 — fsync 횟수를 줄인다.
@@ -217,7 +223,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
         return Ok(stats);
     }
 
-    let allowed = allowed_extensions(cs);
+    let allowed = allowed_extensions(launcher);
     let max_bytes = cs.max_file_kb.saturating_mul(1024);
     let ignore_set = ignore_set(launcher);
 
@@ -879,6 +885,21 @@ mod tests {
 
         let s = sync(&db, &test_launcher(dir.path())).unwrap();
         assert_eq!(s.indexed, 1, "확장자 밖·상한 초과는 대상 아님");
+    }
+
+    #[test]
+    fn 런처_ignore_extensions는_본문_인덱스에도_적용() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "keep.md", b"indexed body");
+        write_file(dir.path(), "drop.txt", b"excluded body");
+        let db = Database::open_in_memory().unwrap();
+        let launcher = LauncherConfig {
+            ignore_extensions: vec![".TXT".to_string()],
+            ..test_launcher(dir.path())
+        };
+
+        let s = sync(&db, &launcher).unwrap();
+        assert_eq!(s.indexed, 1, "txt는 기본 허용 확장자지만 제외 규칙이 우선");
     }
 
     #[test]

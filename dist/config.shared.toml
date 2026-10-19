@@ -80,8 +80,11 @@ reset_ime_on_launch = true
 # Windows 예: search_paths = ["C:\\Users\\사용자\\Documents", "D:\\Projects"]
 # macOS 예:  search_paths = ["/Users/you/Documents"]
 
+# 제외할 파일 확장자 (파일만 — 폴더는 ignore_patterns로). 대소문자 무시.
+# ignore_extensions = ["cat", "inf", "sf"]
+
 # ── 문서 본문 검색 (FTS5, docs/15) ──────────────────────────
-# 스캔 범위는 search_paths·ignore_patterns·search_depth를 그대로 공유.
+# 스캔 범위는 search_paths·ignore_patterns·ignore_extensions·search_depth를 그대로 공유.
 # CLI: kmd grep <질의>  (데몬이 리프레시 주기마다 자동 갱신)
 # [launcher.content_search]
 # enabled = true

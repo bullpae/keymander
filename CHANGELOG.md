@@ -4,6 +4,20 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`launcher.ignore_extensions` — 확장자로 검색 대상에서 제외.** 예:
+  `ignore_extensions = ["cat", "inf", "sf"]` (`.cat`·`*.cat`·대소문자 무관).
+  `ignore_patterns`는 폴더 이름만 맞춰서, 실행 파일과 같은 폴더에 있는 부속 파일
+  (`veracrypt.cat` 등)은 폴더째 빼지 않고는 거를 수 없었다. 파일에만 적용되고(폴더는
+  남는다) 본문 검색(`?질의`)도 같은 규칙을 따른다.
+
+### Changed
+- **한 번 실행한 항목은 다음 검색부터 바로 위로 올라온다.** 실행 이력 부스트가 1회
+  실행이면 +16(1시간 내)~+1에 그쳐, `vera`를 치면 `D:\Util\VeraCrypt` 폴더(110점)가
+  그 안의 `VeraCrypt.exe`(70점)를 계속 이겼다 — 폴더/파일 종류 가중치 차만으로
+  40점이 벌어진다. 이제 실행 이력이 있는 항목에 기본 +50을 더한다(상한 200은 그대로라
+  매칭 품질 차가 큰 결과까지 뒤집지는 않는다).
+
 ### Fixed
 - **`:prompt add`/`rm`이 글자를 칠 때마다 실행되던 문제.** 입력하는 동안 매 글자
   config가 저장됐고, 템플릿 `a`와 `ab`가 있을 때 `rm ab`를 치면 도중에 `a`가 먼저

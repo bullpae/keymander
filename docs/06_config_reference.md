@@ -17,7 +17,7 @@
 ```mermaid
 graph TB
     ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme\nemoji_icons, reset_ime_on_launch, editor"]
-    ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, quit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
+    ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, ignore_extensions\nquit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
     ConfigToml --> KindWeights["[launcher.kind_weights]\ndirectory, app, file\nexecutable, system_cmd, web_search"]
     ConfigToml --> Keymap["[launcher.keymap]\nbackend, kanata_path\nprofile_dir, active_profile"]
     ConfigToml --> Keybindings["[keybindings]\nglobal_hotkey, quit\nnext, prev, select, toggle_preview"]
@@ -50,6 +50,7 @@ file_search_provider = "auto"     # 파일 검색 프로바이더
 max_results = 5000                # 파일 프로바이더 최대 결과 수
 search_depth = 4                  # 최대 재귀 탐색 깊이
 ignore_patterns = [".git", "node_modules", "target", "__pycache__", "Windows", "Program Files"]
+# ignore_extensions = ["cat", "inf", "sf"]   # 파일 확장자로 제외
 quit_on_launch = true             # 실행 후 kmd 자동 종료
 index_directories = true          # 폴더도 인덱스에 포함
 scan_drives = false               # 드라이브 루트 자동 스캔 (C:\, D:\ 등)
@@ -110,7 +111,8 @@ toggle_preview = "ctrl+p"
 | search_paths | Vec\<Path\> | 플랫폼별 | 검색 대상 디렉토리. 기본값은 **OS가 알려주는 실제** 바탕 화면·문서·다운로드 위치(Windows는 OneDrive 백업으로 옮겨진 위치 포함) + Windows OneDrive 루트(개인·회사). 키를 적지 않았을 때만 기본값을 쓴다 |
 | max_results | usize | 5000 | 최대 인덱스 항목 수 |
 | search_depth | usize | 4 | 최대 재귀 디렉토리 탐색 깊이 |
-| ignore_patterns | Vec\<String\> | [".git", ...] | 무시 패턴 |
+| ignore_patterns | Vec\<String\> | [".git", ...] | 무시할 **폴더 이름**(정확히 일치, 와일드카드 없음). 키를 적으면 기본 목록을 대체 |
+| ignore_extensions | Vec\<String\> | [] | 무시할 **파일 확장자**(`cat`·`.cat`·`*.cat`, 대소문자 무시). 파일에만 적용되고 폴더는 남는다. 본문 인덱스도 같은 규칙 |
 | quit_on_launch | bool | true | 실행 후 kmd 종료 (런처 모드) |
 | index_directories | bool | true | 폴더를 검색 인덱스에 포함 |
 | scan_drives | bool | false | 드라이브 루트 자동 스캔 |
@@ -123,7 +125,7 @@ toggle_preview = "ctrl+p"
 ### 4.2.1 [launcher.content_search] — 문서 본문 검색 (docs/15)
 
 파일 이름이 아니라 **내용**으로 찾는 FTS5 인덱스. 스캔 범위는 `search_paths` +
-`ignore_patterns` + `search_depth`를 그대로 공유한다. 데몬이 인덱스 리프레시
+`ignore_patterns` + `ignore_extensions` + `search_depth`를 그대로 공유한다. 데몬이 인덱스 리프레시
 주기(`index_refresh_minutes`)마다 증분 갱신하고(mtime+size 불일치만 재인덱싱),
 **파일 변경도 실시간 감시**(notify, 500ms 디바운스)해 곧바로 반영한다.
 데몬이 없으면 `kmd index --rebuild`가 함께 갱신한다.

@@ -340,7 +340,7 @@ fn scan_root(
     budget: &mut usize,
 ) -> Vec<FolderSuggestion> {
     let ignore_set = crate::content_index::ignore_set(launcher);
-    let allowed = crate::content_index::allowed_extensions(&launcher.content_search);
+    let allowed = crate::content_index::allowed_extensions(launcher);
     let recent_cutoff = now - Duration::from_secs(RECENT_DAYS * 24 * 3600);
 
     let mut suggestions: Vec<FolderSuggestion> = Vec::new();

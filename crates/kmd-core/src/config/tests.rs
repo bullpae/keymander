@@ -536,3 +536,23 @@ fn test_unknown_key() {
     let mut config = Config::default();
     assert!(config.set_value("nonexistent.key", "val").is_err());
 }
+
+#[test]
+fn ignore_extensions_정규화_점_별표_대소문자() {
+    let config: Config = toml::from_str(
+        r#"
+[launcher]
+ignore_extensions = ["cat", ".SF", "*.Inf", "  ", "*."]
+"#,
+    )
+    .unwrap();
+    let mut got: Vec<String> = config
+        .launcher
+        .ignored_extension_set()
+        .into_iter()
+        .collect();
+    got.sort();
+    assert_eq!(got, vec!["cat", "inf", "sf"]);
+    // 키를 안 적으면 비어 있다 (기존 설정 호환)
+    assert!(Config::default().launcher.ignore_extensions.is_empty());
+}

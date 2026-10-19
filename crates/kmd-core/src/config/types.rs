@@ -99,6 +99,12 @@ pub struct LauncherConfig {
     pub search_depth: usize,
     /// Patterns to ignore during file indexing
     pub ignore_patterns: Vec<String>,
+    /// 인덱싱에서 뺄 파일 확장자 (대소문자 무시). `cat`·`.cat`·`*.cat` 모두 허용.
+    /// `ignore_patterns`는 폴더 이름만 맞추므로, 실행 파일 옆의 부속 파일
+    /// (`veracrypt.cat`·`.inf` 등)은 폴더째 빼지 않고는 거를 수 없었다.
+    /// 파일에만 적용(폴더 제외) — 본문 인덱스도 같은 규칙을 따른다.
+    #[serde(default)]
+    pub ignore_extensions: Vec<String>,
     /// Quit kmd after launching a program/file
     pub quit_on_launch: bool,
     /// Whether to index directories (not just files)
@@ -200,6 +206,22 @@ impl Default for ContentSearchConfig {
     }
 }
 
+impl LauncherConfig {
+    /// `ignore_extensions`를 비교용으로 정규화한 집합 — 소문자, 앞의 `*`·`.` 제거.
+    pub fn ignored_extension_set(&self) -> std::collections::HashSet<String> {
+        self.ignore_extensions
+            .iter()
+            .map(|e| {
+                e.trim()
+                    .trim_start_matches('*')
+                    .trim_start_matches('.')
+                    .to_lowercase()
+            })
+            .filter(|e| !e.is_empty())
+            .collect()
+    }
+}
+
 impl Default for LauncherConfig {
     fn default() -> Self {
         Self {
@@ -259,6 +281,7 @@ impl Default for LauncherConfig {
                 "Library".to_string(),
                 ".Trash".to_string(),
             ],
+            ignore_extensions: Vec::new(),
             quit_on_launch: true,
             index_directories: true,
             scan_drives: false,

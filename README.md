@@ -748,6 +748,7 @@ web_search = 20
 
 # Patterns to exclude from indexing
 # ignore_patterns = [".git", "node_modules", "target", "Windows", "Program Files"]
+# ignore_extensions = ["cat", "inf"]   # 확장자로 제외 (파일만, 대소문자 무시)
 
 [keybindings]
 global_hotkey = "alt+space"
