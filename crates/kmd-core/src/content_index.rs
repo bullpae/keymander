@@ -133,7 +133,11 @@ pub(crate) fn walk_entries<'a>(
         .follow_links(false)
         .into_iter()
         .filter_entry(move |e| {
-            e.depth() == 0 || !crate::index::files::is_ignored_dir(e, ignore_set)
+            // macOS 패키지(.app·.pages…) 안으로는 내려가지 않는다 — 번들의 plist·strings를
+            // 본문으로 색인하거나, 앱이 번들 안에 쓰는 파일을 "활동"으로 보지 않게 (docs/18 §9)
+            e.depth() == 0
+                || !(crate::index::files::is_ignored_dir(e, ignore_set)
+                    || crate::index::package::parent_is_package(e.path()))
         })
         .flatten()
 }
@@ -870,6 +874,21 @@ mod tests {
         assert_eq!(s.indexed, 1, "EUC-KR만 인덱싱, 바이너리는 실패 처리");
         assert_eq!(s.failed, 1);
         assert_eq!(search(&db, "보고서", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn macos_패키지_안은_본문_인덱싱하지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "keep.md", b"indexed body");
+        let pkg = dir.path().join("Notes.rtfd");
+        std::fs::create_dir(&pkg).unwrap();
+        write_file(&pkg, "TXT.txt", b"inside package");
+        let db = Database::open_in_memory().unwrap();
+
+        crate::index::package::test_force::set(true);
+        let s = sync(&db, &test_launcher(dir.path())).unwrap();
+        crate::index::package::test_force::set(false);
+        assert_eq!(s.indexed, 1, "패키지(.rtfd) 안의 파일은 건너뛴다");
     }
 
     #[test]

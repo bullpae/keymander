@@ -557,11 +557,9 @@ fn count_executables(path: &Path) -> usize {
     exes
 }
 
-/// macOS 앱 번들(`*.app` 폴더)인가.
+/// macOS 앱 번들인가 — 인덱서와 같은 판정(`Contents/Info.plist` 필수, docs/18 §9).
 fn is_app_bundle(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("app"))
-        && path.is_dir()
+    crate::index::package::classify(path) == Some(crate::index::package::PackageKind::App)
 }
 
 fn add_item(path: &Path, hint: &str, use_emoji: bool) -> IndexItem {
@@ -768,6 +766,16 @@ mod tests {
         let bundle = tmp.path().join("Foo.app").join("Contents").join("MacOS");
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("Foo"), "").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join("Foo.app")
+                .join("Contents")
+                .join("Info.plist"),
+            "<plist/>",
+        )
+        .unwrap();
+        // Info.plist 없는 `web.app`은 앱이 아니다 (개발 폴더 이름)
+        std::fs::create_dir(tmp.path().join("web.app")).unwrap();
         std::fs::write(tmp.path().join("tool.exe"), "").unwrap();
         std::fs::write(tmp.path().join("run.command"), "").unwrap();
         std::fs::write(tmp.path().join("readme.txt"), "").unwrap();

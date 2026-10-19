@@ -2,6 +2,7 @@
 
 pub mod apps;
 pub mod files;
+pub mod package;
 pub mod path;
 pub mod store;
 pub mod system_commands;
@@ -220,6 +221,23 @@ impl Index {
         //    + 제외 확장자 — walkdir 스캔은 순회 중에 거르지만 fd·Everything 등
         //    외부 프로바이더 결과는 여기서 걸러야 한다. 파일 프로바이더 결과만 대상
         //    (앱·PATH 실행 파일은 사용자가 고른 스캔 범위가 아니다), 폴더는 제외.
+        //    + macOS 패키지 — walkdir는 순회 중에 번들 안으로 내려가지 않지만, 외부
+        //    프로바이더 결과는 번들 내부 항목을 버리고 번들 자신을 앱/파일로 바꾼다
+        //    (docs/18 §9). macOS가 아니면 둘 다 아무것도 하지 않는다.
+        if package::enabled() {
+            items.retain(|item| {
+                item.source != Source::FileProvider
+                    || !package::inside_package(std::path::Path::new(&item.path))
+            });
+            for item in items
+                .iter_mut()
+                .filter(|i| i.source == Source::FileProvider && i.kind == ItemKind::Directory)
+            {
+                if let Some(kind) = package::detect(std::path::Path::new(&item.path)) {
+                    files::apply_package_kind(item, kind, use_emoji);
+                }
+            }
+        }
         let mut seen_paths = HashSet::new();
         let ignore_ext = &provider_config.ignore_extensions;
         items.retain(|item| {

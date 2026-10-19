@@ -249,7 +249,12 @@ depth = 6
 3. **기본 제외 규칙 구조**: `use_default_ignores = true`(권장)와 `ignore_patterns_extra` 중 선택
 4. **S1 범위에 E1(경로 입력 → 추가 행)을 당겨 넣을지**: 비용이 낮고 체감이 크다
 
-## 9. macOS 패키지(번들) 처리 — 설계안 (2026-10-19)
+## 9. macOS 패키지(번들) 처리 — 구현 (2026-10-19, Unreleased)
+
+> 구현: `index/package.rs`(판정) · `files.rs`(walkdir 두 곳 자식 차단 + 항목화
+> `apply_package_kind`) · `index/mod.rs`(외부 프로바이더 사후 필터) · `content_index::walk_entries`
+> · `scope::count_executables`. 테스트는 `package::test_force`로 모든 OS에서 macOS 분기를 돌린다.
+> **실기기 미검증** — 9.5 실기기 항목이 남았다.
 
 ### 9.1 문제
 
