@@ -41,9 +41,7 @@ pub(crate) fn index_cache_paths() -> (PathBuf, PathBuf) {
 
 /// Open the database
 pub fn open_db() -> color_eyre::Result<kmd_core::Database> {
-    let db_path = kmd_core::Config::default_data_dir().join(kmd_core::DB_FILENAME);
-    let db = kmd_core::Database::open(&db_path)?;
-    Ok(db)
+    Ok(kmd_core::Database::open_default(kmd_core::DbRole::Shared)?)
 }
 
 /// Load config

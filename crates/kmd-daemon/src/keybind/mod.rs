@@ -621,7 +621,9 @@ impl KeybindConfig {
             }
         }
 
-        let mut layers = Vec::new();
+        // config 맵은 BTreeMap — 이름순 순회라 트리거가 겹쳐도 이기는 레이어가 고정된다
+        // (예전 HashMap은 실행마다 순서가 달라 승자가 바뀌었다. 엔진은 첫 일치를 고른다).
+        let mut layers: Vec<Layer> = Vec::new();
         for (name, layer_cfg) in &cfg.layers {
             if layer_cfg.trigger.is_empty() {
                 tracing::warn!("레이어 '{name}': trigger가 비어있어 건너뜀");
@@ -687,6 +689,14 @@ impl KeybindConfig {
                 Vec::new()
             };
 
+            if let Some(prev) = layers.iter().find(|l| l.trigger == trigger) {
+                tracing::warn!(
+                    "레이어 '{name}': trigger '{}'가 레이어 '{}'와 겹침 — '{}'가 우선",
+                    layer_cfg.trigger,
+                    prev.name,
+                    prev.name
+                );
+            }
             layers.push(Layer {
                 name: name.clone(),
                 trigger,
@@ -734,7 +744,8 @@ impl KeybindConfig {
             }
         }
 
-        let mut tap_holds = Vec::new();
+        // 키 이름순 (BTreeMap) — 별칭이 같은 키로 풀리면 첫 항목이 이긴다
+        let mut tap_holds: Vec<TapHoldBinding> = Vec::new();
         for (key_str, th_cfg) in &cfg.tap_holds {
             let Some(key) = VKey::from_name(key_str) else {
                 tracing::warn!("tap-hold 키 파싱 실패: {key_str}");
@@ -761,6 +772,10 @@ impl KeybindConfig {
                     }
                 },
             };
+            if tap_holds.iter().any(|t| t.key == key) {
+                tracing::warn!("tap-hold '{key_str}': 같은 키가 이미 정의됨 — 무시");
+                continue;
+            }
             tap_holds.push(TapHoldBinding {
                 key,
                 tap,

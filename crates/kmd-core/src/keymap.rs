@@ -547,7 +547,7 @@ fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem 
 /// 키를 옮기기 전에 그 문서의 §2(손가락 배치 기준)와 §5(열려 있는 과제)를 볼 것.
 fn vim_nav_default_layer() -> crate::config::LayerToml {
     use crate::config::{LayerDoubleTapToml, LayerToml};
-    let mut mappings = std::collections::HashMap::new();
+    let mut mappings = std::collections::BTreeMap::new();
     mappings.insert("H".into(), "Left".into());
     mappings.insert("J".into(), "Down".into());
     mappings.insert("K".into(), "Up".into());
@@ -579,7 +579,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     //
     // U/I가 비웠던 O/P 안전지대는 P만 유지된다(ㅖ=Shift+P는 흔하고, ㅒ=Shift+O는
     // 드물다). O 오발사는 단어 이동 — 레이어 불변식이 허용하는 무해 등급이다.
-    let mut double_taps = std::collections::HashMap::new();
+    let mut double_taps = std::collections::BTreeMap::new();
 
     #[cfg(target_os = "macos")]
     {
@@ -652,7 +652,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
 /// - LShift = 저속 정밀 모드
 fn vim_nav_default_mouse_layer() -> crate::config::LayerToml {
     use crate::config::LayerToml;
-    let mut mappings = std::collections::HashMap::new();
+    let mut mappings = std::collections::BTreeMap::new();
     mappings.insert("E".into(), "mouse:up".into());
     mappings.insert("S".into(), "mouse:left".into());
     mappings.insert("D".into(), "mouse:down".into());
@@ -677,7 +677,7 @@ fn vim_nav_default_mouse_layer() -> crate::config::LayerToml {
         // 마우스 조작 중 미매핑 키 오타가 텍스트로 입력되는 사고 방지
         unmapped: Some("block".into()),
         mappings,
-        double_taps: std::collections::HashMap::new(),
+        double_taps: std::collections::BTreeMap::new(),
     }
 }
 
@@ -1158,9 +1158,25 @@ pub fn execute_keymap_action(config: &mut Config, keywords: &str) -> Option<Stri
         if !path.exists() {
             return Some(format!("프로파일 파일이 없습니다: {}", path.display()));
         }
-        config.launcher.keymap.active_profile = profile_name.clone();
-        let _ = config.save();
-        return Some(format!("active profile 변경: {profile_name}"));
+        // 디스크 최신 설정 위에 이 필드만 얹어 저장한다 (folder_suggest와 같은 규칙).
+        // 예전엔 메모리 설정 전체를 save()해 그 사이 다른 곳의 변경을 되돌렸고,
+        // 실패도 버린 채 "변경" 메시지를 냈다.
+        let Some(cfg_path) = config.config_path.clone() else {
+            config.launcher.keymap.active_profile = profile_name.clone();
+            return Some(format!("active profile 변경: {profile_name}"));
+        };
+        let name = profile_name.clone();
+        return Some(
+            match Config::update_and_save(&cfg_path, move |latest| {
+                latest.launcher.keymap.active_profile = name;
+            }) {
+                Ok(saved) => {
+                    *config = saved;
+                    format!("active profile 변경: {profile_name}")
+                }
+                Err(e) => format!("프로파일 변경 저장 실패: {e}"),
+            },
+        );
     }
     None
 }

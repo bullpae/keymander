@@ -9,11 +9,43 @@ pub struct Database {
     conn: Connection,
 }
 
+/// 기본 위치 DB의 역할.
+///
+/// 데스크톱 런처는 실행 이력을 자체 파일(`desktop/kmd.db`)에 남기고, TUI·CLI·데몬은
+/// 공유 파일(`kmd.db`, 본문 인덱스 포함)을 쓴다. 경로를 곳곳에서 손으로 조합하면
+/// 한쪽 파일만 보는 버그가 생긴다(폴더 제안이 데스크톱 이력을 못 보던 문제).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbRole {
+    /// 공유 DB — TUI/CLI 이력, 본문 인덱스(데몬이 씀)
+    Shared,
+    /// 데스크톱 런처 전용 이력 DB
+    Desktop,
+}
+
+impl DbRole {
+    /// 모든 역할 — 이력을 합산해 읽을 때 쓴다.
+    pub const ALL: [DbRole; 2] = [DbRole::Shared, DbRole::Desktop];
+
+    /// 기본 데이터 디렉터리 기준 DB 파일 경로
+    pub fn default_path(self) -> std::path::PathBuf {
+        let dir = crate::Config::default_data_dir();
+        match self {
+            DbRole::Shared => dir.join(crate::DB_FILENAME),
+            DbRole::Desktop => dir.join("desktop").join(crate::DB_FILENAME),
+        }
+    }
+}
+
 impl Database {
+    /// 기본 위치의 역할별 DB를 연다 (없으면 생성).
+    pub fn open_default(role: DbRole) -> Result<Self, DbError> {
+        Self::open(&role.default_path())
+    }
+
     /// Open database file (creates parent dirs if needed)
     pub fn open(path: &Path) -> Result<Self, DbError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(DbError::Io)?;
+            std::fs::create_dir_all(parent)?;
             // 이 DB는 실행/검색 히스토리를 담고, WAL 모드라 kmd.db-wal/-shm
             // 사이드카까지 같은 디렉터리에 생긴다. 포터블 설치 위치는 상위 경로가
             // 0755라 다른 사용자가 읽을 수 있으므로, 데이터 디렉터리를 0700으로
@@ -26,16 +58,13 @@ impl Database {
             }
         }
 
-        let conn = Connection::open(path).map_err(DbError::Sqlite)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(DbError::Sqlite)?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(DbError::Sqlite)?;
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         // 데몬(본문 인덱싱 쓰기)과 데스크톱/TUI(frecency 읽기)가 같은 파일을
         // 다른 프로세스에서 연다. WAL이라 읽기-쓰기 동시성은 되지만, 쓰기 겹침
         // 순간의 SQLITE_BUSY 즉시 실패를 피하려면 대기 시간이 필요하다.
-        conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(DbError::Sqlite)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
         let db = Self { conn };
         db.migrate()?;
@@ -48,9 +77,11 @@ impl Database {
         &self.conn
     }
 
-    /// Open in-memory database (for testing)
+    /// Open in-memory database (for testing) — 파일 DB와 같은 pragma를 건다
+    /// (예전엔 foreign_keys를 건너뛰어 테스트 환경이 실제와 달랐다).
     pub fn open_in_memory() -> Result<Self, DbError> {
-        let conn = Connection::open_in_memory().map_err(DbError::Sqlite)?;
+        let conn = Connection::open_in_memory()?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -65,17 +96,15 @@ impl Database {
         value: &str,
         display: Option<&str>,
     ) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT INTO history(item_type, value, display, frequency)
+        self.conn.execute(
+            "INSERT INTO history(item_type, value, display, frequency)
                  VALUES (?1, ?2, ?3, 1)
                  ON CONFLICT(item_type, value) DO UPDATE SET
                    frequency = frequency + 1,
                    display = COALESCE(?3, display),
                    executed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-                rusqlite::params![item_type, value, display],
-            )
-            .map_err(DbError::Sqlite)?;
+            rusqlite::params![item_type, value, display],
+        )?;
 
         // 매 20회 호출당 1회 pruning.
         // 기존의 subsec_nanos() % 20 방식은 Windows 시계 해상도가 100ns
@@ -200,20 +229,16 @@ impl Database {
 
     /// Clear all history
     pub fn clear_history(&self) -> Result<(), DbError> {
-        self.conn
-            .execute("DELETE FROM history", [])
-            .map_err(DbError::Sqlite)?;
+        self.conn.execute("DELETE FROM history", [])?;
         Ok(())
     }
 
     /// Add a bookmark
     pub fn add_bookmark(&self, name: &str, value: &str, item_type: &str) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO bookmarks(name, value, item_type) VALUES (?1, ?2, ?3)",
-                rusqlite::params![name, value, item_type],
-            )
-            .map_err(DbError::Sqlite)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO bookmarks(name, value, item_type) VALUES (?1, ?2, ?3)",
+            rusqlite::params![name, value, item_type],
+        )?;
         Ok(())
     }
 
@@ -257,15 +282,13 @@ impl Database {
 
     /// Set a value in kv_store
     pub fn kv_set(&self, key: &str, value: &str) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT INTO kv_store(key, value) VALUES (?1, ?2)
+        self.conn.execute(
+            "INSERT INTO kv_store(key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET
                    value = ?2,
                    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-                rusqlite::params![key, value],
-            )
-            .map_err(DbError::Sqlite)?;
+            rusqlite::params![key, value],
+        )?;
         Ok(())
     }
 
@@ -273,8 +296,7 @@ impl Database {
     fn migrate(&self) -> Result<(), DbError> {
         let version: i32 = self
             .conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(DbError::Sqlite)?;
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
 
         if version < 1 {
             self.conn
@@ -307,23 +329,16 @@ impl Database {
                         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
                     );
                     ",
-                )
-                .map_err(DbError::Sqlite)?;
-            self.conn
-                .pragma_update(None, "user_version", 1)
-                .map_err(DbError::Sqlite)?;
+                )?;
+            self.conn.pragma_update(None, "user_version", 1)?;
         }
 
         if version < 2 {
             // v2: frecency 쿼리 성능을 위한 executed_at 인덱스
-            self.conn
-                .execute_batch(
-                    "CREATE INDEX IF NOT EXISTS idx_history_executed_at ON history(executed_at);",
-                )
-                .map_err(DbError::Sqlite)?;
-            self.conn
-                .pragma_update(None, "user_version", 2)
-                .map_err(DbError::Sqlite)?;
+            self.conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_history_executed_at ON history(executed_at);",
+            )?;
+            self.conn.pragma_update(None, "user_version", 2)?;
         }
 
         if version < 3 {
@@ -331,9 +346,8 @@ impl Database {
             // content_fts의 rowid는 content_files.id와 수동으로 동기화한다
             // (트리거 없음 — 삽입/삭제는 content_index 모듈이 한 트랜잭션에서 수행).
             // bundled SQLite에 FTS5가 포함되어 있어 별도 확장 로드는 불필요.
-            self.conn
-                .execute_batch(
-                    "
+            self.conn.execute_batch(
+                "
                     CREATE TABLE IF NOT EXISTS content_files (
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         path       TEXT    NOT NULL UNIQUE,
@@ -344,11 +358,52 @@ impl Database {
                     CREATE VIRTUAL TABLE IF NOT EXISTS content_fts
                         USING fts5(body, tokenize='unicode61');
                     ",
-                )
-                .map_err(DbError::Sqlite)?;
+            )?;
+            self.conn.pragma_update(None, "user_version", 3)?;
+        }
+
+        if version < 4 {
+            // v4: history.item_type 정규화 (ItemKind::history_tag). 예전엔 UI마다
+            // "App"/"app"/"Dir"/"dir"/"Directory"로 갈려 같은 경로가 여러 행이었다.
+            // 정규 태그로 묶어 빈도는 합산, 시각은 최신, 표시명은 아무거나 하나.
+            // 테이블 교체라 트랜잭션으로 묶는다 — 중간 실패 시 v3 상태 그대로 남는다.
             self.conn
-                .pragma_update(None, "user_version", 3)
-                .map_err(DbError::Sqlite)?;
+                .execute_batch(
+                    "
+                    BEGIN;
+                    CREATE TABLE history_v4 (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        item_type   TEXT    NOT NULL,
+                        value       TEXT    NOT NULL,
+                        display     TEXT,
+                        executed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                        frequency   INTEGER NOT NULL DEFAULT 1
+                    );
+                    INSERT INTO history_v4(item_type, value, display, executed_at, frequency)
+                        SELECT tag, value, MAX(display), MAX(executed_at), SUM(frequency)
+                        FROM (
+                            SELECT CASE lower(item_type)
+                                       WHEN 'directory' THEN 'dir'
+                                       WHEN 'executable' THEN 'exe'
+                                       ELSE lower(item_type)
+                                   END AS tag,
+                                   value, display, executed_at, frequency
+                            FROM history
+                        )
+                        GROUP BY tag, value;
+                    DROP TABLE history;
+                    ALTER TABLE history_v4 RENAME TO history;
+                    CREATE UNIQUE INDEX idx_history_unique ON history(item_type, value);
+                    CREATE INDEX idx_history_executed_at ON history(executed_at);
+                    -- bookmarks: add_bookmark의 INSERT OR REPLACE가 동작하려면 이름이
+                    -- 유일해야 한다 (예전엔 제약이 없어 같은 이름이 쌓였다). 최신만 남긴다.
+                    DELETE FROM bookmarks
+                        WHERE id NOT IN (SELECT MAX(id) FROM bookmarks GROUP BY name);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_name ON bookmarks(name);
+                    PRAGMA user_version = 4;
+                    COMMIT;
+                    ",
+                )?;
         }
 
         Ok(())
@@ -444,6 +499,11 @@ mod tests {
         let bookmarks = db.query_bookmarks();
         assert_eq!(bookmarks.len(), 1);
         assert_eq!(bookmarks[0].name, "Firefox");
+        // 같은 이름은 교체된다 (UNIQUE 없던 시절엔 쌓였다)
+        db.add_bookmark("Firefox", "firefox-dev", "app").unwrap();
+        let bookmarks = db.query_bookmarks();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].value, "firefox-dev");
     }
 
     // ── Pruning 테스트 ─────────────────────────────────────
@@ -562,7 +622,7 @@ mod tests {
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3, "DB 버전이 3으로 업그레이드");
+        assert_eq!(version, 4, "DB 버전이 4로 업그레이드");
 
         // idx_history_executed_at 인덱스 존재 확인
         let idx_exists: bool = db
@@ -574,5 +634,45 @@ mod tests {
             )
             .unwrap();
         assert!(idx_exists, "executed_at 인덱스가 존재해야 함");
+    }
+
+    #[test]
+    fn v4_마이그레이션은_갈린_item_type_행을_합친다() {
+        // v3 DB에 예전 UI들이 남긴 표기 그대로 이력을 심는다
+        let conn = Connection::open_in_memory().unwrap();
+        let v3 = Database { conn };
+        v3.migrate().unwrap();
+        v3.conn.execute_batch("DROP TABLE history;").unwrap();
+        v3.conn
+            .execute_batch(
+                "CREATE TABLE history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, item_type TEXT NOT NULL,
+                    value TEXT NOT NULL, display TEXT,
+                    executed_at TEXT NOT NULL, frequency INTEGER NOT NULL DEFAULT 1);
+                 CREATE UNIQUE INDEX idx_history_unique ON history(item_type, value);
+                 INSERT INTO history(item_type, value, display, executed_at, frequency) VALUES
+                    ('App', '/A.app', 'A', '2026-01-01T00:00:00Z', 2),
+                    ('app', '/A.app', 'A', '2026-03-01T00:00:00Z', 5),
+                    ('Dir', '/d', NULL, '2026-01-01T00:00:00Z', 1),
+                    ('Directory', '/d', 'd', '2026-02-01T00:00:00Z', 1),
+                    ('dir', '/d', 'd', '2026-01-05T00:00:00Z', 1);
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+
+        v3.migrate().unwrap();
+
+        let rows = v3.query_history(10);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let app = rows.iter().find(|h| h.value == "/A.app").unwrap();
+        assert_eq!(app.item_type, "app");
+        assert_eq!(app.frequency, 7, "빈도 합산");
+        assert_eq!(app.executed_at, "2026-03-01T00:00:00Z", "최신 시각");
+        let dir = rows.iter().find(|h| h.value == "/d").unwrap();
+        assert_eq!(dir.item_type, "dir");
+        assert_eq!(dir.frequency, 3);
+        // 정규화 후에도 유니크 키 upsert가 동작한다
+        v3.record_launch("dir", "/d", None).unwrap();
+        assert_eq!(v3.query_history(10).len(), 2);
     }
 }

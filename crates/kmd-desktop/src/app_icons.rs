@@ -20,93 +20,74 @@ const TARGET_ICON_SIZE: u32 = 64;
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
     LazyLock::new(|| Mutex::new(HashMap::with_capacity(128)));
 
-/// 아이템의 네이티브 아이콘 반환 (캐시됨).
-pub fn app_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<Handle> {
-    if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
-        return None;
+/// 캐시 키 규칙 — 키 하나가 곧 추출 방법을 정한다.
+enum IconKey {
+    /// App/Executable(경로 기준), `.lnk`(바로가기마다 아이콘이 다름)
+    Path(String),
+    /// 일반 파일 — 같은 확장자는 같은 아이콘
+    Ext(String),
+    /// 디렉터리 — 고정 아이콘
+    Dir,
+}
+
+impl IconKey {
+    fn of(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<Self> {
+        if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
+            return None;
+        }
+        match kind {
+            ItemKind::App | ItemKind::Executable => {
+                Some(Self::Path(icon_path.unwrap_or(path).to_string()))
+            }
+            ItemKind::File => {
+                let ext = std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext.is_empty() {
+                    None
+                } else if ext == "lnk" {
+                    Some(Self::Path(path.to_string()))
+                } else {
+                    Some(Self::Ext(ext))
+                }
+            }
+            ItemKind::Directory => Some(Self::Dir),
+            _ => None,
+        }
     }
 
-    match kind {
-        ItemKind::App | ItemKind::Executable => {
-            let cache_key = icon_path.unwrap_or(path);
-            let mut cache = ICON_CACHE.lock().ok()?;
-            if let Some(cached) = cache.get(cache_key) {
-                return cached.clone();
-            }
-            let handle = if path.starts_with("shell:") {
-                platform::extract_pidl_icon(path)
-            } else {
-                platform::extract_icon(path, icon_path)
-            };
-            cache.insert(cache_key.to_string(), handle.clone());
-            handle
+    fn cache_key(&self) -> String {
+        match self {
+            Self::Path(p) => p.clone(),
+            Self::Ext(ext) => format!("ext:{ext}"),
+            Self::Dir => "type:dir".to_string(),
         }
-        ItemKind::File => {
-            let ext = std::path::Path::new(path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if ext.is_empty() {
-                return None;
-            }
-            if ext == "lnk" {
-                let mut cache = ICON_CACHE.lock().ok()?;
-                if let Some(cached) = cache.get(path) {
-                    return cached.clone();
-                }
-                let handle = platform::extract_icon(path, None);
-                cache.insert(path.to_string(), handle.clone());
-                return handle;
-            }
-            let cache_key = format!("ext:{ext}");
-            let mut cache = ICON_CACHE.lock().ok()?;
-            if let Some(cached) = cache.get(&cache_key) {
-                return cached.clone();
-            }
-            let dummy = format!("file.{ext}");
-            let handle = platform::extract_icon_by_ext(&dummy);
-            cache.insert(cache_key, handle.clone());
-            handle
-        }
-        ItemKind::Directory => {
-            let cache_key = "type:dir".to_string();
-            let mut cache = ICON_CACHE.lock().ok()?;
-            if let Some(cached) = cache.get(&cache_key) {
-                return cached.clone();
-            }
-            let handle = platform::extract_folder_icon();
-            cache.insert(cache_key, handle.clone());
-            handle
-        }
-        _ => None,
     }
 }
 
-/// 아이템의 캐시 키 계산 — `app_icon_for_item`의 키 규칙과 동일하게 유지.
-fn cache_key_for(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<String> {
-    if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
-        return None;
-    }
-    match kind {
-        ItemKind::App | ItemKind::Executable => Some(icon_path.unwrap_or(path).to_string()),
-        ItemKind::File => {
-            let ext = std::path::Path::new(path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if ext.is_empty() {
-                None
-            } else if ext == "lnk" {
-                Some(path.to_string())
+/// OS 셸 API로 아이콘 추출 (블로킹, 캐시 락 밖에서 호출할 것).
+fn extract(kind: ItemKind, path: &str, icon_path: Option<&str>, key: &IconKey) -> Option<Handle> {
+    match key {
+        IconKey::Path(_) if matches!(kind, ItemKind::App | ItemKind::Executable) => {
+            if path.starts_with("shell:") {
+                platform::extract_pidl_icon(path)
             } else {
-                Some(format!("ext:{ext}"))
+                platform::extract_icon(path, icon_path)
             }
         }
-        ItemKind::Directory => Some("type:dir".to_string()),
-        _ => None,
+        IconKey::Path(_) => platform::extract_icon(path, None),
+        IconKey::Ext(ext) => platform::extract_icon_by_ext(&format!("file.{ext}")),
+        IconKey::Dir => platform::extract_folder_icon(),
     }
+}
+
+/// 락 poison이어도 캐시는 계속 쓴다 — 예전엔 `lock().ok()?`라 패닉 한 번에 아이콘이 영구히 사라졌다.
+fn icon_cache() -> std::sync::MutexGuard<'static, HashMap<String, Option<Handle>>> {
+    ICON_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// 이미 캐시에 있는 아이콘만 반환 — OS 추출을 수행하지 않는 논블로킹 조회.
@@ -115,9 +96,8 @@ fn cache_key_for(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<
 /// 캐시 미스 시 `None`을 반환하므로 호출부는 텍스트 placeholder를 그린다.
 /// 실제 추출은 `prefetch_icons`가 백그라운드 스레드에서 채운다.
 pub fn cached_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<Handle> {
-    let cache_key = cache_key_for(kind, path, icon_path)?;
-    let cache = ICON_CACHE.lock().ok()?;
-    cache.get(&cache_key).cloned().flatten()
+    let cache_key = IconKey::of(kind, path, icon_path)?.cache_key();
+    icon_cache().get(&cache_key).cloned().flatten()
 }
 
 /// 주어진 아이템들의 아이콘을 OS에서 추출해 캐시에 채운다 (블로킹).
@@ -128,17 +108,17 @@ pub fn cached_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>)
 pub fn prefetch_icons(items: &[(ItemKind, String, Option<String>)]) -> usize {
     let mut newly_extracted = 0;
     for (kind, path, icon_path) in items {
-        let Some(cache_key) = cache_key_for(*kind, path, icon_path.as_deref()) else {
+        let Some(key) = IconKey::of(*kind, path, icon_path.as_deref()) else {
             continue;
         };
-        let already_cached = ICON_CACHE
-            .lock()
-            .map(|cache| cache.contains_key(&cache_key))
-            .unwrap_or(true);
-        if already_cached {
+        let cache_key = key.cache_key();
+        if icon_cache().contains_key(&cache_key) {
             continue;
         }
-        let _ = app_icon_for_item(*kind, path, icon_path.as_deref());
+        // 추출은 락 밖에서 — 렌더 스레드의 cached_icon_for_item이 셸 API 호출을
+        // 기다리지 않게 한다. 같은 키를 두 번 추출해도 결과가 같아 무해하다.
+        let handle = extract(*kind, path, icon_path.as_deref(), &key);
+        icon_cache().insert(cache_key, handle);
         newly_extracted += 1;
     }
     newly_extracted

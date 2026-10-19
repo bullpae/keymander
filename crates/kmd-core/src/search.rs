@@ -492,97 +492,113 @@ fn normalize_url(s: &str) -> String {
 
 // ── Glob matcher ────────────────────────────────────────
 
+/// `*`/`?` 글롭 매처 — 반복형(백트래킹 지점 하나) O(n·m).
+///
+/// 예전 구현은 `*`마다 재귀로 모든 분할을 시도해 `*a*a*a*a*b` 같은 질의에서 항목마다
+/// 지수적으로 느려졌다. 키 입력 경로라 정규식처럼(ReDoS 방어) 최악 비용을 막아야 한다.
 struct GlobMatcher {
-    parts: Vec<GlobPart>,
+    toks: Vec<GlobTok>,
 }
 
-enum GlobPart {
-    Literal(String),
+#[derive(Clone, Copy, PartialEq)]
+enum GlobTok {
+    Char(char),
+    /// `?` — 임의의 한 문자
+    Any,
+    /// `*` — 임의 길이 (연속 `*`는 하나로 합친다)
     Star,
-    Question,
 }
 
 impl GlobMatcher {
     fn new(pattern: &str) -> Self {
-        let mut parts = Vec::new();
-        let mut literal = String::new();
-
+        let mut toks: Vec<GlobTok> = Vec::new();
         for ch in pattern.chars() {
-            match ch {
-                '*' => {
-                    if !literal.is_empty() {
-                        parts.push(GlobPart::Literal(std::mem::take(&mut literal)));
-                    }
-                    if !matches!(parts.last(), Some(GlobPart::Star)) {
-                        parts.push(GlobPart::Star);
-                    }
-                }
-                '?' => {
-                    if !literal.is_empty() {
-                        parts.push(GlobPart::Literal(std::mem::take(&mut literal)));
-                    }
-                    parts.push(GlobPart::Question);
-                }
-                _ => literal.push(ch),
+            let tok = match ch {
+                '*' => GlobTok::Star,
+                '?' => GlobTok::Any,
+                c => GlobTok::Char(c),
+            };
+            if tok == GlobTok::Star && toks.last() == Some(&GlobTok::Star) {
+                continue;
             }
+            toks.push(tok);
         }
-        if !literal.is_empty() {
-            parts.push(GlobPart::Literal(literal));
-        }
-
-        Self { parts }
+        Self { toks }
     }
 
     fn matches(&self, text: &str) -> bool {
-        self.match_recursive(text, 0)
-    }
-
-    fn match_recursive(&self, text: &str, part_idx: usize) -> bool {
-        if part_idx >= self.parts.len() {
-            return text.is_empty();
+        let (mut p, mut ti) = (0usize, 0usize);
+        // 마지막 `*`의 (토큰 위치, 그 `*`가 지금까지 삼킨 끝 바이트 위치)
+        let mut star: Option<(usize, usize)> = None;
+        while let Some(ch) = text[ti..].chars().next() {
+            match self.toks.get(p) {
+                Some(GlobTok::Star) => {
+                    star = Some((p, ti));
+                    p += 1;
+                    continue;
+                }
+                Some(GlobTok::Any) => {
+                    p += 1;
+                    ti += ch.len_utf8();
+                    continue;
+                }
+                Some(GlobTok::Char(c)) if *c == ch => {
+                    p += 1;
+                    ti += ch.len_utf8();
+                    continue;
+                }
+                _ => {}
+            }
+            // 불일치 — 마지막 `*`가 한 글자 더 삼키게 하고 그 뒤부터 다시 맞춘다
+            let Some((sp, st)) = star else {
+                return false;
+            };
+            let Some(skipped) = text[st..].chars().next() else {
+                return false;
+            };
+            let next = st + skipped.len_utf8();
+            star = Some((sp, next));
+            p = sp + 1;
+            ti = next;
         }
-
-        match &self.parts[part_idx] {
-            GlobPart::Literal(lit) => {
-                if let Some(rest) = text.strip_prefix(lit.as_str()) {
-                    self.match_recursive(rest, part_idx + 1)
-                } else {
-                    false
-                }
-            }
-            GlobPart::Question => {
-                if text.is_empty() {
-                    false
-                } else {
-                    let mut chars = text.chars();
-                    chars.next();
-                    self.match_recursive(chars.as_str(), part_idx + 1)
-                }
-            }
-            GlobPart::Star => {
-                if part_idx + 1 >= self.parts.len() {
-                    return true;
-                }
-                let mut remaining = text;
-                loop {
-                    if self.match_recursive(remaining, part_idx + 1) {
-                        return true;
-                    }
-                    if remaining.is_empty() {
-                        return false;
-                    }
-                    let mut chars = remaining.chars();
-                    chars.next();
-                    remaining = chars.as_str();
-                }
-            }
-        }
+        // 텍스트를 다 소비했다 — 남은 토큰은 `*`뿐이어야 한다
+        self.toks[p..].iter().all(|t| *t == GlobTok::Star)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glob_반복형_매칭_의미() {
+        let cases = [
+            ("*.doc", "report.doc", true),
+            ("*.doc", "report.docx", false),
+            ("re?ort*", "report.pdf", true),
+            ("*보고서*", "2026 보고서 최종.hwp", true),
+            ("a*b*c", "axxbyyc", true),
+            ("a*b*c", "axxbyy", false),
+            ("**", "", true),
+            ("?", "", false),
+            ("?", "한", true),
+            ("*a", "ba", true),
+            ("a*", "b", false),
+        ];
+        for (pat, text, want) in cases {
+            assert_eq!(GlobMatcher::new(pat).matches(text), want, "{pat} vs {text}");
+        }
+    }
+
+    #[test]
+    fn glob_최악_입력도_빠르게_끝난다() {
+        // 예전 재귀 구현은 이런 입력에서 지수 시간이었다
+        let m = GlobMatcher::new("*a*a*a*a*a*a*a*a*b");
+        let text = "a".repeat(200);
+        let started = std::time::Instant::now();
+        assert!(!m.matches(&text));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     #[test]
     fn test_search_mode_detect() {

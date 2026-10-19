@@ -60,6 +60,9 @@ struct MotionState {
     pending_wheel: i32,
     /// 워커 종료 신호
     shutdown: bool,
+    /// 워커가 완전 정지 상태로 대기 중 — 이 동안은 어떤 이동/휠도 내보내지 않는다.
+    /// 테스트가 "정지가 반영됐다"를 벽시계 sleep 없이 확인하는 데 쓴다.
+    idle: bool,
 }
 
 impl MotionState {
@@ -101,10 +104,12 @@ impl MouseWorker {
                         acc_x = 0.0;
                         acc_y = 0.0;
                         acc_wheel = 0.0;
+                        guard.idle = true;
                         guard = match cv.wait(guard) {
                             Ok(g) => g,
                             Err(_) => return,
                         };
+                        guard.idle = false;
                     }
                     if guard.shutdown {
                         return;
@@ -185,10 +190,24 @@ impl MouseWorker {
         if let Ok(mut guard) = lock.lock() {
             *guard = MotionState {
                 shutdown: guard.shutdown,
+                idle: guard.idle,
                 ..MotionState::default()
             };
             cv.notify_one();
         }
+    }
+
+    /// 워커가 정지 대기에 들어갈 때까지 기다린다 (테스트용). 시간 안에 못 들어가면 false.
+    #[cfg(test)]
+    fn wait_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.state.0.lock().map(|g| g.idle).unwrap_or(false) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        false
     }
 
     fn set(&self, bind: MouseBind, on: bool) {
@@ -291,10 +310,11 @@ mod tests {
         assert_eq!(dy, 0);
 
         worker.release(MouseBind::MoveRight);
-        // 정지 후 잔여 틱을 비우고 나면 더 이상 이동이 없어야 한다
-        std::thread::sleep(Duration::from_millis(50));
+        // 워커가 정지 대기에 들어간 뒤에는 이동이 나올 수 없다 — 그 전 잔여 틱만 비운다.
+        // (예전엔 50ms sleep 후 비우기라 CI 부하로 틱이 늦으면 플레이크가 났다)
+        assert!(worker.wait_idle(Duration::from_secs(5)), "정지 대기 진입");
         while rx.try_recv().is_ok() {}
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(30));
         assert!(rx.try_recv().is_err(), "정지 후 이동 없음");
     }
 
@@ -308,9 +328,9 @@ mod tests {
             .expect("이동 발생");
 
         worker.stop_all();
-        std::thread::sleep(Duration::from_millis(50));
+        assert!(worker.wait_idle(Duration::from_secs(5)), "정지 대기 진입");
         while rx.try_recv().is_ok() {}
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(30));
         assert!(rx.try_recv().is_err(), "stop_all 후 이동 없음");
     }
 

@@ -2296,7 +2296,6 @@ dependencies = [
 name = "keymander"
 version = "0.16.12"
 dependencies = [
- "arboard",
  "clap",
  "color-eyre",
  "crossterm",
@@ -2331,6 +2330,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 name = "kmd-core"
 version = "0.16.12"
 dependencies = [
+ "arboard",
  "bincode",
  "dirs",
  "encoding_rs",
@@ -2374,7 +2374,6 @@ dependencies = [
 name = "kmd-desktop"
 version = "0.16.12"
 dependencies = [
- "arboard",
  "core-foundation-sys",
  "iced",
  "image",

@@ -129,7 +129,7 @@ fn disable_portable() -> Result<()> {
 
     // Compute system paths (these are what they WOULD be without portable mode)
     let sys_config_dir = kmd_core::Config::system_config_dir();
-    let sys_data_dir = kmd_core::Config::system_data_dir();
+    let sys_data_dir = kmd_core::Config::standard_data_dir();
 
     // Ensure system directories exist
     std::fs::create_dir_all(&sys_config_dir)?;

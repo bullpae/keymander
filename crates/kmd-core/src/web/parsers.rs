@@ -32,6 +32,21 @@ pub struct WebQueryConfig<'a> {
     pub multi_web_ids: &'a [String],
 }
 
+impl<'a> WebQueryConfig<'a> {
+    /// 런처 설정에서 바로 만든다 — UI가 별칭·선택 목록을 필드로 복사해 두면
+    /// 설정 변경 때마다 두 벌을 맞춰야 해 어긋난다(예전 데스크톱/TUI 미러 필드).
+    pub fn from_launcher(launcher: &'a crate::config::LauncherConfig) -> Self {
+        Self {
+            spell_prefixes: &launcher.spell_prefixes,
+            translate_prefixes: &launcher.translate_prefixes,
+            multi_llm_prefixes: &launcher.multi_llm_prefixes,
+            multi_llm_ids: &launcher.multi_llm_providers,
+            multi_web_prefixes: &launcher.multi_web_prefixes,
+            multi_web_ids: &launcher.multi_web_providers,
+        }
+    }
+}
+
 /// 통합 쿼리 분류기 — if-else 체인을 한 곳에 집약
 pub fn classify_web_query(input: &str, cfg: &WebQueryConfig<'_>) -> WebQueryResult {
     if let Some(q) = parse_spell_query_with_prefixes(input, cfg.spell_prefixes) {

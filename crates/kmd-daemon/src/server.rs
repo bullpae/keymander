@@ -220,24 +220,33 @@ fn lock_index_rebuild() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
+/// 전체 인덱스 재생성 + 공유 캐시 갱신 + 본문 인덱스 증분 동기화.
+/// 반환값은 항목 수 — 검색 엔진 잠금이 오염돼 교체하지 못했으면 Err.
+fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) -> Result<usize, String> {
     let _rebuild_guard = lock_index_rebuild();
     let started = Instant::now();
     let index = Index::build(&config.launcher, config.general.emoji_icons);
     let count = index.items.len();
+    // 공유 캐시도 함께 갱신 — kmd-desktop이 다음 실행에서 바로 반영
     save_full_index_cache(&index);
-    if let Ok(mut e) = engine.lock() {
-        e.reload(&config.launcher.kind_weights, index.items);
-    } else {
-        tracing::warn!("인덱스 교체 실패: 검색 엔진 잠금 오염");
-    }
+    let swapped = match engine.lock() {
+        Ok(mut e) => {
+            e.reload(&config.launcher.kind_weights, index.items);
+            Ok(count)
+        }
+        Err(_) => {
+            tracing::warn!("인덱스 교체 실패: 검색 엔진 잠금 오염");
+            Err("엔진 잠금 실패".to_string())
+        }
+    };
     save_quick_index_cache(config.general.emoji_icons);
     tracing::info!(
-        "백그라운드 인덱스 리프레시 완료 ({count}개 항목, {}ms)",
+        "인덱스 리프레시 완료 ({count}개 항목, {}ms)",
         started.elapsed().as_millis()
     );
 
     sync_content_index(config);
+    swapped
 }
 
 /// 문서 본문 인덱스 증분 갱신 (docs/15 P1) — 파일명 인덱스 리프레시 직후,
@@ -266,8 +275,7 @@ fn sync_content_index(config: &Config) {
     let _reset = Reset(&RUNNING);
 
     let started = Instant::now();
-    let db_path = Config::default_data_dir().join(kmd_core::DB_FILENAME);
-    match kmd_core::Database::open(&db_path) {
+    match kmd_core::Database::open_default(kmd_core::DbRole::Shared) {
         Ok(db) => match kmd_core::content_index::sync(&db, &config.launcher) {
             Ok(s) => tracing::info!(
                 "본문 인덱스 동기화 완료 (스캔 {} · 갱신 {} · 스킵 {} · 제거 {} · 실패 {}, {}ms)",
@@ -413,7 +421,7 @@ fn spawn_index_refresher(
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            rebuild_full_index(&engine, &boot_cfg);
+            let _ = rebuild_full_index(&engine, &boot_cfg);
         }
 
         let mut elapsed_secs: u64 = 0;
@@ -435,7 +443,7 @@ fn spawn_index_refresher(
             elapsed_secs = 0;
 
             let cfg = load_config();
-            rebuild_full_index(&engine, &cfg);
+            let _ = rebuild_full_index(&engine, &cfg);
         }
     });
 }
@@ -662,59 +670,9 @@ fn process_request(
             },
         },
 
-        Request::Search { query, limit } => {
-            let results = match engine.lock() {
-                Ok(mut e) => {
-                    let (_mode, hits) = e.search(&query, limit);
-                    hits
-                }
-                Err(_) => {
-                    return Response::Error {
-                        message: "엔진 잠금 실패".into(),
-                    }
-                }
-            };
+        Request::Search { query, limit } => handle_search(engine, &query, limit),
 
-            let items: Vec<SearchHit> = results
-                .into_iter()
-                .map(|r| SearchHit {
-                    name: r.item.name,
-                    path: r.item.path,
-                    kind: r.item.kind.to_string(),
-                    icon: r.item.icon,
-                    score: r.score,
-                })
-                .collect();
-
-            Response::SearchResults { items }
-        }
-
-        Request::RebuildIndex => {
-            // 주기 리프레셔와 같은 락 — 둘이 겹쳐 중복 스캔·캐시 경쟁을 만들지 않게.
-            let _rebuild_guard = lock_index_rebuild();
-            let config = load_config();
-            let index = Index::build(&config.launcher, config.general.emoji_icons);
-            let count = index.items.len();
-
-            // 공유 캐시도 함께 갱신 — kmd-desktop이 다음 실행에서 바로 반영
-            save_full_index_cache(&index);
-            save_quick_index_cache(config.general.emoji_icons);
-
-            match engine.lock() {
-                Ok(mut e) => e.reload(&config.launcher.kind_weights, index.items),
-                Err(_) => {
-                    return Response::Error {
-                        message: "엔진 잠금 실패".into(),
-                    }
-                }
-            }
-
-            sync_content_index(&config);
-
-            Response::Ok {
-                message: format!("인덱스 리빌드 완료 ({count}개 항목)"),
-            }
-        }
+        Request::RebuildIndex => handle_rebuild_index(engine),
 
         Request::Shutdown => {
             let _ = shutdown_tx.send(());
@@ -794,34 +752,88 @@ fn process_request(
             }
         }
 
-        Request::KeybindSelfTest => {
-            #[cfg(target_os = "macos")]
-            {
-                let preset = resolve_keybind_preset(&load_config());
-                // launchd 아래에서는 stderr가 유실되므로 패닉을 삼켜 IPC 응답으로
-                // 돌려준다 — 핸들러 스레드 패닉 = 클라이언트엔 원인 불명 연결 리셋.
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    keybind::selftest::run(&preset)
-                })) {
-                    Ok(Ok(report)) => Response::Ok { message: report },
-                    Ok(Err(e)) => Response::Error { message: e },
-                    Err(panic) => {
-                        let msg = panic
-                            .downcast_ref::<String>()
-                            .map(String::as_str)
-                            .or_else(|| panic.downcast_ref::<&str>().copied())
-                            .unwrap_or("(비문자열 패닉)");
-                        Response::Error {
-                            message: format!("셀프테스트 패닉: {msg}"),
-                        }
-                    }
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            Response::Error {
-                message: "키 주입 셀프테스트는 현재 macOS 전용입니다".into(),
+        Request::KeybindSelfTest => handle_keybind_selftest(),
+    }
+}
+
+fn handle_search(engine: &Arc<Mutex<SearchEngine>>, query: &str, limit: usize) -> Response {
+    let results = match engine.lock() {
+        Ok(mut e) => {
+            let (_mode, hits) = e.search(query, limit);
+            hits
+        }
+        Err(_) => {
+            return Response::Error {
+                message: "엔진 잠금 실패".into(),
             }
         }
+    };
+
+    let items: Vec<SearchHit> = results
+        .into_iter()
+        .map(|r| SearchHit {
+            name: r.item.name,
+            path: r.item.path,
+            kind: r.item.kind.to_string(),
+            icon: r.item.icon,
+            score: r.score,
+        })
+        .collect();
+
+    Response::SearchResults { items }
+}
+
+/// IPC 인덱스 리빌드.
+///
+/// 커넥션 스레드는 기본 우선순위라 여기서 전체 스캔을 돌리면 키훅이 살아 있는
+/// 동안 CPU를 포화시킬 수 있다(2026-08-08 사고 유형). 리프레셔와 같은 함수를
+/// 우선순위를 낮춘 전용 스레드에서 돌리고 결과만 기다린다.
+fn handle_rebuild_index(engine: &Arc<Mutex<SearchEngine>>) -> Response {
+    let config = load_config();
+    let engine = Arc::clone(engine);
+    let worker = std::thread::Builder::new()
+        .name("kmd-ipc-rebuild".into())
+        .spawn(move || {
+            lower_indexer_thread_priority();
+            rebuild_full_index(&engine, &config)
+        });
+    match worker.map_err(|e| e.to_string()).and_then(|h| {
+        h.join()
+            .unwrap_or_else(|_| Err("인덱스 리빌드 스레드 패닉".to_string()))
+    }) {
+        Ok(count) => Response::Ok {
+            message: format!("인덱스 리빌드 완료 ({count}개 항목)"),
+        },
+        Err(message) => Response::Error { message },
+    }
+}
+
+fn handle_keybind_selftest() -> Response {
+    #[cfg(target_os = "macos")]
+    {
+        let preset = resolve_keybind_preset(&load_config());
+        // launchd 아래에서는 stderr가 유실되므로 패닉을 삼켜 IPC 응답으로
+        // 돌려준다 — 핸들러 스레드 패닉 = 클라이언트엔 원인 불명 연결 리셋.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            keybind::selftest::run(&preset)
+        })) {
+            Ok(Ok(report)) => Response::Ok { message: report },
+            Ok(Err(e)) => Response::Error { message: e },
+            Err(panic) => {
+                let msg = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("(비문자열 패닉)");
+                Response::Error {
+                    message: format!("셀프테스트 패닉: {msg}"),
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Response::Error {
+        message: "키 주입 셀프테스트는 현재 macOS 전용입니다".into(),
     }
 }
 

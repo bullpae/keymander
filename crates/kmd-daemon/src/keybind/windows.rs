@@ -3,7 +3,7 @@
 //! 저수준 키보드 훅으로 키 이벤트를 가로채고,
 //! 바인딩 테이블에 따라 키를 리매핑하거나 억제한다.
 
-use super::engine::{EngineState, KeyDecision};
+use super::engine::{lock_engine, EngineState, HookLossCleanup, KeyDecision};
 use super::mouse::{MouseSink, MouseWorker};
 use super::{
     resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
@@ -29,6 +29,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 // 재진입 문제가 없다.
 
 static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
+
+/// 훅 상실·엔진 poison 복구 정리 — 주입해 둔 트리거 해제 + 마우스 정지.
+fn apply_hook_loss_cleanup(cleanup: HookLossCleanup) {
+    if let Some(trigger) = cleanup.release_trigger {
+        release_key_up_or_track(vkey_to_vk(trigger));
+    }
+    if cleanup.stop_mouse {
+        queue_fast(FastJob::StopAll);
+    }
+}
 
 /// 메시지 루프 스레드 ID — stop() 시 WM_QUIT를 보내 GetMessageW를 깨운다
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
@@ -880,9 +890,9 @@ fn execute_slow_action(action: BindAction) {
 fn recover_engine_after_injection_failure() {
     let mut stop_mouse = false;
     if let Some(state) = HOOK_STATE.get() {
-        if let Ok(mut guard) = state.lock() {
-            stop_mouse = guard.recover_from_injection_failure();
-        }
+        let (mut guard, recovered) = lock_engine(state);
+        stop_mouse =
+            guard.recover_from_injection_failure() || recovered.is_some_and(|c| c.stop_mouse);
     }
     if stop_mouse {
         // 복구가 레이어 상태를 지우면 해당 물리 key-up은 더 이상 MouseRelease로
@@ -952,10 +962,10 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
         None => return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param),
     };
 
-    let mut guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param),
-    };
+    let (mut guard, recovered) = lock_engine(state);
+    if let Some(cleanup) = recovered {
+        apply_hook_loss_cleanup(cleanup);
+    }
 
     // 바인딩 판정은 순수 엔진에 위임한다. 합성 키 입력은 이 콜백 안에서 한 번의
     // SendInput batch로 즉시 넣어, 이후 물리 PassThrough 입력과 순서가 뒤집히지
@@ -1067,16 +1077,12 @@ unsafe fn reinstall_hook(hook: &mut HHOOK) -> Result<(), String> {
     // 엔진이 정한다 — macOS 탭 비활성화와 같은 규칙(engine::on_hook_lost).
     // 마우스 정지는 예전엔 빠져 있어, 이동 키를 누른 채 훅이 재설치되면 포인터가
     // 계속 움직였다(초기화로 레이어가 꺼져 key-up이 MouseRelease가 되지 못함).
-    let cleanup = HOOK_STATE
-        .get()
-        .and_then(|state| state.lock().ok().map(|mut guard| guard.on_hook_lost()));
+    let cleanup = HOOK_STATE.get().map(|state| {
+        let (mut guard, recovered) = lock_engine(state);
+        recovered.unwrap_or_else(|| guard.on_hook_lost())
+    });
     if let Some(cleanup) = cleanup {
-        if let Some(trigger) = cleanup.release_trigger {
-            release_key_up_or_track(vkey_to_vk(trigger));
-        }
-        if cleanup.stop_mouse {
-            queue_fast(FastJob::StopAll);
-        }
+        apply_hook_loss_cleanup(cleanup);
     }
 
     if UnhookWindowsHookEx(*hook) == 0 {
@@ -1603,11 +1609,11 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         // slow worker join보다 먼저 수행해 느린 클립보드 작업에 해제가 막히지 않게 한다.
         // (engine::on_hook_lost — macOS stop과 같은 규칙. 마우스는 아래 worker 정리가 멈춘다)
         if let Some(state) = HOOK_STATE.get() {
-            if let Ok(mut guard) = state.lock() {
-                if let Some(trigger) = guard.on_hook_lost().release_trigger {
-                    tracing::info!("중지 시 코드 트리거 해제: {trigger:?}");
-                    release_key_up_or_track(vkey_to_vk(trigger));
-                }
+            let (mut guard, recovered) = lock_engine(state);
+            let cleanup = recovered.unwrap_or_else(|| guard.on_hook_lost());
+            if let Some(trigger) = cleanup.release_trigger {
+                tracing::info!("중지 시 코드 트리거 해제: {trigger:?}");
+                release_key_up_or_track(vkey_to_vk(trigger));
             }
         }
         for _ in 0..STOP_RELEASE_RETRY_PASSES {

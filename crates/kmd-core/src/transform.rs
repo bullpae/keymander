@@ -25,6 +25,18 @@ pub struct TransformQuery {
     pub text: String,
 }
 
+/// [`parse_transform_query`] + 텍스트가 비면 클립보드 내용으로 채운다.
+/// (`:t sp`만 치고 Enter → 방금 복사한 문장을 검사)
+pub fn parse_transform_query_or_clipboard(input: &str) -> Option<TransformQuery> {
+    let mut tq = parse_transform_query(input)?;
+    if tq.text.is_empty() {
+        if let Some(text) = crate::clipboard::get_text() {
+            tq.text = text;
+        }
+    }
+    Some(tq)
+}
+
 /// `:t` / `:transform` 쿼리 파싱
 pub fn parse_transform_query(input: &str) -> Option<TransformQuery> {
     let sub = input

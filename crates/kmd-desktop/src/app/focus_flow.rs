@@ -245,3 +245,45 @@ impl App {
         iced::exit()
     }
 }
+
+// ─── 포커스 요청 ──────────────────────────────────────────────────────────────
+
+impl App {
+    /// 부팅 안정화 구간(첫 포커스 후 1초 이내) 여부
+    pub(super) fn is_boot_settled(&self) -> bool {
+        self.boot_focus_done && self.app_started_at.elapsed() < Duration::from_millis(1000)
+    }
+
+    /// focus 요청 + 카운터 증가 + (Windows만) 16ms 뒤 지연 refocus 스케줄링
+    pub(super) fn request_focus(&mut self) -> Task<Message> {
+        // 부팅 안정화 구간: 최초 1회 이후 추가 포커싱 차단
+        if self.is_boot_settled() {
+            self.log_ime_state("request_focus:skip_boot_settling");
+            return Task::none();
+        }
+        self.boot_focus_done = true;
+
+        self.log_ime_state("request_focus");
+        self.focus_request_count += 1;
+        let immediate = iced::widget::operation::focus::<Message>(self.input_id.clone());
+        #[cfg(not(target_os = "windows"))]
+        {
+            immediate
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let delayed = Task::future(async {
+                tokio::time::sleep(Duration::from_millis(16)).await;
+                Message::DelayedRefocus
+            });
+            Task::batch([immediate, delayed])
+        }
+    }
+
+    fn schedule_focus_retry(attempt: u8) -> Task<Message> {
+        Task::future(async move {
+            tokio::time::sleep(Duration::from_millis(FOCUS_RETRY_MS)).await;
+            Message::EnsureFocus(attempt)
+        })
+    }
+}

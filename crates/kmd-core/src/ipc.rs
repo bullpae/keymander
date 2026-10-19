@@ -243,7 +243,7 @@ pub struct SearchHit {
 /// 런타임 파일은 재부팅/재시작마다 새로 만드는 일회성이므로 호스트에 두어도
 /// 포터블 설치의 이동성(설정·데이터는 kmd-data/ 유지)을 해치지 않는다.
 pub fn runtime_dir() -> PathBuf {
-    crate::Config::system_data_dir()
+    crate::Config::standard_data_dir()
 }
 
 /// 데몬 런타임 파일 경로. 형식:

@@ -68,48 +68,13 @@ impl App {
 
     /// classify_web_query 통합 분류기 사용
     pub(super) fn handle_web_query(&mut self, query: &str) {
-        let emoji = self.use_emoji;
-        let cfg = web::WebQueryConfig {
-            spell_prefixes: &self.spell_prefixes,
-            translate_prefixes: &self.translate_prefixes,
-            multi_llm_prefixes: &self.multi_llm_prefixes,
-            multi_llm_ids: &self.selected_llm_providers,
-            multi_web_prefixes: &self.multi_web_prefixes,
-            multi_web_ids: &self.selected_multi_web_providers,
-        };
-
-        let results = match web::classify_web_query(query, &cfg) {
-            web::WebQueryResult::Spell(q) => {
-                items_to_results(web::spell_result_items(&q, &self.spell_providers, emoji))
-            }
-            web::WebQueryResult::Translate(dir, q) => items_to_results(
-                web::translate_result_items(&q, dir, &self.translate_providers, emoji),
-            ),
-            web::WebQueryResult::MultiLlm(_svcs, q) => items_to_results(
-                web::multi_llm_result_items(&q, &self.selected_llm_providers, emoji),
-            ),
-            web::WebQueryResult::MultiWeb(_svcs, q) => items_to_results(
-                web::multi_web_result_items(&q, &self.selected_multi_web_providers, emoji),
-            ),
-            web::WebQueryResult::Single(service, q) => {
-                if q.is_empty() {
-                    let mut items = web::list_services_as_items("", emoji);
-                    ensure_multi_llm_hint(&mut items, emoji);
-                    ensure_multi_web_hint(&mut items, emoji);
-                    items_to_results(items)
-                } else {
-                    let item = web::search_result_item(service, &q, emoji);
-                    items_to_results(std::iter::once(item))
-                }
-            }
-            web::WebQueryResult::Browse(filter) => {
-                let mut items = web::list_services_as_items(&filter, emoji);
-                ensure_multi_llm_hint(&mut items, emoji);
-                ensure_multi_web_hint(&mut items, emoji);
-                items_to_results(items)
-            }
-        };
-        self.commit_results(results, kmd_core::SearchMode::Contains, true);
+        let (items, _listing) =
+            web::web_query_items(query, &self.runtime_config.launcher, self.use_emoji);
+        self.commit_results(
+            items_to_results(items),
+            kmd_core::SearchMode::Contains,
+            true,
+        );
     }
 
     pub(super) fn handle_version_query(&mut self) {
@@ -125,21 +90,14 @@ impl App {
     pub(super) fn handle_transform_query(&mut self, query: &str) {
         use kmd_core::transform;
 
-        match transform::parse_transform_query(query) {
-            Some(mut tq) => {
-                if tq.text.is_empty() {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Ok(text) = clipboard.get_text() {
-                            tq.text = text;
-                        }
-                    }
-                }
+        match transform::parse_transform_query_or_clipboard(query) {
+            Some(tq) => {
                 // 검색 중에는 열지 않는다 — 타이핑하는 동안 키마다 탭이 열린다.
                 // 실행 항목 하나만 보여주고, 실제 열기는 Enter에서 한다.
                 let count = transform::build_transform_urls(
                     &tq,
-                    &self.spell_providers,
-                    &self.translate_providers,
+                    &self.runtime_config.launcher.spell_providers,
+                    &self.runtime_config.launcher.translate_providers,
                 )
                 .len();
                 let item = transform::run_item(&tq, count, self.use_emoji);
@@ -153,155 +111,15 @@ impl App {
     }
 
     /// :prompt / :pt 쿼리 처리
+    /// `:prompt` — 입력 중에는 미리보기만 한다. add/rm 확정은 Enter
+    /// (`launch_selected` → `commit_prompt_command`)에서만 일어난다.
     pub(super) fn handle_prompt_query(&mut self, query: &str) {
-        let sub = query
-            .strip_prefix(":prompt")
-            .or_else(|| query.strip_prefix(":pt"))
-            .unwrap_or("")
-            .trim();
-
-        let templates = self.runtime_config.launcher.prompt_templates.clone();
-
-        if sub.starts_with("add ") {
-            let rest = sub.strip_prefix("add ").unwrap_or("").trim();
-            if let Some(pos) = rest.find(char::is_whitespace) {
-                let name = &rest[..pos];
-                let body = rest[pos..].trim();
-                if !kmd_core::prompt::validate_template_name(name) {
-                    self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                        name: format!("❌ 잘못된 이름: '{name}'"),
-                        path: "영문/숫자/하이픈/언더스코어만, 최대 32자".to_string(),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    })));
-                } else if body.is_empty() {
-                    self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                        name: "❌ 본문이 비어 있습니다".to_string(),
-                        path: ":prompt add <name> <body> 형태로 입력하세요".to_string(),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    })));
-                } else {
-                    self.runtime_config
-                        .launcher
-                        .prompt_templates
-                        .retain(|t| !t.name.eq_ignore_ascii_case(name));
-                    self.runtime_config.launcher.prompt_templates.push(
-                        kmd_core::config::PromptTemplate {
-                            name: name.to_string(),
-                            body: body.to_string(),
-                        },
-                    );
-                    let templates_to_save = self.runtime_config.launcher.prompt_templates.clone();
-                    let failure =
-                        save_config(move |c| c.launcher.prompt_templates = templates_to_save);
-                    // 저장에 실패했는데 "저장됨"이라고 말하면 안 된다.
-                    let (headline, detail) = match &failure {
-                        Some(err) => (format!("템플릿 '{name}' 저장 실패"), err.clone()),
-                        None => (
-                            format!("✅ 템플릿 '{name}' 저장됨"),
-                            format!("@ll :{name} <query> 형태로 사용"),
-                        ),
-                    };
-                    self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                        name: headline,
-                        path: detail,
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    })));
-                }
-            } else {
-                self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                    name: "사용법: :prompt add <name> <body>".to_string(),
-                    path: "예: :prompt add review 코드를 리뷰해주세요".to_string(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji {
-                        "\u{2139}\u{FE0F}"
-                    } else {
-                        "[?]"
-                    }
-                    .to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                })));
-            }
-            return;
-        }
-
-        if sub.starts_with("remove ") || sub.starts_with("rm ") || sub.starts_with("del ") {
-            let name = sub
-                .strip_prefix("remove ")
-                .or_else(|| sub.strip_prefix("rm "))
-                .or_else(|| sub.strip_prefix("del "))
-                .unwrap_or("")
-                .trim();
-            if name.is_empty() {
-                self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                    name: "사용법: :prompt remove <name>".to_string(),
-                    path: "삭제할 템플릿 이름을 입력하세요".to_string(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji {
-                        "\u{2139}\u{FE0F}"
-                    } else {
-                        "[?]"
-                    }
-                    .to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                })));
-            } else if templates.iter().any(|t| t.name.eq_ignore_ascii_case(name)) {
-                let name_owned = name.to_string();
-                let display_name = name.to_string();
-                self.runtime_config
-                    .launcher
-                    .prompt_templates
-                    .retain(|t| !t.name.eq_ignore_ascii_case(&name_owned));
-                let templates_to_save = self.runtime_config.launcher.prompt_templates.clone();
-                let failure =
-                    save_config(move |cfg| cfg.launcher.prompt_templates = templates_to_save);
-                let (headline, detail) = match &failure {
-                    Some(err) => (
-                        format!("템플릿 '{display_name}' 삭제 저장 실패"),
-                        err.clone(),
-                    ),
-                    None => (format!("✅ 템플릿 '{display_name}' 삭제됨"), String::new()),
-                };
-                self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                    name: headline,
-                    path: detail,
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                })));
-            } else {
-                self.apply_contains_results(items_to_results(std::iter::once(IndexItem {
-                    name: format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"),
-                    path: String::new(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                })));
-            }
-            return;
-        }
-
-        let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
-        let items = kmd_core::prompt::list_templates_as_items(&templates, filter, self.use_emoji);
+        let cmd = kmd_core::prompt::parse_command(query);
+        let items = kmd_core::prompt::command_items(
+            &cmd,
+            &self.runtime_config.launcher.prompt_templates,
+            self.use_emoji,
+        );
         self.apply_contains_items(items);
     }
 
@@ -469,8 +287,7 @@ impl App {
     /// `?질의` — 문서 본문 검색 (FTS5, docs/15). 공유 kmd.db를 지연 오픈해 읽는다.
     pub(super) fn handle_content_search(&mut self, raw: &str) {
         if self.content_db.is_none() && self.runtime_config.launcher.content_search.enabled {
-            let path = kmd_core::Config::default_data_dir().join(kmd_core::DB_FILENAME);
-            match kmd_core::db::Database::open(&path) {
+            match kmd_core::db::Database::open_default(kmd_core::db::DbRole::Shared) {
                 Ok(db) => self.content_db = Some(db),
                 Err(e) => tracing::warn!("본문 검색 DB 열기 실패: {e}"),
             }
@@ -527,7 +344,11 @@ impl App {
             .collect();
         items.extend(web_items);
 
-        let multi_items = web::multi_llm_result_items(query, &self.selected_llm_providers, emoji);
+        let multi_items = web::multi_llm_result_items(
+            query,
+            &self.runtime_config.launcher.multi_llm_providers,
+            emoji,
+        );
         if let Some(multi_item) = multi_items.into_iter().next() {
             items.insert(
                 5,

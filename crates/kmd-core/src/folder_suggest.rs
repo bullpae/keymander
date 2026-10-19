@@ -134,7 +134,7 @@ fn is_system_dir_name(name: &str) -> bool {
 ///
 /// 파일은 부모 폴더로, 폴더는 자기 자신으로 집계한다.
 fn suggest_from_history(
-    db: &crate::db::Database,
+    dbs: &[crate::db::Database],
     launcher: &LauncherConfig,
     max: usize,
 ) -> Vec<FolderSuggestion> {
@@ -145,14 +145,13 @@ fn suggest_from_history(
 
     let mut by_parent: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
 
-    for h in db.query_history(HISTORY_SCAN) {
-        // 경로가 있는 항목만. item_type 표기가 데스크톱(소문자)과 TUI(대문자)로
-        // 갈려 있어 대소문자를 무시한다.
-        let kind = h.item_type.to_ascii_lowercase();
-        let is_dir = kind == "dir" || kind == "directory";
-        if !(is_dir || kind == "file") {
-            continue;
-        }
+    for h in dbs.iter().flat_map(|db| db.query_history(HISTORY_SCAN)) {
+        // 경로가 있는 항목만 (태그는 대소문자·예전 표기를 허용해 해석).
+        let is_dir = match crate::index::ItemKind::from_history_tag(&h.item_type) {
+            Some(crate::index::ItemKind::Directory) => true,
+            Some(crate::index::ItemKind::File) => false,
+            _ => continue,
+        };
         let p = PathBuf::from(&h.value);
         if !p.is_absolute() {
             continue;
@@ -184,19 +183,23 @@ fn suggest_from_history(
     out
 }
 
-/// 기본 위치의 이력 DB를 열어 신호 ②를 구한다 (실패하면 빈 목록).
+/// 기본 위치의 이력 DB들(공유 + 데스크톱)을 열어 신호 ②를 구한다 (실패하면 빈 목록).
+///
+/// 데스크톱 런처는 자체 DB에 이력을 남기므로 공유 DB만 보면 주 UI의 실행 이력이
+/// 통째로 빠진다. 두 파일의 빈도를 합산한다.
 fn history_suggestions(launcher: &LauncherConfig, max: usize) -> Vec<FolderSuggestion> {
-    let path = crate::Config::default_data_dir().join(crate::DB_FILENAME);
-    if !path.exists() {
-        return Vec::new();
-    }
-    match crate::db::Database::open(&path) {
-        Ok(db) => suggest_from_history(&db, launcher, max),
-        Err(e) => {
-            tracing::debug!("이력 기반 폴더 제안 건너뜀: {e}");
-            Vec::new()
-        }
-    }
+    let dbs: Vec<crate::db::Database> = crate::db::DbRole::ALL
+        .iter()
+        .filter(|role| role.default_path().exists())
+        .filter_map(|role| match crate::db::Database::open_default(*role) {
+            Ok(db) => Some(db),
+            Err(e) => {
+                tracing::debug!("이력 기반 폴더 제안 — {role:?} DB 건너뜀: {e}");
+                None
+            }
+        })
+        .collect();
+    suggest_from_history(&dbs, launcher, max)
 }
 
 /// 후보 폴더를 스캔해 제안 목록을 만든다 (홈 + 드라이브/볼륨 루트).
@@ -336,11 +339,7 @@ fn scan_root(
     now: SystemTime,
     budget: &mut usize,
 ) -> Vec<FolderSuggestion> {
-    let ignore_set: HashSet<&str> = launcher
-        .ignore_patterns
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let ignore_set = crate::content_index::ignore_set(launcher);
     let allowed = crate::content_index::allowed_extensions(&launcher.content_search);
     let recent_cutoff = now - Duration::from_secs(RECENT_DAYS * 24 * 3600);
 
@@ -403,32 +402,12 @@ fn count_recent_files(
     budget: &mut usize,
 ) -> usize {
     let mut count = 0usize;
-    let walker = walkdir::WalkDir::new(root)
-        .max_depth(SCAN_DEPTH)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| e.depth() == 0 || !crate::index::files::is_ignored_dir(e, ignore_set));
-    for entry in walker.flatten() {
+    for entry in crate::content_index::walk_entries(root, SCAN_DEPTH, ignore_set) {
         if *budget == 0 {
             break;
         }
         *budget -= 1;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_str().unwrap_or("");
-        if crate::fsutil::is_hidden_walk_entry(&entry) {
-            continue;
-        }
-        let ext = Path::new(name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .unwrap_or_default();
-        if !allowed.contains(&ext) {
-            continue;
-        }
-        if crate::content_index::excluded_name(cs, &name.to_lowercase()) {
+        if !crate::content_index::is_candidate_file(&entry, allowed, cs) {
             continue;
         }
         let recent = entry
@@ -568,7 +547,7 @@ mod tests {
                 .unwrap();
         }
 
-        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        let got = suggest_from_history(std::slice::from_ref(&db), &launcher_with_paths(vec![]), 5);
         assert_eq!(got.len(), 1, "부모 폴더가 제안돼야 한다: {got:?}");
         assert_eq!(got[0].path, work);
         assert!(
@@ -576,6 +555,27 @@ mod tests {
             "이력 신호여야 한다: {:?}",
             got[0].reason
         );
+    }
+
+    #[test]
+    fn 공유_db와_데스크톱_db_이력을_합산한다() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("split");
+        std::fs::create_dir(&work).unwrap();
+        write_file(&work, "a.md", "x");
+        let file = work.join("a.md").to_string_lossy().into_owned();
+
+        // 각 DB만 보면 기준(3회) 미달 — 합쳐야 제안된다
+        let shared = crate::db::Database::open_in_memory().unwrap();
+        let desktop = crate::db::Database::open_in_memory().unwrap();
+        for _ in 0..2 {
+            shared.record_launch("file", &file, None).unwrap();
+        }
+        desktop.record_launch("file", &file, None).unwrap();
+
+        let got = suggest_from_history(&[shared, desktop], &launcher_with_paths(vec![]), 5);
+        assert_eq!(got.len(), 1, "두 DB 합산 3회: {got:?}");
+        assert_eq!(got[0].path, work);
     }
 
     #[test]
@@ -589,7 +589,7 @@ mod tests {
         db.record_launch("file", &rare.join("b.md").to_string_lossy(), None)
             .unwrap();
 
-        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        let got = suggest_from_history(std::slice::from_ref(&db), &launcher_with_paths(vec![]), 5);
         assert!(got.is_empty(), "1회 실행은 소음이다: {got:?}");
     }
 
@@ -606,7 +606,11 @@ mod tests {
                 .unwrap();
         }
 
-        let got = suggest_from_history(&db, &launcher_with_paths(vec![covered.clone()]), 5);
+        let got = suggest_from_history(
+            std::slice::from_ref(&db),
+            &launcher_with_paths(vec![covered.clone()]),
+            5,
+        );
         assert!(got.is_empty(), "이미 검색되는 폴더는 권할 필요가 없다");
     }
 
@@ -618,7 +622,7 @@ mod tests {
             db.record_launch("Web", "https://example.com", None)
                 .unwrap();
         }
-        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        let got = suggest_from_history(std::slice::from_ref(&db), &launcher_with_paths(vec![]), 5);
         assert!(got.is_empty(), "경로가 아닌 항목이 섞였다: {got:?}");
     }
 
@@ -636,7 +640,7 @@ mod tests {
         db.record_launch("File", &f, None).unwrap();
         db.record_launch("FILE", &f, None).unwrap();
 
-        let got = suggest_from_history(&db, &launcher_with_paths(vec![]), 5);
+        let got = suggest_from_history(std::slice::from_ref(&db), &launcher_with_paths(vec![]), 5);
         assert_eq!(got.len(), 1, "대소문자 때문에 누락됐다: {got:?}");
     }
 

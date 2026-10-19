@@ -3,14 +3,6 @@
 use super::context_actions_for;
 use super::*;
 
-/// 클립보드에 쓰고 실패를 그대로 돌려준다 — 호출부가 사용자에게 알릴 수 있게.
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|e| e.to_string())
-}
-
 impl App {
     /// Enter 실행 진입점 (KeyEvent에서 호출). 클립보드 결과에서 Cmd(macOS)/
     /// Ctrl+Enter는 붙여넣지 않고 시스템 클립보드에 **복사만** 하며, 그 외에는
@@ -99,10 +91,10 @@ impl App {
     }
 
     pub(super) fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {
-        let Some(result) = self.results.get(self.selected) else {
+        let Some(item) = self.results.get(self.selected).map(|r| r.item.clone()) else {
             return Task::none();
         };
-        let item = &result.item;
+        let item = &item;
 
         match action {
             ContextAction::Open => self.launch_selected(),
@@ -145,31 +137,33 @@ impl App {
                 }
                 exit_launcher()
             }
-            ContextAction::CopyPath => {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&item.path) {
-                        tracing::warn!("클립보드 쓰기 실패: {e}");
-                    }
-                }
-                exit_launcher()
-            }
+            ContextAction::CopyPath => self.copy_then_exit(&item.path),
             ContextAction::CopyName => {
                 let text = if item.kind == ItemKind::Calculator || item.kind == ItemKind::Emoji {
                     item.path.clone()
                 } else {
                     item.name.clone()
                 };
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&text) {
-                        tracing::warn!("클립보드 쓰기 실패: {e}");
-                    }
-                }
-                exit_launcher()
+                self.copy_then_exit(&text)
+            }
+        }
+    }
+
+    /// 복사 후 창을 닫는다. 복사에 실패하면 닫지 않고 알린다 — 닫아버리면 복사된 줄 안다.
+    fn copy_then_exit(&mut self, text: &str) -> Task<Message> {
+        match kmd_core::clipboard::set_text(text) {
+            Ok(()) => exit_launcher(),
+            Err(e) => {
+                tracing::warn!("클립보드 쓰기 실패: {e}");
+                self.status_message = Some(format!("복사 실패: {e}"));
+                Task::none()
             }
         }
     }
 
     pub(super) fn launch_selected(&mut self) -> Task<Message> {
+        use kmd_core::activation::Activation;
+
         // 이어서 질문: `@@ <프롬프트>` → 데몬이 기억한 LLM 창들에 전달 (열 URL 없음)
         if let Some(followup) = web::parse_llm_followup(&self.query) {
             return self.send_llm_followup(&followup);
@@ -179,98 +173,73 @@ impl App {
             return Task::none();
         };
 
-        // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 항목을 런처 열기 전 앱에
-        // 붙여넣어라"고 요청한다. 데몬이 이전 앱을 활성화한 뒤 주입하며, 성공
-        // 응답(ClipActionFinished)에만 창을 닫는다. 마커는 `kmd:clip:<id>:<slot>`
-        // (clip_item이 생성) — 안정 ID로 붙여넣어 검색 뒤 새 복사로 슬롯이 밀려도
-        // 선택한 항목을 정확히 집고, id=0(구버전 데몬)은 슬롯 요청으로 폴백한다.
-        if result.item.keywords.starts_with("kmd:clip:") {
-            return match self.clipboard_submit_request(false) {
+        // 무엇을 할지는 core가 분류한다(마커 해석의 정본 — TUI와 공유).
+        let activation = kmd_core::activation::classify(&result.item);
+        if self.state_dirty
+            && matches!(
+                activation,
+                Activation::ShellQuickAction
+                    | Activation::ShellTerminal
+                    | Activation::FolderSuggest
+                    | Activation::Copy(_)
+                    | Activation::Web
+                    | Activation::Execute
+            )
+        {
+            self.window_state.save();
+        }
+
+        match activation {
+            Activation::SetQuery(seed) => {
+                self.query = seed;
+                self.selected = 0;
+                self.perform_search()
+            }
+            // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 항목을 런처 열기 전 앱에
+            // 붙여넣어라"고 요청한다. 데몬이 이전 앱을 활성화한 뒤 주입하며, 성공
+            // 응답(ClipActionFinished)에만 창을 닫는다. 마커는 `kmd:clip:<id>:<slot>`
+            // (clip_item이 생성) — 안정 ID로 붙여넣어 검색 뒤 새 복사로 슬롯이 밀려도
+            // 선택한 항목을 정확히 집고, id=0(구버전 데몬)은 슬롯 요청으로 폴백한다.
+            Activation::ClipPaste => match self.clipboard_submit_request(false) {
                 Some(request) => Self::run_clip_action(request),
                 // 안내 항목 또는 마커 손상 — 실행 대상 아님
                 None => Task::none(),
-            };
-        }
-
-        // Help entries act like quick templates — 선택 시 시작 쿼리로 전환.
-        if result.item.keywords.starts_with("kmd:help:") {
-            if let Some(seed) = kmd_core::query_prefix::help_query_seed(&result.item.name) {
-                self.query = seed.to_string();
-                self.selected = 0;
-                return self.perform_search();
-            }
-            return Task::none();
-        }
-
-        // 셸 모드의 웹 검색 전환 힌트 (!g → @g)
-        if result.item.keywords.starts_with("kmd:bang_hint:") {
-            self.query = result.item.path.clone();
-            self.selected = 0;
-            return self.perform_search();
-        }
-
-        // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 탭 폭주 방지)
-        if result.item.keywords == kmd_core::transform::TRANSFORM_RUN_MARKER {
-            let trimmed = self.query.trim();
-            let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
-            let dispatch = normalized.as_deref().unwrap_or(trimmed);
-            if let Some(mut tq) = kmd_core::transform::parse_transform_query(dispatch) {
-                if tq.text.is_empty() {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Ok(text) = clipboard.get_text() {
-                            tq.text = text;
-                        }
-                    }
-                }
-                for url in kmd_core::transform::build_transform_urls(
-                    &tq,
-                    &self.spell_providers,
-                    &self.translate_providers,
-                ) {
+            },
+            // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 탭 폭주 방지)
+            Activation::TransformRun => {
+                for url in self.transform_urls() {
                     if let kmd_core::action::ActionResult::Error(e) =
                         kmd_core::action::open_url(&url)
                     {
                         tracing::warn!("URL 열기 실패: {url} — {e}");
                     }
                 }
+                exit_launcher()
             }
-            return exit_launcher();
-        }
-
-        // 클립보드가 비어 실행할 수 없는 :t 안내 — 선택해도 아무 일도 하지 않는다
-        if result.item.keywords == kmd_core::transform::TRANSFORM_EMPTY_MARKER {
-            return Task::none();
-        }
-
-        // 미지 명령 안내 → :help 로 이동
-        if result.item.keywords == "kmd:unknown_cmd" {
-            self.query = ":help".to_string();
-            self.selected = 0;
-            return self.perform_search();
-        }
-
-        if result.item.kind == ItemKind::SystemCommand
-            && result.item.keywords.starts_with("kmd:settings:")
-        {
-            return self.handle_settings_action(&result);
-        }
-
-        if result.item.kind == ItemKind::SystemCommand
-            && result.item.keywords.starts_with("kmd:keymap:")
-        {
-            return self.handle_keymap_action(&result);
-        }
-
-        if self.state_dirty {
-            self.window_state.save();
-        }
-
-        // Shell 명령 처리
-        if result.item.kind == ItemKind::Shell {
-            if builtin_shell::ShellExtension::is_quick_action(&result.item.path) {
-                // Quick Action → 백그라운드 실행, 결과를 클립보드에 복사
+            Activation::PromptCommit => self.commit_prompt_command(),
+            Activation::Settings => self.handle_settings_action(&result),
+            Activation::Keymap => self.handle_keymap_action(&result),
+            // TUI 전용 모달 · 안내 항목
+            Activation::OpenSettingsModal | Activation::Noop => Task::none(),
+            // 폴더 제안 항목 — Enter로 search_paths에 추가 + config 저장 (docs/15 P2)
+            Activation::FolderSuggest => {
+                let msg = kmd_core::folder_suggest::execute_suggest_action(
+                    &mut self.runtime_config,
+                    &result.item.keywords,
+                );
+                self.selected = 0;
+                let task = self.perform_search();
+                // 재검색이 알림을 지우므로 그 뒤에 남긴다 (예전엔 로그로만 남아 피드백이 없었다)
+                if let Some(msg) = msg {
+                    tracing::info!("folder suggest: {msg}");
+                    self.status_message = Some(msg);
+                }
+                task
+            }
+            // Quick Action → 백그라운드 실행, 결과를 클립보드에 복사
+            Activation::ShellQuickAction => {
                 let item = result.item.clone();
-                return Task::future(async move {
+                Task::future(async move {
                     let res = tokio::task::spawn_blocking(move || {
                         use kmd_core::plugin::Extension;
                         let shell_ext = builtin_shell::ShellExtension;
@@ -283,105 +252,97 @@ impl App {
                     .await
                     .unwrap_or_else(|e| Err(format!("Task panicked: {e}")));
                     Message::ShellDone(res)
-                });
+                })
             }
             // 사용자 명령 → 새 터미널 창에서 실행 (결과가 화면에 유지됨)
             // 실패하면 창을 닫지 않는다 — 닫아버리면 사용자는 명령이 돌아간 줄 안다.
-            if let Err(e) = builtin_shell::launch_in_terminal(&result.item.path) {
-                tracing::warn!("터미널 실행 실패: {e}");
-                self.status_message = Some(format!("터미널 실행 실패: {e}"));
-                return Task::none();
-            }
-            return exit_launcher();
-        }
-
-        // 폴더 제안 항목 — Enter로 search_paths에 추가 + config 저장 (docs/15 P2)
-        if result
-            .item
-            .keywords
-            .starts_with(kmd_core::folder_suggest::SUGGEST_MARKER)
-        {
-            if let Some(msg) = kmd_core::folder_suggest::execute_suggest_action(
-                &mut self.runtime_config,
-                &result.item.keywords,
-            ) {
-                tracing::info!("folder suggest: {msg}");
-            }
-            self.selected = 0;
-            return self.perform_search();
-        }
-
-        // 폴더 검색 제안 항목 — path가 ":f  <query>" 형태이면 해당 쿼리로 전환
-        if result.item.keywords.starts_with("kmd:folder_search:") {
-            let seed = result.item.path.trim().to_string();
-            if seed.starts_with(":f") {
-                self.query = seed;
-                self.selected = 0;
-                return self.perform_search();
-            }
-            return Task::none();
-        }
-
-        // `@` 브라우징 가상 항목 — 설명 문구를 explorer로 열지 않고 해당 모드로 전환
-        if result.item.kind == ItemKind::WebSearch {
-            if let Some(seed) = web::web_browse_hint_seed(&result.item.keywords) {
-                self.query = seed.to_string();
-                self.selected = 0;
-                return self.perform_search();
-            }
-        }
-
-        // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
-        if result.item.kind == ItemKind::WebSearch {
-            if let Some(task) = self.try_llm_launch() {
-                return task;
-            }
-        }
-
-        // 웹 검색 결과 — extract_batch_urls 통합 추출 (LLM 외 msearch/spell/translate)
-        if result.item.kind == ItemKind::WebSearch {
-            if let Some(urls) = web::extract_batch_urls(&result.item) {
-                for url in urls {
-                    if let kmd_core::action::ActionResult::Error(e) =
-                        kmd_core::action::open_url(&url)
-                    {
-                        tracing::warn!("URL 열기 실패: {url} — {e}");
-                    }
-                }
-                return exit_launcher();
-            }
-        }
-
-        // 계산기·이모지 결과: 값을 클립보드에 복사 후 종료.
-        // (core의 action::execute는 이 둘을 Launched로만 돌려준다 — 클립보드는
-        // UI의 몫이라 여기서 처리한다. 예전에는 이모지 분기가 없어 데스크톱에서
-        // Enter를 눌러도 아무것도 복사되지 않고 창만 닫혔다.)
-        if matches!(result.item.kind, ItemKind::Calculator | ItemKind::Emoji) {
-            if !result.item.path.is_empty() {
-                // 복사에 실패하면 창을 닫지 않는다 — 닫아버리면 복사된 줄 안다.
-                if let Err(e) = copy_to_clipboard(&result.item.path) {
-                    tracing::warn!("클립보드 복사 실패: {e}");
-                    self.status_message = Some(format!("복사 실패: {e}"));
+            Activation::ShellTerminal => {
+                if let Err(e) = builtin_shell::launch_in_terminal(&result.item.path) {
+                    tracing::warn!("터미널 실행 실패: {e}");
+                    self.status_message = Some(format!("터미널 실행 실패: {e}"));
                     return Task::none();
                 }
+                exit_launcher()
             }
-            return exit_launcher();
+            // 계산기·이모지 결과: 값을 클립보드에 복사 후 종료.
+            // (core의 action::execute는 이 둘을 Launched로만 돌려준다 — 클립보드는
+            // UI의 몫이라 여기서 처리한다.) 복사에 실패하면 창을 닫지 않는다.
+            Activation::Copy(text) if text.is_empty() => exit_launcher(),
+            Activation::Copy(text) => self.copy_then_exit(&text),
+            Activation::Web => {
+                // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
+                if let Some(task) = self.try_llm_launch() {
+                    return task;
+                }
+                // 웹 검색 결과 — extract_batch_urls 통합 추출 (LLM 외 msearch/spell/translate)
+                if let Some(urls) = web::extract_batch_urls(&result.item) {
+                    for url in urls {
+                        if let kmd_core::action::ActionResult::Error(e) =
+                            kmd_core::action::open_url(&url)
+                        {
+                            tracing::warn!("URL 열기 실패: {url} — {e}");
+                        }
+                    }
+                    return exit_launcher();
+                }
+                self.execute_default(&result)
+            }
+            Activation::Execute => self.execute_default(&result),
         }
+    }
 
-        let action_result = kmd_core::action::execute(&result);
-        match action_result {
+    /// `:t` 질의 → 열 URL 목록. 텍스트가 비면 클립보드 내용을 쓴다.
+    fn transform_urls(&self) -> Vec<String> {
+        let trimmed = self.query.trim();
+        let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
+        let dispatch = normalized.as_deref().unwrap_or(trimmed);
+        let Some(tq) = kmd_core::transform::parse_transform_query_or_clipboard(dispatch) else {
+            return Vec::new();
+        };
+        kmd_core::transform::build_transform_urls(
+            &tq,
+            &self.runtime_config.launcher.spell_providers,
+            &self.runtime_config.launcher.translate_providers,
+        )
+    }
+
+    /// `:prompt add/rm` Enter 확정 — 현재 질의를 다시 해석해 적용·저장한다.
+    /// 성공하면 `:prompt` 목록으로 돌아가 결과를 바로 보여 준다.
+    fn commit_prompt_command(&mut self) -> Task<Message> {
+        let cmd = kmd_core::prompt::parse_command(self.query.trim());
+        let mut templates = self.runtime_config.launcher.prompt_templates.clone();
+        let outcome = kmd_core::prompt::apply_command(&cmd, &mut templates).and_then(|msg| {
+            let to_save = templates.clone();
+            // 저장에 실패했는데 "저장됨"이라고 말하면 안 된다.
+            match save_config(move |c| c.launcher.prompt_templates = to_save) {
+                Some(err) => Err(err),
+                None => Ok(msg),
+            }
+        });
+        match outcome {
+            Ok(msg) => {
+                self.runtime_config.launcher.prompt_templates = templates;
+                self.query = ":prompt".to_string();
+                self.selected = 0;
+                let task = self.perform_search();
+                self.status_message = Some(msg);
+                task
+            }
+            Err(err) => {
+                self.status_message = Some(err);
+                Task::none()
+            }
+        }
+    }
+
+    /// 기본 실행 — `action::execute` 후 성공하면 실행 이력을 남기고 창을 닫는다.
+    fn execute_default(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
+        match kmd_core::action::execute(result) {
             kmd_core::action::ActionResult::Launched => {
                 // 앱/파일 실행 기록 → 다음 검색 시 frecency 부스트에 사용
-                let kind_str = match result.item.kind {
-                    ItemKind::App => "app",
-                    ItemKind::Executable => "app",
-                    ItemKind::File => "file",
-                    ItemKind::Directory => "dir",
-                    _ => "misc",
-                };
                 kmd_core::history::record_launch(
                     &self.db,
-                    kind_str,
+                    result.item.kind,
                     &result.item.path,
                     Some(&result.item.name),
                 );

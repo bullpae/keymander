@@ -4,6 +4,8 @@
 //! for the keymander keyboard launcher.
 
 pub mod action;
+pub mod activation;
+pub mod clipboard;
 pub mod config;
 pub mod content_index;
 pub mod db;
@@ -28,7 +30,7 @@ pub mod web;
 
 /// Re-export commonly used types
 pub use config::Config;
-pub use db::Database;
+pub use db::{Database, DbRole};
 pub use index::{Index, IndexItem, ItemKind, Source};
 pub use search::{SearchEngine, SearchMode, SearchResult};
 
