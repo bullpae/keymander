@@ -50,6 +50,7 @@ impl App {
             Prefix::Keymap => self.handle_keymap_query(trimmed),
             Prefix::Keys => self.handle_keys_query(),
             Prefix::FolderSearch => self.handle_folder_search(trimmed),
+            Prefix::Scope => self.handle_scope_query(trimmed),
             Prefix::ContentSearch => self.handle_content_search(trimmed),
             Prefix::Clipboard => {
                 post_task = self.handle_clip_query(trimmed, generation);
@@ -264,6 +265,21 @@ impl App {
             results.splice(at..at, fallback);
         }
 
+        // 범위 밖 폴더 경로를 그대로 쳤으면 맨 위에 "검색 범위에 추가" (docs/18 E1)
+        if let Some(item) = kmd_core::scope::path_add_suggestion(
+            &self.runtime_config.launcher,
+            query,
+            self.use_emoji,
+        ) {
+            results.insert(
+                0,
+                kmd_core::SearchResult {
+                    item,
+                    score: SCORE_PLUGIN,
+                },
+            );
+        }
+
         // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
         if let Some(hint) = kmd_core::query_prefix::unknown_command_hint(query, self.use_emoji) {
             results.insert(
@@ -333,6 +349,11 @@ impl App {
         // 제안이 `?` 프리픽스 안에만 있어 사용자가 찾을 수 없었다.
         let mut items: Vec<kmd_core::SearchResult> =
             kmd_core::folder_suggest::suggestion_results(&self.runtime_config.launcher, emoji, 2);
+        // 제안에 원하는 폴더가 없을 때 직접 넣는 길 (docs/18 E4)
+        items.push(kmd_core::SearchResult {
+            item: kmd_core::scope::empty_result_hint(emoji),
+            score: 0,
+        });
 
         let web_items: Vec<kmd_core::SearchResult> = FALLBACK_IDS
             .iter()

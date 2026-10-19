@@ -196,15 +196,25 @@ impl App {
             self.runtime_config = config;
             self.loading = false;
             tracing::info!("Search engine ready");
+            // `:scope` 변경 결과 — 재검색이 알림을 지우므로 그 뒤에 남긴다
+            let scope_msg = self.take_scope_report_message();
             if !self.query.trim().is_empty() {
                 // IME 조합 중이면 검색/뷰 갱신을 미뤄 자모 분리를 막는다.
                 if self.is_typing_in_progress() {
+                    self.status_message = scope_msg.or(self.status_message.take());
                     return Task::future(async {
                         tokio::time::sleep(Duration::from_millis(400)).await;
                         Message::EngineSwapSettled
                     });
                 }
-                return self.perform_search();
+                let task = self.perform_search();
+                if scope_msg.is_some() {
+                    self.status_message = scope_msg;
+                }
+                return task;
+            }
+            if scope_msg.is_some() {
+                self.status_message = scope_msg;
             }
         } else {
             self.loading = false;

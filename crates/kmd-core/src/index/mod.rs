@@ -191,8 +191,8 @@ impl Index {
         let provider_config = files::ProviderConfig {
             max_results: config.max_results,
             search_depth: config.search_depth,
-            search_paths: config.search_paths.clone(),
-            ignore_patterns: config.ignore_patterns.clone(),
+            search_paths: config.effective_search_paths(),
+            ignore_patterns: config.effective_ignore_patterns(),
             ignore_extensions: config.ignored_extension_set(),
             everything_path: config.everything_path.clone(),
             scan_drives: config.scan_drives,

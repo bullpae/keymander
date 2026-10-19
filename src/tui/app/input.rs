@@ -46,7 +46,31 @@ pub(super) fn handle_key(
         }
         (KeyCode::Tab, _) | (KeyCode::Right, _) => {
             flush_composer(state);
-            drill_into_folder(state);
+            // `:scope` 자동완성 행이면 그 경로로 입력을 채운다 (셸 자동완성처럼)
+            if let Some(seed) = super::scope::scope_tab_seed(state) {
+                state.query = seed;
+                state.refresh_effective_query();
+                update_search(state, engine, db);
+            } else {
+                drill_into_folder(state);
+            }
+        }
+        // `:scope` — Ctrl+Del 제거, Ctrl+Z 되돌리기 (docs/18)
+        (KeyCode::Delete, KeyModifiers::CONTROL) => {
+            flush_composer(state);
+            if super::scope::scope_remove_selected(state, engine) {
+                let msg = state.status_message.take();
+                update_search(state, engine, db);
+                state.status_message = msg;
+            }
+        }
+        (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
+            flush_composer(state);
+            if super::scope::scope_undo(state, engine) {
+                let msg = state.status_message.take();
+                update_search(state, engine, db);
+                state.status_message = msg;
+            }
         }
         (KeyCode::Left, _) => {
             flush_composer(state);

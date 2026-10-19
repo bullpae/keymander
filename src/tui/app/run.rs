@@ -51,6 +51,7 @@ pub fn run_app(
         drill_stack: Vec::new(),
         drill_path: None,
         status_message: None,
+        scope_undo: None,
         settings: None,
         is_portable: kmd_core::portable::is_portable(),
         use_emoji: config.general.emoji_icons,

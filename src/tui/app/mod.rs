@@ -29,6 +29,7 @@ mod drill;
 mod execute;
 mod input;
 mod run;
+mod scope;
 mod search;
 mod settings_bridge;
 mod state;

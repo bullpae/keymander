@@ -38,6 +38,8 @@ pub struct AppState {
     pub drill_path: Option<PathBuf>,
     /// Temporary status message (e.g. "Copied to clipboard")
     pub status_message: Option<String>,
+    /// `:scope`에서 방금 뺀 폴더 — Ctrl+Z로 되돌린다 (docs/18)
+    pub(super) scope_undo: Option<PathBuf>,
     /// Settings modal (None = hidden, Some = active)
     pub settings: Option<SettingsState>,
     /// Portable mode indicator

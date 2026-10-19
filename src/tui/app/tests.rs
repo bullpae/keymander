@@ -22,6 +22,7 @@ fn test_state() -> AppState {
         drill_stack: Vec::new(),
         drill_path: None,
         status_message: None,
+        scope_undo: None,
         settings: None,
         is_portable: false,
         use_emoji: true,

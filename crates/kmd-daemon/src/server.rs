@@ -222,7 +222,14 @@ fn lock_index_rebuild() -> std::sync::MutexGuard<'static, ()> {
 
 /// 전체 인덱스 재생성 + 공유 캐시 갱신 + 본문 인덱스 증분 동기화.
 /// 반환값은 항목 수 — 검색 엔진 잠금이 오염돼 교체하지 못했으면 Err.
-fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) -> Result<usize, String> {
+///
+/// `sync_content`이 false면 본문 인덱스 동기화를 생략한다 — IPC 요청(`:scope` 추가
+/// 직후)은 파일명 인덱스만 기다리고, 본문은 호출자가 뒤에서 돌린다.
+fn rebuild_full_index(
+    engine: &Arc<Mutex<SearchEngine>>,
+    config: &Config,
+    sync_content: bool,
+) -> Result<usize, String> {
     let _rebuild_guard = lock_index_rebuild();
     let started = Instant::now();
     let index = Index::build(&config.launcher, config.general.emoji_icons);
@@ -245,7 +252,9 @@ fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) -> Res
         started.elapsed().as_millis()
     );
 
-    sync_content_index(config);
+    if sync_content {
+        sync_content_index(config);
+    }
     swapped
 }
 
@@ -336,7 +345,7 @@ fn spawn_content_watcher(shutdown: Arc<AtomicBool>) {
             if !cfg.launcher.content_search.enabled {
                 return;
             }
-            for p in &cfg.launcher.search_paths {
+            for p in &cfg.launcher.effective_search_paths() {
                 if !p.is_dir() {
                     continue;
                 }
@@ -370,7 +379,8 @@ fn spawn_content_watcher(shutdown: Arc<AtomicBool>) {
             if last_config_load.elapsed() >= CONFIG_RELOAD {
                 last_config_load = Instant::now();
                 let fresh = load_config();
-                if fresh.launcher.search_paths != config.launcher.search_paths
+                if fresh.launcher.effective_search_paths()
+                    != config.launcher.effective_search_paths()
                     || fresh.launcher.content_search.enabled
                         != config.launcher.content_search.enabled
                 {
@@ -421,7 +431,7 @@ fn spawn_index_refresher(
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            let _ = rebuild_full_index(&engine, &boot_cfg);
+            let _ = rebuild_full_index(&engine, &boot_cfg, true);
         }
 
         let mut elapsed_secs: u64 = 0;
@@ -443,7 +453,7 @@ fn spawn_index_refresher(
             elapsed_secs = 0;
 
             let cfg = load_config();
-            let _ = rebuild_full_index(&engine, &cfg);
+            let _ = rebuild_full_index(&engine, &cfg, true);
         }
     });
 }
@@ -793,17 +803,30 @@ fn handle_rebuild_index(engine: &Arc<Mutex<SearchEngine>>) -> Response {
     let engine = Arc::clone(engine);
     let worker = std::thread::Builder::new()
         .name("kmd-ipc-rebuild".into())
-        .spawn(move || {
-            lower_indexer_thread_priority();
-            rebuild_full_index(&engine, &config)
+        .spawn({
+            let config = config.clone();
+            move || {
+                lower_indexer_thread_priority();
+                rebuild_full_index(&engine, &config, false)
+            }
         });
     match worker.map_err(|e| e.to_string()).and_then(|h| {
         h.join()
             .unwrap_or_else(|_| Err("인덱스 리빌드 스레드 패닉".to_string()))
     }) {
-        Ok(count) => Response::Ok {
-            message: format!("인덱스 리빌드 완료 ({count}개 항목)"),
-        },
+        Ok(count) => {
+            // 본문 인덱스는 응답 뒤에 — 문서가 많은 폴더를 막 추가했을 때
+            // 런처가 그 시간만큼 "인덱싱 중"에 묶이지 않게 (sync는 겹치면 스킵)
+            let _ = std::thread::Builder::new()
+                .name("kmd-ipc-content-sync".into())
+                .spawn(move || {
+                    lower_indexer_thread_priority();
+                    sync_content_index(&config);
+                });
+            Response::Ok {
+                message: format!("인덱스 리빌드 완료 ({count}개 항목)"),
+            }
+        }
         Err(message) => Response::Error { message },
     }
 }

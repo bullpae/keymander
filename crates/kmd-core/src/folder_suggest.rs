@@ -170,9 +170,10 @@ fn suggest_from_history(
         *by_parent.entry(folder).or_insert(0) += h.frequency.max(1) as usize;
     }
 
+    let roots = launcher.effective_search_paths();
     let mut out: Vec<FolderSuggestion> = by_parent
         .into_iter()
-        .filter(|(path, n)| *n >= MIN_LAUNCHES && !covered_by_search_paths(launcher, path))
+        .filter(|(path, n)| *n >= MIN_LAUNCHES && !covered_by_search_paths(&roots, path))
         .map(|(path, n)| FolderSuggestion {
             path,
             reason: SuggestReason::LaunchHistory(n),
@@ -235,11 +236,13 @@ pub fn suggest_folders(launcher: &LauncherConfig, max: usize) -> Vec<FolderSugge
 /// 현재 검색 범위와 겹치는(조상/자손 어느 쪽이든) 폴더인가.
 /// 스캔 시점과 캐시 반환 시점 양쪽에서 쓴다 — Enter로 방금 추가한 폴더가
 /// TTL이 남은 캐시에서 계속 제안되는 staleness를 막는다.
-fn covered_by_search_paths(launcher: &LauncherConfig, path: &Path) -> bool {
+///
+/// `roots`는 `launcher.effective_search_paths()` — 기본 폴더 판정에 디스크 확인이
+/// 들어가므로 호출자가 한 번 만들어 넘긴다.
+fn covered_by_search_paths(roots: &[PathBuf], path: &Path) -> bool {
     use crate::fsutil::path_within;
     // Windows는 대소문자 무시 — config에 적은 표기와 스캔 결과의 표기가 달라도 같은 폴더다
-    launcher
-        .search_paths
+    roots
         .iter()
         .any(|sp| path_within(sp, path) || path_within(path, sp))
 }
@@ -309,8 +312,9 @@ fn filter_covered(
     items: impl Iterator<Item = FolderSuggestion>,
     max: usize,
 ) -> Vec<FolderSuggestion> {
+    let roots = launcher.effective_search_paths();
     items
-        .filter(|s| !covered_by_search_paths(launcher, &s.path))
+        .filter(|s| !covered_by_search_paths(&roots, &s.path))
         .take(max)
         .collect()
 }
@@ -339,8 +343,10 @@ fn scan_root(
     now: SystemTime,
     budget: &mut usize,
 ) -> Vec<FolderSuggestion> {
-    let ignore_set = crate::content_index::ignore_set(launcher);
+    let ignore_patterns = launcher.effective_ignore_patterns();
+    let ignore_set = crate::content_index::ignore_set(&ignore_patterns);
     let allowed = crate::content_index::allowed_extensions(launcher);
+    let roots = launcher.effective_search_paths();
     let recent_cutoff = now - Duration::from_secs(RECENT_DAYS * 24 * 3600);
 
     let mut suggestions: Vec<FolderSuggestion> = Vec::new();
@@ -369,7 +375,7 @@ fn scan_root(
             continue;
         }
         // 이미 검색 범위와 겹치는 폴더는 제외 (조상/자손 어느 쪽이든)
-        if covered_by_search_paths(launcher, &path) {
+        if covered_by_search_paths(&roots, &path) {
             continue;
         }
 
@@ -469,45 +475,20 @@ fn display_path(path: &Path) -> String {
 /// 저장해서, 실패하면 화면상 추가된 경로가 메모리에만 남았다. 또 디스크의 최신
 /// 설정 위에 이 변경만 얹으므로, 그 사이 다른 곳에서 바뀐 값을 되돌리지 않는다.
 pub fn execute_suggest_action(config: &mut Config, keywords: &str) -> Option<String> {
-    // 먼저 사본에 적용해 "추가할 것이 있는지"와 안내 문구를 얻는다.
-    let mut probe = config.clone();
-    let msg = apply_suggest_add(&mut probe, keywords)?;
-
-    let Some(path) = config.config_path.clone() else {
-        // 저장 경로를 모르면 메모리에만 반영한다 (테스트·임시 설정 경로).
-        *config = probe;
-        return Some(msg);
-    };
-
-    let added = keywords.strip_prefix(SUGGEST_MARKER)?.to_string();
-    match Config::update_and_save(&path, |latest| {
-        let pb = PathBuf::from(&added);
-        if !latest.launcher.search_paths.contains(&pb) {
-            latest.launcher.search_paths.push(pb);
-        }
-    }) {
-        Ok(saved) => {
-            *config = saved;
-            Some(msg)
-        }
-        Err(e) => Some(format!("설정 저장 실패: {e}")),
-    }
+    let path = suggest_path(keywords)?;
+    // `:scope` 추가와 같은 경로 — 레거시 설정 전환·포함 판정·저장 규칙을 공유한다 (docs/18)
+    Some(match crate::scope::add(config, &path) {
+        Ok((_, msg)) => msg,
+        Err(e) => e,
+    })
 }
 
-/// 순수 적용부 (저장 없음) — 테스트용 분리.
-fn apply_suggest_add(config: &mut Config, keywords: &str) -> Option<String> {
-    let path = keywords.strip_prefix(SUGGEST_MARKER)?;
-    if path.is_empty() {
-        return None;
-    }
-    let pb = PathBuf::from(path);
-    if !config.launcher.search_paths.contains(&pb) {
-        config.launcher.search_paths.push(pb.clone());
-    }
-    Some(format!(
-        "검색 범위에 추가됨: {} — 다음 인덱스 갱신부터 반영됩니다",
-        display_path(&pb)
-    ))
+/// 제안 항목 마커에서 폴더 경로를 꺼낸다 — UI가 추가 후 바로 인덱싱할 대상.
+pub fn suggest_path(keywords: &str) -> Option<PathBuf> {
+    keywords
+        .strip_prefix(SUGGEST_MARKER)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -523,6 +504,8 @@ mod tests {
     fn launcher_with_paths(paths: Vec<PathBuf>) -> LauncherConfig {
         LauncherConfig {
             search_paths: paths,
+            // 테스트는 이 경로만 — 실제 사용자 폴더(문서 등)를 섞지 않는다
+            include_user_folders: Some(false),
             ..Default::default()
         }
     }
@@ -855,16 +838,16 @@ mod tests {
         let mut config = Config::default();
         let before = config.launcher.search_paths.len();
         let kw = format!("{SUGGEST_MARKER}{}", busy.to_string_lossy());
-        let msg = apply_suggest_add(&mut config, &kw).expect("적용 성공");
+        let msg = execute_suggest_action(&mut config, &kw).expect("적용 성공");
         assert!(msg.contains("추가됨"));
         assert_eq!(config.launcher.search_paths.len(), before + 1);
         assert_eq!(config.launcher.search_paths.last().unwrap(), &busy);
 
         // 중복 적용해도 한 번만
-        apply_suggest_add(&mut config, &kw);
+        execute_suggest_action(&mut config, &kw);
         assert_eq!(config.launcher.search_paths.len(), before + 1);
 
         // 무관한 마커는 None
-        assert!(apply_suggest_add(&mut config, "kmd:help:entry").is_none());
+        assert!(execute_suggest_action(&mut config, "kmd:help:entry").is_none());
     }
 }

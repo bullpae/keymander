@@ -75,11 +75,17 @@ pub(super) fn apply_settings_action(
                     }
                 }
                 // 리스트 편집 UI가 직접 다루는 항목 (키 문자열로 왕복하지 않는다)
+                // 목록과 짝 스위치(기본 폴더·기본 제외 목록 포함 여부)는 함께 옮긴다 —
+                // 목록만 옮기면 레거시/새 의미가 섞여 범위가 바뀐다 (docs/18)
                 if before.launcher.search_paths != edited.launcher.search_paths {
                     latest.launcher.search_paths = edited.launcher.search_paths.clone();
+                    latest.launcher.include_user_folders = edited.launcher.include_user_folders;
                 }
-                if before.launcher.ignore_patterns != edited.launcher.ignore_patterns {
+                if before.launcher.ignore_patterns != edited.launcher.ignore_patterns
+                    || before.launcher.use_default_ignores != edited.launcher.use_default_ignores
+                {
                     latest.launcher.ignore_patterns = edited.launcher.ignore_patterns.clone();
+                    latest.launcher.use_default_ignores = edited.launcher.use_default_ignores;
                 }
             });
 
@@ -129,6 +135,9 @@ pub(super) fn apply_settings_action(
             settings_state.config.launcher.max_results = default_config.launcher.max_results;
             settings_state.config.launcher.ignore_patterns =
                 default_config.launcher.ignore_patterns;
+            // 기본 = "기본 제외 목록 + 추가분 없음" — 스위치도 같이 되돌린다
+            settings_state.config.launcher.use_default_ignores =
+                default_config.launcher.use_default_ignores;
             settings_state.config.launcher.index_directories =
                 default_config.launcher.index_directories;
             settings_state.config.launcher.file_search_provider =

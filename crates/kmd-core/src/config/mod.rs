@@ -13,11 +13,18 @@ mod persist;
 mod registry;
 mod types;
 
+pub use defaults::DEFAULT_IGNORE_PATTERNS;
 pub use keymap_toml::{
     ComboToml, DoubleTapToml, KeymapConfig, LayerDoubleTapToml, LayerToml, TapHoldToml,
 };
 pub use persist::SEED_CONFIG_FILENAME;
 use persist::{merge_into_document, seed_config, write_atomic};
+
+/// OS 기본 사용자 폴더(바탕 화면·문서·다운로드·OneDrive) — 존재하는 것만, 중복 없이.
+/// `launcher.include_user_folders`가 켜져 있으면 검색 범위에 들어간다 (docs/18).
+pub fn default_user_folders() -> Vec<PathBuf> {
+    defaults::default_search_paths()
+}
 pub use types::{
     ClipboardConfig, ContentSearchConfig, CustomWebService, GeneralConfig, KeybindingsConfig,
     KindWeights, LauncherConfig, PromptTemplate,
@@ -38,6 +45,27 @@ pub struct Config {
 }
 
 impl Config {
+    /// TOML 문자열을 설정으로 읽는다 — 레거시 "대체" 의미 판정을 함께 한다 (docs/18 §5.3).
+    ///
+    /// 예전엔 `search_paths`·`ignore_patterns`를 적으면 기본값을 **대체**했다. 새
+    /// 의미는 "기본값 + 추가"라서, 그 키를 적었는데 새 스위치
+    /// (`include_user_folders`·`use_default_ignores`)가 없는 파일은 레거시로 보고
+    /// 스위치를 `None`으로 둔다 — 적힌 목록만 쓰는 예전 동작 그대로다.
+    /// 키가 아예 없으면 기본값(`Some(true)`)이 남아 기본 폴더·규칙이 그대로 들어간다.
+    pub fn from_toml_str(content: &str) -> Result<Self, toml::de::Error> {
+        let mut config: Config = toml::from_str(content)?;
+        let raw: toml::Table = toml::from_str(content)?;
+        let launcher = raw.get("launcher").and_then(|v| v.as_table());
+        let has = |key: &str| launcher.is_some_and(|t| t.contains_key(key));
+        if has("search_paths") && !has("include_user_folders") {
+            config.launcher.include_user_folders = None;
+        }
+        if has("ignore_patterns") && !has("use_default_ignores") {
+            config.launcher.use_default_ignores = None;
+        }
+        Ok(config)
+    }
+
     /// Load config from a directory (reads config.toml)
     pub fn load(config_dir: &Path) -> Result<Self, ConfigError> {
         let config_path = config_dir.join(crate::CONFIG_FILENAME);
@@ -49,7 +77,7 @@ impl Config {
         let mut config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
                 .map_err(|e| ConfigError::Io(config_path.clone(), e))?;
-            toml::from_str(&content).map_err(ConfigError::Parse)?
+            Config::from_toml_str(&content).map_err(ConfigError::Parse)?
         } else {
             Config::default()
         };

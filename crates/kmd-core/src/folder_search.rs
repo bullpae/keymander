@@ -213,7 +213,7 @@ fn split_dir_and_query(input: &str, is_dir: impl Fn(&str) -> bool) -> (&str, &st
 }
 
 /// 사용자가 친 폴더 문자열을 실제 경로로 바꾼다 (`~` 확장 + 구분자 정리).
-fn resolve_dir(part: &str) -> std::path::PathBuf {
+pub(crate) fn resolve_dir(part: &str) -> std::path::PathBuf {
     let expanded = match part.strip_prefix('~') {
         // `~`, `~/x`, `~\x`만 홈으로 본다 (`~user`는 건드리지 않는다).
         Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => match dirs::home_dir() {
