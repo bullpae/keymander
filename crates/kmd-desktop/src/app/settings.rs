@@ -248,11 +248,11 @@ impl App {
             None => String::new(),
         };
 
-        let items: Vec<IndexItem> = self
-            .settings_rows()
-            .into_iter()
-            .filter(|row| filter.is_empty() || row.name.to_lowercase().contains(&filter))
-            .map(|row| IndexItem {
+        // 첫 행: 검색 범위 요약 → Enter로 `:scope` (docs/18 E3)
+        let scope_row =
+            kmd_core::scope::settings_row(&self.runtime_config.launcher, self.use_emoji);
+        let items: Vec<IndexItem> = std::iter::once(scope_row)
+            .chain(self.settings_rows().into_iter().map(|row| IndexItem {
                 name: row.name,
                 path: row.desc,
                 icon: row.icon,
@@ -260,7 +260,8 @@ impl App {
                 source: Source::Plugin,
                 keywords: row.action,
                 icon_path: None,
-            })
+            }))
+            .filter(|item| filter.is_empty() || item.name.to_lowercase().contains(&filter))
             .collect();
 
         self.apply_contains_items(items);

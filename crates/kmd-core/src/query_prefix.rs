@@ -37,6 +37,8 @@ pub enum QueryPrefix {
     Keys,
     /// `:f` — 특정 폴더 내 즉석 파일 검색
     FolderSearch,
+    /// `:scope` / `:dirs` — 검색 범위(인덱싱 폴더) 관리 (docs/18)
+    Scope,
     /// `?` / `:grep` — 문서 본문 검색 (FTS5, docs/15)
     ContentSearch,
     /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B)
@@ -114,6 +116,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "Type :f /path query  (search inside a specific folder)",
         seed: ":f ",
         icon_emoji: "\u{1F4C2}",
+        icon_ascii: "[DIR]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Scope,
+        aliases: crate::scope::SCOPE_ALIASES,
+        title: ":scope  Search Scope",
+        usage: "Type :scope  (folders to index — add with :scope D:\\Util, remove with Ctrl+Del)",
+        seed: ":scope",
+        icon_emoji: "\u{1F4C1}",
         icon_ascii: "[DIR]",
     },
     CommandSpec {

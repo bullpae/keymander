@@ -64,12 +64,21 @@ pub(super) fn update_search(
         QueryPrefix::Keymap => handle_keymap_query(&query, state),
         QueryPrefix::Keys => handle_keys_query(state),
         QueryPrefix::FolderSearch => handle_folder_search(&query, state),
+        QueryPrefix::Scope => super::scope::handle_scope_query(&query, state, engine),
         QueryPrefix::ContentSearch => handle_content_search(&query, state, db),
         // 클립보드 히스토리는 데몬+데스크톱 기능이다 (TUI는 상주 감시가 없음).
         // TUI에서는 일반 검색으로 흘려보낸다.
         QueryPrefix::Clipboard => handle_main_search(&query, state, engine),
         QueryPrefix::General => {
             handle_main_search(&query, state, engine);
+            // 범위 밖 폴더 경로를 그대로 쳤으면 맨 위에 "검색 범위에 추가" (docs/18 E1)
+            if let Some(item) = kmd_core::scope::path_add_suggestion(
+                &state.config.launcher,
+                &query,
+                state.use_emoji,
+            ) {
+                state.results.insert(0, SearchResult { item, score: 0 });
+            }
             // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
             if let Some(hint) =
                 kmd_core::query_prefix::unknown_command_hint(&query, state.use_emoji)

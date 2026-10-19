@@ -223,18 +223,25 @@ impl App {
             Activation::OpenSettingsModal | Activation::Noop => Task::none(),
             // 폴더 제안 항목 — Enter로 search_paths에 추가 + config 저장 (docs/15 P2)
             Activation::FolderSuggest => {
-                let msg = kmd_core::folder_suggest::execute_suggest_action(
-                    &mut self.runtime_config,
-                    &result.item.keywords,
-                );
-                self.selected = 0;
-                let task = self.perform_search();
-                // 재검색이 알림을 지우므로 그 뒤에 남긴다 (예전엔 로그로만 남아 피드백이 없었다)
-                if let Some(msg) = msg {
-                    tracing::info!("folder suggest: {msg}");
-                    self.status_message = Some(msg);
+                // `:scope` 추가와 같은 경로 — 저장 후 바로 인덱싱 (docs/18 E5)
+                match kmd_core::folder_suggest::suggest_path(&result.item.keywords) {
+                    Some(path) => {
+                        self.selected = 0;
+                        self.scope_add(path)
+                    }
+                    None => Task::none(),
                 }
-                task
+            }
+            Activation::ScopeAdd(path) => {
+                self.selected = 0;
+                self.scope_add(std::path::PathBuf::from(path))
+            }
+            Activation::ScopeFolder(path) => {
+                if let Err(e) = open::that(&path) {
+                    self.status_message = Some(format!("폴더 열기 실패: {e}"));
+                    return Task::none();
+                }
+                exit_launcher()
             }
             // Quick Action → 백그라운드 실행, 결과를 클립보드에 복사
             Activation::ShellQuickAction => {

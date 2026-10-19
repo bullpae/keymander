@@ -112,13 +112,10 @@ pub(crate) fn excluded_name(cs: &crate::config::ContentSearchConfig, name_lower:
     }
 }
 
-/// 무시 패턴 집합 (`launcher.ignore_patterns`) — 순회 필터용 빌림 집합.
-pub(crate) fn ignore_set(launcher: &LauncherConfig) -> HashSet<&str> {
-    launcher
-        .ignore_patterns
-        .iter()
-        .map(|s| s.as_str())
-        .collect()
+/// 무시 패턴 집합 — 순회 필터용 빌림 집합. 규칙은 호출자가
+/// `launcher.effective_ignore_patterns()`로 한 번 만들어 넘긴다(기본 목록 + 추가분).
+pub(crate) fn ignore_set(patterns: &[String]) -> HashSet<&str> {
+    patterns.iter().map(|s| s.as_str()).collect()
 }
 
 /// 본문 인덱싱 관점의 디렉터리 순회 — 무시·숨김 폴더는 내려가지 않는다.
@@ -225,7 +222,9 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
 
     let allowed = allowed_extensions(launcher);
     let max_bytes = cs.max_file_kb.saturating_mul(1024);
-    let ignore_set = ignore_set(launcher);
+    let ignore_patterns = launcher.effective_ignore_patterns();
+    let ignore_set = ignore_set(&ignore_patterns);
+    let roots = launcher.effective_search_paths();
 
     // 1. 기존 인덱스 상태 로드 (path → (id, size, mtime))
     let mut existing: HashMap<String, (i64, u64, i64)> = HashMap::new();
@@ -254,7 +253,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
     // 일시 소실된 루트(외장 디스크 언마운트 등) — 하위 인덱스를 지우지 않는다
     let mut missing_roots: Vec<&std::path::PathBuf> = Vec::new();
 
-    'roots: for root in &launcher.search_paths {
+    'roots: for root in &roots {
         if !root.is_dir() {
             missing_roots.push(root);
             continue;
@@ -770,6 +769,8 @@ mod tests {
     fn test_launcher(root: &Path) -> LauncherConfig {
         LauncherConfig {
             search_paths: vec![root.to_path_buf()],
+            // 테스트는 이 경로만 — 실제 사용자 폴더(문서 등)를 섞지 않는다
+            include_user_folders: Some(false),
             ..Default::default()
         }
     }
@@ -1086,6 +1087,8 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let launcher = LauncherConfig {
             search_paths: vec![keep.path().to_path_buf(), volatile.path().to_path_buf()],
+            // 테스트는 이 경로만 — 실제 사용자 폴더(문서 등)를 섞지 않는다
+            include_user_folders: Some(false),
             ..Default::default()
         };
 

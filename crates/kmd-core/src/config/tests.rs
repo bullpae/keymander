@@ -556,3 +556,60 @@ ignore_extensions = ["cat", ".SF", "*.Inf", "  ", "*."]
     // 키를 안 적으면 비어 있다 (기존 설정 호환)
     assert!(Config::default().launcher.ignore_extensions.is_empty());
 }
+
+#[test]
+fn 키가_없으면_기본_폴더와_기본_제외_목록이_합산된다() {
+    let c = Config::from_toml_str("[launcher]\nmax_results = 10\n").unwrap();
+    assert_eq!(c.launcher.include_user_folders, Some(true));
+    assert_eq!(c.launcher.use_default_ignores, Some(true));
+    assert!(c.launcher.search_paths.is_empty());
+    assert_eq!(
+        c.launcher.effective_ignore_patterns().len(),
+        DEFAULT_IGNORE_PATTERNS.len()
+    );
+    assert_eq!(
+        c.launcher.effective_search_paths(),
+        default_user_folders(),
+        "기본 폴더만 — 예전 기본값과 같은 범위"
+    );
+}
+
+#[test]
+fn 레거시_search_paths와_ignore_patterns는_대체_의미를_지킨다() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!(
+        "[launcher]\nsearch_paths = [{:?}]\nignore_patterns = [\"only_this\"]\n",
+        dir.path().display().to_string()
+    );
+    let c = Config::from_toml_str(&toml).unwrap();
+    assert_eq!(c.launcher.include_user_folders, None, "레거시 판정");
+    assert_eq!(c.launcher.use_default_ignores, None);
+    assert_eq!(
+        c.launcher.effective_search_paths(),
+        vec![dir.path().to_path_buf()]
+    );
+    assert_eq!(
+        c.launcher.effective_ignore_patterns(),
+        vec!["only_this".to_string()]
+    );
+
+    // 저장해도 스위치 키를 새로 쓰지 않는다 — 레거시 파일은 레거시로 남는다
+    let out = toml::to_string(&c).unwrap();
+    assert!(!out.contains("include_user_folders"));
+    assert!(!out.contains("use_default_ignores"));
+}
+
+#[test]
+fn 스위치를_켜면_목록은_기본값에_더해진다() {
+    let c = Config::from_toml_str(
+        "[launcher]\nuse_default_ignores = true\nignore_patterns = [\"plugins\", \".git\"]\n",
+    )
+    .unwrap();
+    let eff = c.launcher.effective_ignore_patterns();
+    assert_eq!(
+        eff.len(),
+        DEFAULT_IGNORE_PATTERNS.len() + 1,
+        ".git은 중복이라 한 번만"
+    );
+    assert!(eff.contains(&"plugins".to_string()));
+}

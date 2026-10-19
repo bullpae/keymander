@@ -41,6 +41,7 @@ mod engine_boot;
 mod focus_flow;
 mod launch;
 mod results;
+mod scope;
 mod search_routing;
 mod settings;
 mod ui_scale;
@@ -176,6 +177,10 @@ pub struct App {
     /// 상태바에 잠깐 띄울 알림 (저장 실패 등). 다음 검색에서 지워진다.
     /// 이벤트는 검색 결과가 아니므로 결과 목록에 끼워 넣지 않는다.
     status_message: Option<String>,
+    /// `:scope`에서 방금 뺀 폴더 — Ctrl+Z로 되돌린다 (docs/18)
+    scope_undo: Option<std::path::PathBuf>,
+    /// 범위 변경 후 엔진 교체가 끝나면 상태줄에 남길 결과
+    scope_report: Option<scope::ScopeReport>,
 
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
@@ -234,6 +239,8 @@ pub enum Message {
     },
     /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
     ClipActionFinished(Result<String, String>),
+    /// `:scope` 추가·제거 후 리빌드 완료 → 새 캐시로 엔진 교체 (docs/18)
+    ScopeReindexed(Result<String, String>),
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -366,6 +373,8 @@ impl App {
             boot_focus_done: false,
             reset_ime_on_launch: reset_ime,
             status_message: None,
+            scope_undo: None,
+            scope_report: None,
             full_warmup_started: false,
             warmup_token: 0,
         };
@@ -394,6 +403,7 @@ impl App {
                 | Message::IconsReady
                 | Message::AutostartStatusLoaded(_)
                 | Message::AutostartToggleFinished(_)
+                | Message::ScopeReindexed(_)
         );
 
         let old_query_len = self.query.len();
@@ -625,6 +635,9 @@ impl App {
                 if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
                     return self.handle_submit(&modifiers);
                 }
+                if let Some(task) = self.handle_scope_key(&key, &modifiers) {
+                    return task;
+                }
                 if let Some(action) = self.match_shortcut(&key, &modifiers) {
                     return self.execute_context_action(action);
                 }
@@ -665,6 +678,7 @@ impl App {
             Message::ClipSearchFinished { generation, result } => {
                 self.handle_clip_search_finished(generation, result)
             }
+            Message::ScopeReindexed(result) => self.handle_scope_reindexed(result),
             Message::ClipActionFinished(result) => match result {
                 Ok(message) => {
                     tracing::info!("{message}");

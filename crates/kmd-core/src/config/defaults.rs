@@ -66,7 +66,7 @@ pub(super) fn default_translate_prefixes() -> Vec<String> {
 }
 
 /// Platform-specific default search paths (user directories).
-/// These become the default for `launcher.search_paths`, editable in settings.
+/// `launcher.include_user_folders`가 켜져 있으면 `search_paths`에 더해진다 (docs/18).
 ///
 /// **OS가 알려주는 실제 위치**를 먼저 쓴다. 예전엔 홈 아래 고정 이름
 /// (`Desktop`·`Documents`·`Downloads`)만 봐서 실제 위치가 다르면 놓쳤다:
@@ -77,7 +77,7 @@ pub(super) fn default_translate_prefixes() -> Vec<String> {
 ///
 /// 옛 고정 이름 후보도 그대로 둔다 — 결과는 이전 동작의 상위 집합이라 기존
 /// 사용자에게서 빠지는 폴더가 없다. 존재하는 폴더만, 중복 없이.
-pub(super) fn default_search_paths() -> Vec<PathBuf> {
+pub(crate) fn default_search_paths() -> Vec<PathBuf> {
     let mut candidates: Vec<Option<PathBuf>> = vec![
         dirs::desktop_dir(),
         dirs::document_dir(),
@@ -124,3 +124,55 @@ pub(super) fn existing_unique_dirs(
     }
     out
 }
+
+/// 기본 제외 폴더 이름 — `use_default_ignores`가 켜져 있으면 `ignore_patterns`에 더해진다.
+pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
+    // Version control
+    ".git",
+    ".svn",
+    // Build artifacts / package caches
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".tox",
+    "dist",
+    // Rust / Cargo
+    ".cargo",
+    ".rustup",
+    // Node / npm / yarn / pnpm
+    ".npm",
+    ".yarn",
+    ".pnpm-store",
+    // .NET / NuGet
+    ".nuget",
+    // Java / Gradle / Maven
+    ".gradle",
+    ".m2",
+    // Go — ~/go module cache
+    "go",
+    // General caches
+    ".cache",
+    ".local",
+    ".tmp",
+    // IDE / editor state
+    ".vscode",
+    ".cursor",
+    ".idea",
+    ".eclipse",
+    // Windows specific — user profile
+    "AppData",
+    "$Recycle.Bin",
+    "NTUSER.DAT",
+    // Windows specific — system directories (drive root)
+    "Windows",
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+    "PerfLogs",
+    "Recovery",
+    "System Volume Information",
+    "inetpub",
+    // macOS specific
+    "Library",
+    ".Trash",
+];
