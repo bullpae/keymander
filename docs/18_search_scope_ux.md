@@ -1,6 +1,6 @@
 # 검색 범위(Scope) 관리 UX 설계
 
-> 상태: **S1 구현 (2026-10-19, Unreleased)** — `:scope` 목록·자동완성·추가·제거(되돌리기)·즉시
+> 상태: **S1 구현 (v0.17.0, 2026-10-19)** — `:scope` 목록·자동완성·추가·제거(되돌리기)·즉시
 > 인덱싱, 합산 의미(`include_user_folders`·`use_default_ignores`) + 레거시 해석, 입구 E1·E3·E4·E5,
 > TUI 동등 지원, CLI `kmd scope`(E8). **결정**: 명령 `:scope`(별칭 `:dirs`), 프로그램 폴더의 하위
 > 폴더는 숨김(S2), 기본 제외 규칙은 `use_default_ignores`, E1은 S1에 포함. 남은 것: S2(폴더 종류
@@ -249,7 +249,7 @@ depth = 6
 3. **기본 제외 규칙 구조**: `use_default_ignores = true`(권장)와 `ignore_patterns_extra` 중 선택
 4. **S1 범위에 E1(경로 입력 → 추가 행)을 당겨 넣을지**: 비용이 낮고 체감이 크다
 
-## 9. macOS 패키지(번들) 처리 — 구현 (2026-10-19, Unreleased)
+## 9. macOS 패키지(번들) 처리 — 구현 (v0.17.0, 2026-10-19)
 
 > 구현: `index/package.rs`(판정) · `files.rs`(walkdir 두 곳 자식 차단 + 항목화
 > `apply_package_kind`) · `index/mod.rs`(외부 프로바이더 사후 필터) · `content_index::walk_entries`
