@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-10-19
+
 ### Added
 - **`launcher.ignore_extensions` — 확장자로 검색 대상에서 제외.** 예:
   `ignore_extensions = ["cat", "inf", "sf"]` (`.cat`·`*.cat`·대소문자 무관).
