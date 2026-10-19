@@ -97,8 +97,11 @@ impl App {
         let ctrl_like = modifiers.control();
         match key {
             keyboard::Key::Named(Named::Delete) if ctrl_like => self.scope_remove_selected(),
-            // macOS 키보드엔 Delete가 없다 — Cmd+Backspace
-            keyboard::Key::Named(Named::Backspace) if cfg!(target_os = "macos") && ctrl_like => {
+            // macOS는 ⌘D — ⌘⌫/⌫ 조합은 입력창이 함께 받아 `:scope` 글자를 지워 버린다
+            // (구독은 위젯이 소비한 키도 받는다). ⌘D는 입력창에 바인딩이 없다.
+            keyboard::Key::Character(c)
+                if cfg!(target_os = "macos") && ctrl_like && c.eq_ignore_ascii_case("d") =>
+            {
                 self.scope_remove_selected()
             }
             keyboard::Key::Character(c) if ctrl_like && c.eq_ignore_ascii_case("z") => {
@@ -162,12 +165,12 @@ impl App {
     /// 엔진 교체가 끝난 뒤 남길 결과 문구 (handle_engine_ready가 부른다).
     pub(super) fn take_scope_report_message(&mut self) -> Option<String> {
         Some(match self.scope_report.take()? {
-            ScopeReport::Added(p) => format!(
-                "{} 추가됨 — {}개 검색 가능",
-                p.display(),
-                self.engine.count_within(&p)
-            ),
-            ScopeReport::Removed(_, msg) => format!("{msg} · Ctrl+Z 되돌리기"),
+            ScopeReport::Added(p) => {
+                kmd_core::scope::added_message(&p, self.engine.count_within(&p))
+            }
+            ScopeReport::Removed(_, msg) => {
+                format!("{msg} · {} 되돌리기", kmd_core::scope::UNDO_KEY_LABEL)
+            }
         })
     }
 }

@@ -122,7 +122,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         prefix: QueryPrefix::Scope,
         aliases: crate::scope::SCOPE_ALIASES,
         title: ":scope  Search Scope",
-        usage: "Type :scope  (folders to index — add with :scope D:\\Util, remove with Ctrl+Del)",
+        usage: "Type :scope  (folders to index — add with :scope D:\\Util, remove with Ctrl+Del / \u{2318}D)",
         seed: ":scope",
         icon_emoji: "\u{1F4C1}",
         icon_ascii: "[DIR]",
