@@ -19,8 +19,8 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
                 println!("  {}  — {}", s.path.display(), s.reason_label());
             }
             println!(
-                "\n추가: 런처에서 `?` 입력 후 제안 항목에 Enter, 또는 config.toml의\n\
-                 launcher.search_paths에 경로를 직접 추가하세요."
+                "\n추가: 런처에서 `?` 입력 후 제안 항목에 Enter, `:scope <폴더>`,\n\
+                 또는 `kmd scope add <폴더>`."
             );
         }
         if !rebuild && !stats {
@@ -39,6 +39,26 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
         return Ok(());
     }
 
+    // 데몬이 떠 있으면 데몬에 맡긴다 — 여기서 캐시만 새로 쓰면 데몬 메모리의
+    // 엔진은 옛 인덱스 그대로라, 예전엔 리빌드 후 데몬을 재시작해야 했다.
+    if rebuild {
+        if let Ok(kmd_core::ipc::Response::Ok { message }) =
+            kmd_core::ipc::send_request_with_timeout(
+                &kmd_core::ipc::Request::RebuildIndex,
+                std::time::Duration::from_secs(120),
+            )
+        {
+            println!("데몬이 인덱스를 다시 만들었습니다 — {message}");
+            println!("(본문 인덱스는 데몬이 이어서 갱신합니다)");
+            if let Some(index) =
+                kmd_core::index::store::try_load_cached(&bin_path, &json_path, expected_version)
+            {
+                print_stats(&index);
+            }
+            return Ok(());
+        }
+    }
+
     if rebuild || (!bin_path.exists() && !json_path.exists()) {
         let provider = kmd_core::index::files::detect_provider(
             &config.launcher.file_search_provider,
@@ -46,9 +66,10 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
         );
         println!("File provider: {}", provider);
 
-        if !config.launcher.search_paths.is_empty() {
+        let roots = config.launcher.effective_search_paths();
+        if !roots.is_empty() {
             println!("Search paths:");
-            for d in &config.launcher.search_paths {
+            for d in &roots {
                 println!("  {}", d.display());
             }
         }

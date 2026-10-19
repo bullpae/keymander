@@ -22,6 +22,7 @@ pub mod portable;
 pub mod process;
 pub mod prompt;
 pub mod query_prefix;
+pub mod scope;
 pub mod search;
 pub mod single_instance;
 pub mod textenc;

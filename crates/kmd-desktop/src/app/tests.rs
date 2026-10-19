@@ -1243,11 +1243,12 @@ fn set_목록_행_구성_스냅샷() {
     let mut app = make_test_app();
     let actions = settings_actions(&mut app);
 
-    // 고정 항목이 이 순서로 먼저 온다
-    let head: Vec<&str> = actions.iter().take(7).map(String::as_str).collect();
+    // 고정 항목이 이 순서로 먼저 온다 — 맨 위는 검색 범위 요약 (docs/18 E3)
+    let head: Vec<&str> = actions.iter().take(8).map(String::as_str).collect();
     assert_eq!(
         head,
         vec![
+            kmd_core::scope::SCOPE_OPEN_MARKER,
             "kmd:settings:config",
             "kmd:settings:dir",
             "kmd:settings:noop",
@@ -1386,4 +1387,102 @@ fn 알_수_없는_액션과_noop은_상태를_망가뜨리지_않는다() {
     unknown.item.keywords = "kmd:settings:no_such_action".to_string();
     let _ = app.handle_settings_action(&unknown);
     assert!(app.query.is_empty(), "미지 액션은 경고 후 목록을 닫는다");
+}
+
+// ── :scope 검색 범위 관리 (docs/18) ──
+
+/// 테스트용 임시 폴더 (이 크레이트엔 tempfile 의존성이 없다)
+struct ScopeTmp(std::path::PathBuf);
+
+impl ScopeTmp {
+    fn new() -> Self {
+        let seq = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let p = std::env::temp_dir().join(format!("kmd_scope_{}_{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        Self(p)
+    }
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScopeTmp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scope_test_app(root: &std::path::Path) -> App {
+    let mut app = make_test_app();
+    app.runtime_config.launcher.search_paths = vec![root.to_path_buf()];
+    app.runtime_config.launcher.include_user_folders = Some(false);
+    app
+}
+
+#[test]
+fn scope_목록은_추가행_폴더행_제외규칙_순서() {
+    let tmp = ScopeTmp::new();
+    let mut app = scope_test_app(tmp.path());
+    app.query = ":scope".into();
+    app.handle_scope_query(":scope");
+    let kws: Vec<&str> = app
+        .results
+        .iter()
+        .map(|r| r.item.keywords.as_str())
+        .collect();
+    assert_eq!(kws[0], kmd_core::scope::SCOPE_OPEN_MARKER);
+    assert_eq!(
+        kws[1],
+        format!(
+            "{}{}",
+            kmd_core::scope::SCOPE_FOLDER_MARKER,
+            tmp.path().display()
+        )
+    );
+    assert_eq!(*kws.last().unwrap(), "kmd:settings:config");
+}
+
+#[test]
+fn scope_ctrl_del_제거와_ctrl_z_되돌리기() {
+    let tmp = ScopeTmp::new();
+    let mut app = scope_test_app(tmp.path());
+    app.query = ":scope".into();
+    app.handle_scope_query(":scope");
+    app.selected = 1;
+
+    let del = keyboard::Key::Named(keyboard::key::Named::Delete);
+    assert!(app
+        .handle_scope_key(&del, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert!(app.runtime_config.launcher.search_paths.is_empty());
+    assert_eq!(app.scope_undo.as_deref(), Some(tmp.path()));
+
+    app.query = ":scope".into();
+    let z = keyboard::Key::Character("z".into());
+    assert!(app
+        .handle_scope_key(&z, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(
+        app.runtime_config.launcher.search_paths,
+        vec![tmp.path().to_path_buf()]
+    );
+    // `:scope` 밖에서는 Ctrl+Z를 가로채지 않는다
+    app.query = "vera".into();
+    assert!(app
+        .handle_scope_key(&z, &keyboard::Modifiers::CTRL)
+        .is_none());
+}
+
+#[test]
+fn 범위_밖_폴더_경로를_치면_맨_위에_추가_행() {
+    let tmp = ScopeTmp::new();
+    let outside = ScopeTmp::new();
+    let mut app = scope_test_app(tmp.path());
+    let q = outside.path().display().to_string();
+    app.handle_main_search(&q);
+    assert!(app.results[0]
+        .item
+        .keywords
+        .starts_with(kmd_core::scope::SCOPE_ADD_MARKER));
 }

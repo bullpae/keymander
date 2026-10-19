@@ -57,6 +57,11 @@ enum Commands {
         #[arg(long)]
         suggest: bool,
     },
+    /// Manage search scope — folders to index (list / add / rm)
+    Scope {
+        #[command(subcommand)]
+        action: Option<ScopeAction>,
+    },
     /// Search inside document contents (FTS5 full-text index)
     Grep {
         /// Search query (2+ chars). Operators: "exact phrase", -exclude, ext:md, path:docs
@@ -123,6 +128,17 @@ enum Commands {
         #[command(subcommand)]
         action: KeymapAction,
     },
+}
+
+#[derive(Subcommand)]
+enum ScopeAction {
+    /// List folders in the search scope
+    List,
+    /// Add a folder and re-index now
+    Add { path: String },
+    /// Remove a folder and re-index now
+    #[command(alias = "remove")]
+    Rm { path: String },
 }
 
 #[derive(Subcommand)]
@@ -330,6 +346,13 @@ fn main() -> color_eyre::Result<()> {
         }
         Some(Commands::Grep { query, sync, limit }) => {
             cmd::grep::run(&query.join(" "), limit, sync)?;
+        }
+        Some(Commands::Scope { action }) => {
+            cmd::scope::run(match action {
+                None | Some(ScopeAction::List) => cmd::scope::Action::List,
+                Some(ScopeAction::Add { path }) => cmd::scope::Action::Add(path),
+                Some(ScopeAction::Rm { path }) => cmd::scope::Action::Remove(path),
+            })?;
         }
         Some(Commands::Index {
             rebuild,

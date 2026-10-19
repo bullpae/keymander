@@ -169,17 +169,32 @@ pub(super) fn execute_selected(
             state.selected_index = 0;
             update_search(state, engine, db);
         }
-        // 폴더 제안 → search_paths에 추가 + config 저장 (docs/15 P2)
+        // 폴더 제안 → `:scope` 추가와 같은 경로 (저장 + 바로 인덱싱, docs/18 E5)
         Activation::FolderSuggest => {
-            if let Some(msg) = kmd_core::folder_suggest::execute_suggest_action(
-                &mut state.config,
-                &result.item.keywords,
-            ) {
-                state.status_message = Some(msg);
+            if let Some(path) = kmd_core::folder_suggest::suggest_path(&result.item.keywords) {
+                super::scope::scope_add(state, engine, &path);
             }
             state.selected_index = 0;
+            let msg = state.status_message.take();
             update_search(state, engine, db);
+            state.status_message = msg;
         }
+        Activation::ScopeAdd(path) => {
+            super::scope::scope_add(state, engine, Path::new(&path));
+            let msg = state.status_message.take();
+            update_search(state, engine, db);
+            state.status_message = msg;
+        }
+        Activation::ScopeFolder(path) => match action::open_with_system(&path) {
+            action::ActionResult::Error(e) => {
+                state.status_message = Some(format!("\u{274C} 폴더 열기 실패: {e}"));
+            }
+            _ => {
+                if state.quit_on_launch {
+                    state.should_quit = true;
+                }
+            }
+        },
         // 설정 모달 열기 (:set)
         Activation::OpenSettingsModal => {
             state.settings = Some(SettingsState::new(state.config.clone()));

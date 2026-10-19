@@ -58,6 +58,8 @@ pub struct ProviderConfig {
     pub search_depth: usize,
     pub search_paths: Vec<PathBuf>,
     pub ignore_patterns: Vec<String>,
+    /// 제외할 파일 확장자 — 정규화된 소문자 (`LauncherConfig::ignored_extension_set`)
+    pub ignore_extensions: HashSet<String>,
     pub everything_path: Option<PathBuf>,
     /// Auto-scan available drive roots
     pub scan_drives: bool,
@@ -78,6 +80,7 @@ impl Default for ProviderConfig {
                 "node_modules".to_string(),
                 "target".to_string(),
             ],
+            ignore_extensions: HashSet::new(),
             everything_path: None,
             scan_drives: true,
             drive_scan_depth: 3,
@@ -143,7 +146,11 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
             .into_iter()
             // 루트(depth 0)는 무시 규칙 예외 — 숨김 폴더를 search_paths에 직접 넣으면
             // 본문 인덱스엔 들어가는데 파일명 인덱스에선 통째로 빠지던 불일치 해소
-            .filter_entry(|e| e.depth() == 0 || !is_ignored_dir(e, &ignore_set));
+            .filter_entry(|e| {
+                e.depth() == 0
+                    || !(is_ignored_dir(e, &ignore_set)
+                        || is_ignored_file(e, &config.ignore_extensions))
+            });
 
         walkdir_into_items(walker, &mut items, &mut seen, limit, config.use_emoji);
 
@@ -328,7 +335,7 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
-                if is_ignored_dir(e, &ignore_set) {
+                if is_ignored_dir(e, &ignore_set) || is_ignored_file(e, &config.ignore_extensions) {
                     return false;
                 }
                 // Skip priority directories (already scanned)
@@ -705,6 +712,21 @@ fn walkdir_into_items<I>(
             break;
         }
     }
+}
+
+/// 파일 확장자가 `ignore_extensions`에 들면 true (폴더는 항상 false).
+fn is_ignored_file(entry: &walkdir::DirEntry, ignore_ext: &HashSet<String>) -> bool {
+    entry.file_type().is_file() && has_ignored_extension(entry.path(), ignore_ext)
+}
+
+/// 경로의 확장자가 제외 집합에 드는지 — 대소문자 무시. 집합은 정규화된 소문자.
+/// (외부 프로바이더(fd·Everything 등) 결과도 인덱스 빌드 끝에서 같은 규칙으로 거른다)
+pub(crate) fn has_ignored_extension(path: &Path, ignore_ext: &HashSet<String>) -> bool {
+    !ignore_ext.is_empty()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| ignore_ext.contains(&e.to_lowercase()))
 }
 
 /// Check if a walkdir entry should be ignored (directory name matches ignore pattern)
@@ -1102,5 +1124,46 @@ mod tests {
         assert_eq!(states.get("$Recycle.Bin"), Some(&true));
         assert_eq!(states.get("node_modules"), Some(&true));
         assert_eq!(states.get("keep"), Some(&false));
+    }
+
+    #[test]
+    fn priority_scan_skips_ignored_extensions_but_keeps_folders() {
+        // D:\Util\VeraCrypt 재현: exe 옆의 .cat/.inf는 빠지고 exe·폴더는 남는다
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let app = tmp.path().join("VeraCrypt");
+        must_mkdir(&app);
+        must_mkdir(&tmp.path().join("weird.cat")); // 확장자처럼 생긴 폴더 이름
+        must_write(&app.join("VeraCrypt.exe"), "");
+        must_write(&app.join("veracrypt.cat"), "");
+        must_write(&app.join("VERACRYPT.INF"), "");
+
+        let config = ProviderConfig {
+            search_paths: vec![tmp.path().to_path_buf()],
+            ignore_extensions: ["cat", "inf"].iter().map(|s| s.to_string()).collect(),
+            scan_drives: false,
+            ..Default::default()
+        };
+        let names: HashSet<String> = collect_priority_files(&config)
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+
+        assert!(names.contains("VeraCrypt.exe"));
+        assert!(names.contains("VeraCrypt"));
+        assert!(names.contains("weird.cat"), "폴더는 확장자 규칙 대상 아님");
+        assert!(!names.contains("veracrypt.cat"));
+        assert!(!names.contains("VERACRYPT.INF"), "대소문자 무시");
+    }
+
+    #[test]
+    fn has_ignored_extension_is_case_insensitive_and_empty_safe() {
+        let set: HashSet<String> = ["sf".to_string()].into_iter().collect();
+        assert!(has_ignored_extension(
+            Path::new("META-INF/DBEAVER.SF"),
+            &set
+        ));
+        assert!(!has_ignored_extension(Path::new("a.sfx"), &set));
+        assert!(!has_ignored_extension(Path::new("noext"), &set));
+        assert!(!has_ignored_extension(Path::new("a.sf"), &HashSet::new()));
     }
 }

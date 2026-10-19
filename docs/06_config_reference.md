@@ -17,7 +17,7 @@
 ```mermaid
 graph TB
     ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme\nemoji_icons, reset_ime_on_launch, editor"]
-    ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, quit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
+    ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, ignore_extensions\nquit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
     ConfigToml --> KindWeights["[launcher.kind_weights]\ndirectory, app, file\nexecutable, system_cmd, web_search"]
     ConfigToml --> Keymap["[launcher.keymap]\nbackend, kanata_path\nprofile_dir, active_profile"]
     ConfigToml --> Keybindings["[keybindings]\nglobal_hotkey, quit\nnext, prev, select, toggle_preview"]
@@ -46,10 +46,11 @@ window_transparency = "auto" # (Desktop) auto = 투명 창(리사이즈 없음) 
 [launcher]
 file_search_provider = "auto"     # 파일 검색 프로바이더
 # everything_path = "C:\\Program Files\\Everything\\es.exe"
-# search_paths = []              # 검색 디렉토리 (기본: 플랫폼별 사용자 폴더)
+# search_paths = ["D:\\Util"]   # 추가 검색 폴더 — 기본 사용자 폴더에 더해짐 (:scope로 관리)
 max_results = 5000                # 파일 프로바이더 최대 결과 수
 search_depth = 4                  # 최대 재귀 탐색 깊이
-ignore_patterns = [".git", "node_modules", "target", "__pycache__", "Windows", "Program Files"]
+# ignore_patterns = ["plugins"]  # 추가 제외 폴더 이름 — 기본 제외 목록에 더해짐
+# ignore_extensions = ["cat", "inf", "sf"]   # 파일 확장자로 제외
 quit_on_launch = true             # 실행 후 kmd 자동 종료
 index_directories = true          # 폴더도 인덱스에 포함
 scan_drives = false               # 드라이브 루트 자동 스캔 (C:\, D:\ 등)
@@ -107,10 +108,14 @@ toggle_preview = "ctrl+p"
 |----|------|--------|------|
 | file_search_provider | String | "auto" | 파일 검색 백엔드 |
 | everything_path | Path? | None | es.exe 경로 (Windows) |
-| search_paths | Vec\<Path\> | 플랫폼별 | 검색 대상 디렉토리. 기본값은 **OS가 알려주는 실제** 바탕 화면·문서·다운로드 위치(Windows는 OneDrive 백업으로 옮겨진 위치 포함) + Windows OneDrive 루트(개인·회사). 키를 적지 않았을 때만 기본값을 쓴다 |
+| search_paths | Vec\<Path\> | [] | **추가** 검색 폴더. `include_user_folders`가 켜져 있으면 기본 사용자 폴더에 더해진다. 런처 `:scope`·`kmd scope add`로 관리 (docs/18) |
+| include_user_folders | bool | true | OS가 알려주는 **실제** 바탕 화면·문서·다운로드 위치(Windows는 OneDrive 백업으로 옮겨진 위치 포함) + OneDrive 루트(개인·회사)를 범위에 포함. **이 키 없이 `search_paths`만 적힌 예전 설정은 적힌 목록만 쓴다**(옛 "대체" 의미 유지). `:scope`로 처음 바꿀 때 같은 범위의 새 형식으로 자동 전환 |
+| hidden_user_folders | Vec\<Path\> | [] | 범위에서 뺀 기본 사용자 폴더 (`:scope`에서 Ctrl+Del) |
 | max_results | usize | 5000 | 최대 인덱스 항목 수 |
 | search_depth | usize | 4 | 최대 재귀 디렉토리 탐색 깊이 |
-| ignore_patterns | Vec\<String\> | [".git", ...] | 무시 패턴 |
+| ignore_patterns | Vec\<String\> | [] | **추가로** 무시할 폴더 이름(정확히 일치, 와일드카드 없음). `use_default_ignores`가 켜져 있으면 기본 목록(`.git`·`node_modules`·`AppData` 등 36개)에 더해진다 |
+| use_default_ignores | bool | true | 기본 제외 폴더 목록을 함께 쓴다. **이 키 없이 `ignore_patterns`만 적힌 예전 설정은 적힌 목록만 쓴다**(옛 "대체" 의미 유지) |
+| ignore_extensions | Vec\<String\> | [] | 무시할 **파일 확장자**(`cat`·`.cat`·`*.cat`, 대소문자 무시). 파일에만 적용되고 폴더는 남는다. 본문 인덱스도 같은 규칙 |
 | quit_on_launch | bool | true | 실행 후 kmd 종료 (런처 모드) |
 | index_directories | bool | true | 폴더를 검색 인덱스에 포함 |
 | scan_drives | bool | false | 드라이브 루트 자동 스캔 |
@@ -123,7 +128,7 @@ toggle_preview = "ctrl+p"
 ### 4.2.1 [launcher.content_search] — 문서 본문 검색 (docs/15)
 
 파일 이름이 아니라 **내용**으로 찾는 FTS5 인덱스. 스캔 범위는 `search_paths` +
-`ignore_patterns` + `search_depth`를 그대로 공유한다. 데몬이 인덱스 리프레시
+`ignore_patterns` + `ignore_extensions` + `search_depth`를 그대로 공유한다. 데몬이 인덱스 리프레시
 주기(`index_refresh_minutes`)마다 증분 갱신하고(mtime+size 불일치만 재인덱싱),
 **파일 변경도 실시간 감시**(notify, 500ms 디바운스)해 곧바로 반영한다.
 데몬이 없으면 `kmd index --rebuild`가 함께 갱신한다.

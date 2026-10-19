@@ -91,14 +91,37 @@ pub struct LauncherConfig {
     pub file_search_provider: String,
     /// Everything CLI (es.exe) path (Windows). Empty = auto-detect.
     pub everything_path: Option<PathBuf>,
-    /// Directories to search for files
+    /// 추가 검색 폴더. `include_user_folders`가 켜져 있으면 OS 기본 사용자 폴더에
+    /// **더해진다** (docs/18). 실제 스캔 루트는 [`Self::effective_search_paths`].
     pub search_paths: Vec<PathBuf>,
+    /// OS 기본 사용자 폴더(바탕 화면·문서·다운로드·OneDrive)를 범위에 포함.
+    ///
+    /// `None` = 레거시 설정 — `search_paths`만 적고 이 키가 없던 파일이다. 예전엔
+    /// `search_paths`를 적으면 기본 폴더를 **대체**했으므로, 그 의미를 그대로 지켜
+    /// 적힌 목록만 쓴다. 판정은 로드 시 [`super::Config::from_toml_str`]가 한다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_user_folders: Option<bool>,
+    /// 범위에서 뺀 기본 사용자 폴더. 경로로 기억하므로 OS가 다른 기본 폴더를
+    /// 알려 줘도(OneDrive 리디렉션 등) 뺀 것만 계속 빠진다.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_user_folders: Vec<PathBuf>,
     /// Maximum search results from file providers
     pub max_results: usize,
     /// Maximum recursive directory depth for file scanning (default: 4)
     pub search_depth: usize,
-    /// Patterns to ignore during file indexing
+    /// 추가 제외 폴더 이름(정확히 일치). `use_default_ignores`가 켜져 있으면
+    /// [`DEFAULT_IGNORE_PATTERNS`]에 **더해진다**. 실제 규칙은 [`Self::effective_ignore_patterns`].
     pub ignore_patterns: Vec<String>,
+    /// 기본 제외 폴더 목록을 함께 쓴다. `None` = 레거시(`ignore_patterns`만 적은
+    /// 파일) — 예전 "대체" 의미대로 적힌 목록만 쓴다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_default_ignores: Option<bool>,
+    /// 인덱싱에서 뺄 파일 확장자 (대소문자 무시). `cat`·`.cat`·`*.cat` 모두 허용.
+    /// `ignore_patterns`는 폴더 이름만 맞추므로, 실행 파일 옆의 부속 파일
+    /// (`veracrypt.cat`·`.inf` 등)은 폴더째 빼지 않고는 거를 수 없었다.
+    /// 파일에만 적용(폴더 제외) — 본문 인덱스도 같은 규칙을 따른다.
+    #[serde(default)]
+    pub ignore_extensions: Vec<String>,
     /// Quit kmd after launching a program/file
     pub quit_on_launch: bool,
     /// Whether to index directories (not just files)
@@ -200,65 +223,86 @@ impl Default for ContentSearchConfig {
     }
 }
 
+impl LauncherConfig {
+    /// 범위에 들어가는 OS 기본 사용자 폴더 — 꺼져 있거나 레거시면 비어 있다.
+    pub fn user_folders(&self) -> Vec<PathBuf> {
+        if self.include_user_folders != Some(true) {
+            return Vec::new();
+        }
+        default_search_paths()
+            .into_iter()
+            .filter(|p| !self.hidden_user_folders.iter().any(|h| same_path(h, p)))
+            .collect()
+    }
+
+    /// 실제 스캔 루트 — 기본 사용자 폴더 + `search_paths`, 중복 없이(순서 유지).
+    ///
+    /// `search_paths`의 항목은 지금 없는 폴더라도 남긴다 — 외장 드라이브가 잠시
+    /// 빠졌을 때 본문 인덱스가 그 아래를 지우지 않게 하는 판단(content_index)이
+    /// 루트 목록에 기대고 있다. 스캔하는 쪽이 존재 여부를 따로 확인한다.
+    pub fn effective_search_paths(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        for p in self
+            .user_folders()
+            .into_iter()
+            .chain(self.search_paths.iter().cloned())
+        {
+            if !out.iter().any(|seen| same_path(seen, &p)) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// 실제 제외 폴더 규칙 — 기본 목록(켜져 있으면) + `ignore_patterns`, 중복 없이.
+    pub fn effective_ignore_patterns(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let defaults: &[&str] = if self.use_default_ignores == Some(true) {
+            DEFAULT_IGNORE_PATTERNS
+        } else {
+            &[]
+        };
+        for p in defaults
+            .iter()
+            .map(|s| s.to_string())
+            .chain(self.ignore_patterns.iter().cloned())
+        {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// `ignore_extensions`를 비교용으로 정규화한 집합 — 소문자, 앞의 `*`·`.` 제거.
+    pub fn ignored_extension_set(&self) -> std::collections::HashSet<String> {
+        self.ignore_extensions
+            .iter()
+            .map(|e| {
+                e.trim()
+                    .trim_start_matches('*')
+                    .trim_start_matches('.')
+                    .to_lowercase()
+            })
+            .filter(|e| !e.is_empty())
+            .collect()
+    }
+}
+
 impl Default for LauncherConfig {
     fn default() -> Self {
         Self {
             file_search_provider: "auto".to_string(),
             everything_path: None,
-            search_paths: default_search_paths(),
+            search_paths: Vec::new(),
+            include_user_folders: Some(true),
+            hidden_user_folders: Vec::new(),
             // Conservative defaults to reduce cold-start indexing cost.
             max_results: 5000,
             search_depth: 4,
-            ignore_patterns: vec![
-                // Version control
-                ".git".to_string(),
-                ".svn".to_string(),
-                // Build artifacts / package caches
-                "node_modules".to_string(),
-                "target".to_string(),
-                "__pycache__".to_string(),
-                ".tox".to_string(),
-                "dist".to_string(),
-                // Rust / Cargo
-                ".cargo".to_string(),
-                ".rustup".to_string(),
-                // Node / npm / yarn / pnpm
-                ".npm".to_string(),
-                ".yarn".to_string(),
-                ".pnpm-store".to_string(),
-                // .NET / NuGet
-                ".nuget".to_string(),
-                // Java / Gradle / Maven
-                ".gradle".to_string(),
-                ".m2".to_string(),
-                // Go
-                "go".to_string(), // ~/go module cache
-                // General caches
-                ".cache".to_string(),
-                ".local".to_string(),
-                ".tmp".to_string(),
-                // IDE / editor state
-                ".vscode".to_string(),
-                ".cursor".to_string(),
-                ".idea".to_string(),
-                ".eclipse".to_string(),
-                // Windows specific — user profile
-                "AppData".to_string(),
-                "$Recycle.Bin".to_string(),
-                "NTUSER.DAT".to_string(),
-                // Windows specific — system directories (C:\ root)
-                "Windows".to_string(),
-                "Program Files".to_string(),
-                "Program Files (x86)".to_string(),
-                "ProgramData".to_string(),
-                "PerfLogs".to_string(),
-                "Recovery".to_string(),
-                "System Volume Information".to_string(),
-                "inetpub".to_string(),
-                // macOS specific
-                "Library".to_string(),
-                ".Trash".to_string(),
-            ],
+            ignore_patterns: Vec::new(),
+            use_default_ignores: Some(true),
+            ignore_extensions: Vec::new(),
             quit_on_launch: true,
             index_directories: true,
             scan_drives: false,
@@ -372,4 +416,9 @@ impl Default for KeybindingsConfig {
             toggle_preview: "ctrl+p".to_string(),
         }
     }
+}
+
+/// 같은 폴더인지 — Windows는 대소문자·구분자 무시 (`fsutil::path_within` 양방향).
+pub(crate) fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    crate::fsutil::path_within(a, b) && crate::fsutil::path_within(b, a)
 }

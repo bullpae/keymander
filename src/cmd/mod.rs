@@ -9,6 +9,7 @@ pub mod launch;
 pub mod plugin;
 pub mod portable;
 pub mod prompt;
+pub mod scope;
 pub mod search;
 pub mod upgrade;
 pub mod version;

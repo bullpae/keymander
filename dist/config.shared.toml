@@ -76,12 +76,20 @@ reset_ime_on_launch = true
 # scan_drives = false
 # drive_scan_depth = 2
 
-# 검색할 디렉토리 (기본: Desktop, Documents, Downloads)
-# Windows 예: search_paths = ["C:\\Users\\사용자\\Documents", "D:\\Projects"]
-# macOS 예:  search_paths = ["/Users/you/Documents"]
+# 검색 범위 — 런처에서 :scope (추가 :scope D:\Util, 제거 Ctrl+Del) 또는 kmd scope add <폴더>
+# 기본 사용자 폴더(바탕 화면·문서·다운로드·OneDrive)에 아래 폴더가 "더해진다".
+# Windows 예: search_paths = ["D:\\Util", "D:\\Projects"]
+# macOS 예:  search_paths = ["/Users/you/Projects"]
+# include_user_folders = true     # false면 기본 사용자 폴더를 빼고 search_paths만
+
+# 추가 제외 폴더 이름 — 기본 제외 목록(.git·node_modules·AppData 등)에 더해진다
+# ignore_patterns = ["plugins"]
+
+# 제외할 파일 확장자 (파일만 — 폴더는 ignore_patterns로). 대소문자 무시.
+# ignore_extensions = ["cat", "inf", "sf"]
 
 # ── 문서 본문 검색 (FTS5, docs/15) ──────────────────────────
-# 스캔 범위는 search_paths·ignore_patterns·search_depth를 그대로 공유.
+# 스캔 범위는 search_paths·ignore_patterns·ignore_extensions·search_depth를 그대로 공유.
 # CLI: kmd grep <질의>  (데몬이 리프레시 주기마다 자동 갱신)
 # [launcher.content_search]
 # enabled = true

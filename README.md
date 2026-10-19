@@ -531,6 +531,7 @@ leading `/` (e.g. `/help`, `/calc 2+3`). Unknown `:command` input shows an
 | `:t` / `:transform` | Quick Transform | `:t spell`, `:t trko text` | Clipboard text → spell check / translate |
 | `:prompt` / `:pt` | Prompt templates | `:prompt add review ...` | Manage reusable prompt templates for `@ll` |
 | `:f` | Folder search | `:f ~/docs report` | Search inside a specific folder |
+| `:scope` | Search scope | `:scope D:\Util` | Add/remove folders to index (Ctrl+Del remove, Ctrl+Z undo) — indexed right away |
 | `:keys` / `:k` | Keybinding sheet | `:keys` | Show keybinding cheatsheet |
 | `:keymap` / `:km` | Keymap control | `:km on`, `:km off` | Keymap status, on/off, profile switch |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
@@ -748,6 +749,7 @@ web_search = 20
 
 # Patterns to exclude from indexing
 # ignore_patterns = [".git", "node_modules", "target", "Windows", "Program Files"]
+# ignore_extensions = ["cat", "inf"]   # 확장자로 제외 (파일만, 대소문자 무시)
 
 [keybindings]
 global_hotkey = "alt+space"

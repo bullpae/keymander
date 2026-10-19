@@ -195,6 +195,14 @@ impl SearchEngine {
         self.all_items.is_empty()
     }
 
+    /// `root` 아래에 인덱싱된 항목 수 — `:scope` 목록의 폴더별 개수 (docs/18).
+    pub fn count_within(&self, root: &std::path::Path) -> usize {
+        self.all_items
+            .iter()
+            .filter(|i| crate::fsutil::path_within(std::path::Path::new(&i.path), root))
+            .count()
+    }
+
     /// Set the kind weights for score boosting
     pub fn set_kind_weights(&mut self, weights: KindWeights) {
         self.kind_weights = weights;

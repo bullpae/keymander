@@ -26,6 +26,10 @@ pub enum Activation {
     PromptCommit,
     /// 폴더 제안 → search_paths에 추가 (마커는 항목 keywords)
     FolderSuggest,
+    /// `:scope` 추가 — 이 폴더를 검색 범위에 넣고 바로 인덱싱 (docs/18)
+    ScopeAdd(String),
+    /// `:scope` 목록의 범위 폴더 — Enter는 탐색기에서 열기 (Ctrl+Del 제거는 UI 단축키)
+    ScopeFolder(String),
     /// 데스크톱 설정 항목 (`kmd:settings:*`)
     Settings,
     /// 키맵 항목 (`kmd:keymap:*`, noop 제외)
@@ -84,6 +88,21 @@ pub fn classify(item: &IndexItem) -> Activation {
     }
     if kw.starts_with(crate::folder_suggest::SUGGEST_MARKER) {
         return Activation::FolderSuggest;
+    }
+    if let Some(path) = kw.strip_prefix(crate::scope::SCOPE_ADD_MARKER) {
+        return Activation::ScopeAdd(path.to_string());
+    }
+    if let Some(path) = kw.strip_prefix(crate::scope::SCOPE_FOLDER_MARKER) {
+        return Activation::ScopeFolder(path.to_string());
+    }
+    if let Some(path) = kw.strip_prefix(crate::scope::SCOPE_BROWSE_MARKER) {
+        return Activation::SetQuery(crate::scope::browse_seed(path));
+    }
+    if kw == crate::scope::SCOPE_OPEN_MARKER {
+        return Activation::SetQuery(":scope ".to_string());
+    }
+    if kw == crate::scope::SCOPE_NOOP_MARKER {
+        return Activation::Noop;
     }
     if kw.starts_with("kmd:folder_search:") {
         let seed = item.path.trim();

@@ -14,6 +14,14 @@ use crate::search::SearchResult;
 const HISTORY_BOOST_LIMIT: usize = 500;
 /// Frecency 부스트 상한 — search_score(최대 ~200)와 균형 유지
 const FRECENCY_BOOST_CAP: u32 = 200;
+/// 한 번이라도 실행한 항목의 기본 부스트 — frecency 위에 더한다.
+///
+/// 이게 없으면 1회 실행 부스트가 +16(1시간 내)~+1에 그쳐, 같은 이름의 폴더
+/// (`D:\Util\VeraCrypt` 110점)가 그 안의 실행 파일(`VeraCrypt.exe` 70점)을
+/// 영영 이긴다 — 종류 가중치 차(폴더 80·파일 50)만으로 40점이 벌어진다.
+/// "실행한 쪽이 위로"를 1회 실행으로 보장하되, 매칭 품질 차가 큰 결과까지
+/// 뒤집지 않게 search_score 범위(~200)의 1/4로 둔다.
+const LAUNCHED_BASE_BOOST: u32 = 50;
 
 /// value → (frequency, executed_at) — `load_boost_map`으로 만들어 재사용하는 캐시.
 ///
@@ -50,7 +58,9 @@ pub fn boost_results(results: &mut [SearchResult], db: &Database) {
 pub fn boost_results_with_map(results: &mut [SearchResult], freq_map: &FrecencyMap) {
     for result in results.iter_mut() {
         if let Some((freq, executed_at)) = freq_map.get(&result.item.path) {
-            let boost = frecency_score(*freq, executed_at).min(FRECENCY_BOOST_CAP);
+            let boost = LAUNCHED_BASE_BOOST
+                .saturating_add(frecency_score(*freq, executed_at))
+                .min(FRECENCY_BOOST_CAP);
             result.score = result.score.saturating_add(boost);
         }
     }
@@ -169,8 +179,8 @@ mod tests {
         boost_results(&mut results, &db);
 
         // frequency=5, 방금 실행 → recency_weight=16
-        // frecency = 5 * 16 = 80, capped at 200 → boost = 80
-        // b: 100 + 80 = 180 < a: 500 → a가 여전히 1등
+        // boost = 기본 50 + frecency 5*16=80 = 130 (CAP 200 이하)
+        // b: 100 + 130 = 230 < a: 500 → a가 여전히 1등
         assert_eq!(results[0].item.path, "a");
 
         // 더 많이 사용하면 CAP에 도달
@@ -203,6 +213,26 @@ mod tests {
         assert_eq!(via_map[0].item.path, "b", "이력 있는 b가 부스트되어 1등");
         assert_eq!(via_map[0].item.path, via_db[0].item.path);
         assert_eq!(via_map[0].score, via_db[0].score);
+    }
+
+    #[test]
+    fn test_single_launch_lifts_exe_over_same_name_folder() {
+        // 실측 점수 재현: "vera" → 폴더 D:\Util\VeraCrypt 110, VeraCrypt.exe 70.
+        // 실행 파일을 한 번 실행하면 다음 검색부터 폴더보다 위에 와야 한다.
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        record_launch(&db, ItemKind::File, "exe", None);
+
+        let mut results = vec![make_result("folder", 110), make_result("exe", 70)];
+        boost_results(&mut results, &db);
+        assert_eq!(results[0].item.path, "exe", "1회 실행으로 순위 역전");
+
+        // 한 달 넘게 지난 1회 실행이라도 기본 부스트는 남는다
+        let mut map = FrecencyMap::new();
+        map.insert("exe".into(), (1, "2000-01-01T00:00:00Z".into()));
+        let mut results = vec![make_result("folder", 110), make_result("exe", 70)];
+        boost_results_with_map(&mut results, &map);
+        assert_eq!(results[0].item.path, "exe");
     }
 
     #[test]
