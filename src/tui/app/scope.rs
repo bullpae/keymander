@@ -30,9 +30,8 @@ pub(super) fn scope_add(state: &mut AppState, engine: &mut SearchEngine, path: &
         Ok((_, _)) => {
             let report = reindex(state, engine).map(|()| {
                 format!(
-                    "\u{2705} {} 추가됨 — {}개 검색 가능",
-                    path.display(),
-                    engine.count_within(path)
+                    "\u{2705} {}",
+                    kmd_core::scope::added_message(path, engine.count_within(path))
                 )
             });
             state.status_message =
@@ -42,7 +41,8 @@ pub(super) fn scope_add(state: &mut AppState, engine: &mut SearchEngine, path: &
     }
 }
 
-/// 선택한 범위 폴더를 뺀다 (Ctrl+Del). `:scope` 목록 행이 아니면 false.
+/// 선택한 범위 폴더를 뺀다 (Ctrl+Del, Ctrl+D — 맥 키보드엔 앞쪽 Delete가 없다).
+/// `:scope` 목록 행이 아니면 false.
 pub(super) fn scope_remove_selected(state: &mut AppState, engine: &mut SearchEngine) -> bool {
     let Some(path) = state
         .results

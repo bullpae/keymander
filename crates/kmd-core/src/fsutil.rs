@@ -119,8 +119,14 @@ pub fn is_boot_volume_alias(p: &Path) -> bool {
 /// config에 `c:\users\me\work`로 적고 스캔 결과가 `C:\Users\Me\work`면 "범위 밖"이
 /// 되어, 이미 검색 중인 폴더를 다시 추가하라고 제안하는 식의 오판이 생긴다.
 /// 구성요소 단위로 비교하므로 `/`·`\` 혼용도 같은 경로로 본다.
+///
+/// macOS 기본 볼륨(APFS)도 대소문자와 **유니코드 정규화**를 구분하지 않는다 —
+/// 파일 시스템은 한글 이름을 자모 분리형(NFD)으로 돌려주기도 하는데 사용자가
+/// 입력한 경로는 완성형(NFC)이다. 구분하면 `:scope ~/documents`가 `~/Documents`와
+/// 다른 폴더로 보여 같은 폴더가 두 번 인덱싱되고, 한글 폴더는 "범위 밖"으로 오판된다.
+/// (대소문자를 구분하도록 포맷한 볼륨은 드물어 감수한다.)
 pub fn path_within(path: &Path, root: &Path) -> bool {
-    if cfg!(windows) {
+    if cfg!(windows) || cfg!(target_os = "macos") {
         path_within_ignore_case(path, root)
     } else {
         path.starts_with(root)
@@ -128,12 +134,13 @@ pub fn path_within(path: &Path, root: &Path) -> bool {
 }
 
 fn path_within_ignore_case(path: &Path, root: &Path) -> bool {
+    let key = |c: std::path::Component<'_>| {
+        crate::textenc::nfc(&c.as_os_str().to_string_lossy()).to_lowercase()
+    };
     let mut p = path.components();
     for r in root.components() {
         match p.next() {
-            Some(c)
-                if c.as_os_str().to_string_lossy().to_lowercase()
-                    == r.as_os_str().to_string_lossy().to_lowercase() => {}
+            Some(c) if key(c) == key(r) => {}
             _ => return false,
         }
     }
@@ -225,6 +232,11 @@ mod tests {
             "접두 문자열이 아니라 구성요소 단위로 비교한다"
         );
         assert!(!path_within_ignore_case(Path::new("/a"), Path::new("/a/b")));
+        // macOS가 돌려주는 자모 분리형(NFD) 한글 이름도 완성형(NFC) 입력과 같은 폴더
+        assert!(path_within_ignore_case(
+            Path::new("/Users/me/\u{1100}\u{1161}\u{11A8}/a.md"), // NFD "각"
+            Path::new("/Users/me/\u{AC01}")                       // NFC "각"
+        ));
     }
 
     #[test]
