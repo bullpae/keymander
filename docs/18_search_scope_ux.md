@@ -248,3 +248,68 @@ depth = 6
    폴더 열기"는 `:f`나 경로 입력으로만 가능해진다
 3. **기본 제외 규칙 구조**: `use_default_ignores = true`(권장)와 `ignore_patterns_extra` 중 선택
 4. **S1 범위에 E1(경로 입력 → 추가 행)을 당겨 넣을지**: 비용이 낮고 체감이 크다
+
+## 9. macOS 패키지(번들) 처리 — 구현 (2026-10-19, Unreleased)
+
+> 구현: `index/package.rs`(판정) · `files.rs`(walkdir 두 곳 자식 차단 + 항목화
+> `apply_package_kind`) · `index/mod.rs`(외부 프로바이더 사후 필터) · `content_index::walk_entries`
+> · `scope::count_executables`. 테스트는 `package::test_force`로 모든 OS에서 macOS 분기를 돌린다.
+> **실기기 미검증** — 9.5 실기기 항목이 남았다.
+
+### 9.1 문제
+
+macOS 앱은 파일이 아니라 `Foo.app` **폴더**다. Finder는 이런 "패키지" 폴더를 파일 하나처럼
+보여 주지만, 파일 스캐너(`index/files.rs`의 walkdir)는 일반 폴더로 보고 안으로 내려간다.
+
+- `Foo.app`이 **폴더(Directory)** 로 등록된다. Enter는 `open`이라 실행은 되지만 아이콘·종류·이름
+  (`Foo.app`)이 앱이 아니다.
+- 번들 안의 `Contents/Info.plist`, `MacOS/Foo`, `Resources/*.icns`, `*.lproj/…`, `Frameworks/…`가
+  `search_depth`(기본 4)까지 통째로 들어간다. 앱 하나에 수백~수천 개다. `foo`를 치면 이런 내부 파일이
+  결과에 섞이고, 지정 폴더 할당량(`max_results / 2`)을 먹어 정작 다른 파일이 잘린다.
+- 앱만 그런 게 아니다. `.pages`·`.numbers`·`.key`·`.rtfd` 문서도 패키지이고, `~/Pictures`를 범위에 넣으면
+  `Photos Library.photoslibrary` 안의 수십만 개 파일이 쏟아진다.
+
+Windows의 dll·리소스 잡음(1장 5번)과 같은 성격인데, macOS는 "번들 단위로 보면 된다"는 정답이 있다.
+
+### 9.2 방향 — 패키지는 원자(atom)로 본다
+
+스캔하다가 패키지를 만나면 **그 폴더 하나만 항목으로 넣고 안으로는 내려가지 않는다**.
+
+| 패키지 | 등록 | 근거 |
+|---|---|---|
+| `.app` | **앱(App)**, 이름은 `.app`을 뗀 `Foo`, 아이콘은 기존 `app_icons.rs`의 Info.plist→icns 경로 | `index/apps.rs`가 `/Applications`에서 만드는 항목과 같은 모양 — 같은 경로면 경로 중복 제거로 하나만 남는다 |
+| 문서 패키지 `.pages` `.numbers` `.key` `.rtfd` | **파일(File)** — `open`이 기본 앱으로 연다 | 사용자에겐 문서 하나 |
+| 라이브러리 `.photoslibrary` `.musiclibrary` `.tvlibrary` `.imovielibrary` `.fcpbundle` | 파일 하나로 (안은 절대 안 들어감) | 내부를 건드리면 안 되는 앱 전용 저장소 |
+| 개발·시스템 `.framework` `.bundle` `.plugin` `.kext` `.appex` `.xcodeproj` `.xcworkspace` `.dSYM` `.sparsebundle` 등 | 파일 하나로 | 실행 대상은 아니지만 "그런 게 있다"는 찾을 수 있게 |
+
+**판정** — 코어(`kmd-core`)에는 Objective-C 의존성이 없으므로 시스템 API(UTType의 `com.apple.package`)
+대신 다음을 쓴다.
+1. 위 표의 확장자 목록. 단 **`.app`은 `Contents/Info.plist`가 있을 때만** 번들로 본다 — 개발자 소스 폴더
+   이름이 `web.app`인 경우를 앱으로 오판하지 않기 위해서.
+2. 목록에 없는 확장자라도 `Contents/Info.plist`가 있으면 번들로 본다(서드파티 패키지 대비).
+
+**적용 범위** — macOS에서만(`cfg!(target_os = "macos")`). 판정 함수 자체는 OS와 무관하게 테스트한다.
+
+### 9.3 고칠 곳
+
+| 위치 | 변경 |
+|---|---|
+| `index/files.rs` walkdir 두 곳(지정 폴더 우선 스캔, 홈 일반 스캔) | `filter_entry`에서 패키지의 **자식**을 막고, 패키지 자신은 위 표대로 항목화 (`walkdir_into_items`에 패키지 분기) |
+| `index/mod.rs` 빌드 끝 | 외부 프로바이더(fd·locate 등) 결과에서 **경로 중간에 패키지가 끼인 항목**을 거른다 — `ignore_extensions` 사후 필터와 같은 자리. Spotlight(mdfind)는 이미 패키지를 제대로 다루지만 같은 필터를 거쳐도 무해 |
+| `content_index::walk_entries` | 패키지 안으로 내려가지 않는다 (본문 인덱스가 번들의 plist·strings를 색인하지 않게) |
+| `folder_suggest` 활동 스캔 | 같은 순회를 쓰므로 함께 해결 — 앱이 자기 번들 안에 쓰는 캐시가 "활동이 많은 폴더"로 오판되지 않는다 |
+| `scope::count_executables` | 이미 `.app`을 하나로 센다 (2026-10-19 반영) — 9.2의 판정 함수로 교체 |
+
+### 9.4 S2 "프로그램 폴더" 모드와의 관계
+
+9장은 **모든 폴더**에 적용하는 버그 수정이다. S2의 `apps` 모드는 그 위에서 "실행할 수 있는 것만"
+남긴다. macOS 기준 실행 가능 = `.app` 번들 + 실행 권한 비트가 있는 파일 + `.command`·`.sh`.
+PATH 실행 파일 수집(`index/path.rs`)도 지금은 권한 비트를 보지 않으므로 같은 판정 함수로 맞춘다.
+
+### 9.5 검증
+
+- 단위 테스트(모든 OS): 가짜 번들(`Foo.app/Contents/Info.plist`, `Doc.pages/…`, Info.plist 없는 `web.app`)
+  으로 판정·항목화·자식 차단을 확인.
+- macOS CI(macos-latest)에서 같은 테스트가 실제 플랫폼 분기로 돈다.
+- 실기기: `~/Applications`나 포터블 앱 폴더를 `:scope`로 추가 → 앱 아이콘으로 하나씩, 내부 파일 0개.
+  `~/Pictures` 추가 시 사진 보관함이 항목 하나인지.

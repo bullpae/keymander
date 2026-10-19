@@ -149,7 +149,8 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
             .filter_entry(|e| {
                 e.depth() == 0
                     || !(is_ignored_dir(e, &ignore_set)
-                        || is_ignored_file(e, &config.ignore_extensions))
+                        || is_ignored_file(e, &config.ignore_extensions)
+                        || super::package::parent_is_package(e.path()))
             });
 
         walkdir_into_items(walker, &mut items, &mut seen, limit, config.use_emoji);
@@ -335,7 +336,10 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
-                if is_ignored_dir(e, &ignore_set) || is_ignored_file(e, &config.ignore_extensions) {
+                if is_ignored_dir(e, &ignore_set)
+                    || is_ignored_file(e, &config.ignore_extensions)
+                    || super::package::parent_is_package(e.path())
+                {
                     return false;
                 }
                 // Skip priority directories (already scanned)
@@ -690,7 +694,7 @@ fn walkdir_into_items<I>(
             continue;
         }
 
-        items.push(IndexItem {
+        let mut item = IndexItem {
             name: name.clone(),
             path: path_str.clone(),
             kind: if is_dir {
@@ -706,7 +710,14 @@ fn walkdir_into_items<I>(
             },
             keywords: path_str,
             icon_path: None,
-        });
+        };
+        // macOS 패키지(.app 등)는 폴더가 아니라 앱/파일 하나 (docs/18 §9)
+        if is_dir {
+            if let Some(kind) = super::package::detect(path) {
+                apply_package_kind(&mut item, kind, use_emoji);
+            }
+        }
+        items.push(item);
 
         if items.len() >= limit {
             break;
@@ -727,6 +738,32 @@ pub(crate) fn has_ignored_extension(path: &Path, ignore_ext: &HashSet<String>) -
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| ignore_ext.contains(&e.to_lowercase()))
+}
+
+/// 패키지 폴더 항목을 앱/파일 항목으로 바꾼다 (docs/18 §9).
+///
+/// `.app`은 `index/apps.rs`가 `/Applications`에서 만드는 앱 항목과 같은 모양
+/// (이름 = `.app`을 뗀 것) — 같은 경로면 인덱스 빌드의 경로 중복 제거로 하나만 남는다.
+/// 아이콘은 데스크톱이 경로(`.app`)로 Info.plist→icns를 찾아 그린다.
+pub(crate) fn apply_package_kind(
+    item: &mut IndexItem,
+    kind: super::package::PackageKind,
+    use_emoji: bool,
+) {
+    let path = Path::new(&item.path);
+    match kind {
+        super::package::PackageKind::App => {
+            item.kind = ItemKind::App;
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                item.name = stem.to_string();
+            }
+            item.icon = super::apps::app_icon(use_emoji);
+        }
+        super::package::PackageKind::Opaque => {
+            item.kind = ItemKind::File;
+            item.icon = icon_for_path(path, use_emoji);
+        }
+    }
 }
 
 /// Check if a walkdir entry should be ignored (directory name matches ignore pattern)
@@ -1153,6 +1190,53 @@ mod tests {
         assert!(names.contains("weird.cat"), "폴더는 확장자 규칙 대상 아님");
         assert!(!names.contains("veracrypt.cat"));
         assert!(!names.contains("VERACRYPT.INF"), "대소문자 무시");
+    }
+
+    #[test]
+    fn macos_package_is_one_item_and_not_descended() {
+        // docs/18 §9 — macOS에서는 Foo.app이 앱 하나, 내부 파일 0개, Doc.pages는 파일 하나.
+        // 다른 OS에서는 지금처럼 일반 폴더로 내려간다(동작 변화 없음). 두 경우를 모두
+        // 확인하려고 이 스레드에서 macOS 동작을 켰다 껐다 한다.
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let app = tmp.path().join("Foo.app");
+        must_mkdir(&app.join("Contents").join("MacOS"));
+        must_write(&app.join("Contents").join("Info.plist"), "<plist/>");
+        must_write(&app.join("Contents").join("MacOS").join("Foo"), "");
+        let doc = tmp.path().join("Report.pages");
+        must_mkdir(&doc);
+        must_write(&doc.join("index.xml"), "");
+        let config = ProviderConfig {
+            search_paths: vec![tmp.path().to_path_buf()],
+            scan_drives: false,
+            ..Default::default()
+        };
+
+        super::super::package::test_force::set(true);
+        let items = collect_priority_files(&config);
+        super::super::package::test_force::set(false);
+        let find = |name: &str| items.iter().find(|i| i.name == name);
+        assert_eq!(
+            find("Foo").map(|i| i.kind),
+            Some(ItemKind::App),
+            "앱, 이름은 .app 뗀 것"
+        );
+        assert_eq!(find("Report.pages").map(|i| i.kind), Some(ItemKind::File));
+        assert!(
+            !items.iter().any(|i| i.path.contains("Contents")),
+            "번들 내부 없음"
+        );
+        assert!(!items.iter().any(|i| i.name == "index.xml"));
+
+        if !cfg!(target_os = "macos") {
+            let items = collect_priority_files(&config);
+            assert!(
+                items
+                    .iter()
+                    .any(|i| i.name == "Foo.app" && i.kind == ItemKind::Directory),
+                "macOS가 아니면 기존 동작 그대로"
+            );
+            assert!(items.iter().any(|i| i.path.contains("Contents")));
+        }
     }
 
     #[test]

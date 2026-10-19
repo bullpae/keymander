@@ -17,6 +17,16 @@ All notable changes to keymander are documented here.
     `:set` 첫 행 "검색 범위: 폴더 N개", 검색 결과가 없을 때 안내 행.
   - TUI도 같은 명령·키를 지원하고, CLI는 `kmd scope [list|add|rm]`.
 
+### Fixed
+- **macOS: `.app` 같은 패키지 폴더 안을 통째로 인덱싱하던 문제** (docs/18 §9). 앱 하나에
+  `Info.plist`·아이콘·언어 파일이 수백~수천 개씩 들어와 검색 결과를 덮고 할당량을 먹었다.
+  이제 `Foo.app`은 앱 하나(`Foo`, 앱 아이콘)로, `.pages`·`.key`·`.rtfd` 문서와
+  `.photoslibrary` 같은 보관함·`.framework` 등은 파일 하나로 넣고 안으로는 내려가지 않는다.
+  본문 검색·폴더 제안도 같은 규칙. Info.plist가 없는 `web.app` 같은 개발 폴더는 일반 폴더.
+- macOS: 경로 비교가 대소문자·한글 자모 분리형(NFD)을 구분해 같은 폴더를 두 번 넣거나
+  한글 폴더를 "범위 밖"으로 보던 문제. `:scope` 제거 단축키는 macOS에서 ⌘D(⌘⌫는 입력창이
+  글자를 지운다), 추가 결과가 0개면 폴더 접근 권한 안내.
+
 ### Changed
 - **`search_paths`·`ignore_patterns`는 이제 기본값에 "더해진다".** 예전엔 적는 순간 기본
   폴더(문서·다운로드·OneDrive)나 기본 제외 목록(36개)이 통째로 사라져, 하나를 넣으려면

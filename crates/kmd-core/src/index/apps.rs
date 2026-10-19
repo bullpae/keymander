@@ -8,7 +8,7 @@
 use super::{IndexItem, ItemKind, Source};
 
 /// Icon for applications
-fn app_icon(use_emoji: bool) -> String {
+pub(crate) fn app_icon(use_emoji: bool) -> String {
     if use_emoji {
         "\u{1F4E6}".into()
     } else {

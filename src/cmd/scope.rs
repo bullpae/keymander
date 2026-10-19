@@ -80,7 +80,7 @@ fn reindex(added: Option<&Path>) -> Result<()> {
             .iter()
             .filter(|i| kmd_core::fsutil::path_within(Path::new(&i.path), path))
             .count();
-        println!("{} — {n}개 검색 가능", path.display());
+        println!("{}", kmd_core::scope::added_message(path, n));
     }
     Ok(())
 }

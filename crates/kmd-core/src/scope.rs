@@ -18,7 +18,7 @@ use crate::index::{IndexItem, ItemKind, Source};
 pub const SCOPE_ALIASES: &[&str] = &[":scope", ":dirs"];
 /// 추가 항목 마커 (`kmd:scope:add:<경로>`)
 pub const SCOPE_ADD_MARKER: &str = "kmd:scope:add:";
-/// 범위 폴더 항목 마커 (`kmd:scope:folder:<경로>`) — Enter 열기, Ctrl+Del 제거
+/// 범위 폴더 항목 마커 (`kmd:scope:folder:<경로>`) — Enter 열기, [`REMOVE_KEY_LABEL`] 제거
 pub const SCOPE_FOLDER_MARKER: &str = "kmd:scope:folder:";
 /// 하위 폴더로 들어가기 마커 (`kmd:scope:browse:<경로>`)
 pub const SCOPE_BROWSE_MARKER: &str = "kmd:scope:browse:";
@@ -26,6 +26,19 @@ pub const SCOPE_BROWSE_MARKER: &str = "kmd:scope:browse:";
 pub const SCOPE_OPEN_MARKER: &str = "kmd:scope:open";
 /// 안내 전용 (이미 포함됨, 찾을 수 없음)
 pub const SCOPE_NOOP_MARKER: &str = "kmd:scope:noop";
+
+/// 범위 폴더 제거 단축키 표기 — macOS 데스크톱은 ⌘D (⌘⌫는 입력창이 함께 받아 글자를 지운다)
+pub const REMOVE_KEY_LABEL: &str = if cfg!(target_os = "macos") {
+    "\u{2318}D"
+} else {
+    "Ctrl+Del"
+};
+/// 제거 되돌리기 단축키 표기
+pub const UNDO_KEY_LABEL: &str = if cfg!(target_os = "macos") {
+    "\u{2318}Z"
+} else {
+    "Ctrl+Z"
+};
 
 /// 하위 폴더 자동완성 행 상한 — 키 입력마다 그리는 목록이다.
 const MAX_BROWSE_ROWS: usize = 40;
@@ -342,11 +355,11 @@ fn list_results(
         let badge = if e.is_user_folder { "기본" } else { "추가" };
         let detail = if exists {
             format!(
-                "{badge} · {}개 · Enter 열기 · Ctrl+Del 제거",
+                "{badge} · {}개 · Enter 열기 · {REMOVE_KEY_LABEL} 제거",
                 group_digits(count_under(&e.path))
             )
         } else {
-            format!("{badge} · 지금 없는 폴더 (외장 드라이브?) · Ctrl+Del 제거")
+            format!("{badge} · 지금 없는 폴더 (외장 드라이브?) · {REMOVE_KEY_LABEL} 제거")
         };
         items.push(IndexItem {
             name: e.path.display().to_string(),
@@ -465,6 +478,29 @@ fn browse_results(launcher: &LauncherConfig, rest: &str, use_emoji: bool) -> Vec
     items
 }
 
+/// 추가 후 결과 문구 — 데스크톱·TUI·CLI 공용.
+///
+/// 0개면 이유를 알려 준다. macOS는 인덱싱을 데몬(launchd)이 하는데, 외장 볼륨·
+/// iCloud 같은 보호 위치는 데몬에 파일 접근 권한이 없으면 **조용히 0개**로 끝난다
+/// (백그라운드라 권한 요청 창도 안 뜰 수 있다).
+pub fn added_message(path: &Path, count: usize) -> String {
+    if count > 0 {
+        return format!("{} 추가됨 — {count}개 검색 가능", path.display());
+    }
+    if cfg!(target_os = "macos") {
+        format!(
+            "{} 추가됨 — 0개: 폴더 접근 권한이 없을 수 있습니다 (시스템 설정 › 개인정보 보호 및 \
+             보안 › 전체 디스크 접근 권한에서 kmd-daemon 허용)",
+            path.display()
+        )
+    } else {
+        format!(
+            "{} 추가됨 — 0개: 폴더가 비었거나 제외 규칙에 모두 걸렸습니다",
+            path.display()
+        )
+    }
+}
+
 /// 하위 폴더로 들어갈 때 검색창에 채울 입력 (`:scope <경로>\`).
 pub fn browse_seed(path: &str) -> String {
     let sep = if cfg!(windows) { '\\' } else { '/' };
@@ -486,18 +522,23 @@ fn add_hint(path: &Path) -> String {
 }
 
 /// 추가 전에 가볍게 살피는 실행 파일 수 (2단계, 항목 상한) — 키 입력마다 불린다.
+///
+/// macOS 앱은 파일이 아니라 `.app` **폴더**(번들)다 — 번들 하나를 실행 파일 하나로
+/// 세고 그 안으로는 내려가지 않는다(번들 내부 파일 수천 개가 예산을 다 먹는다).
 fn count_executables(path: &Path) -> usize {
     const BUDGET: usize = 2_000;
     let mut seen = 0usize;
     let mut exes = 0usize;
-    for entry in walkdir::WalkDir::new(path)
-        .max_depth(2)
-        .into_iter()
-        .flatten()
-    {
+    let mut walker = walkdir::WalkDir::new(path).max_depth(2).into_iter();
+    while let Some(Ok(entry)) = walker.next() {
         seen += 1;
         if seen > BUDGET {
             break;
+        }
+        if entry.depth() > 0 && is_app_bundle(entry.path()) {
+            exes += 1;
+            walker.skip_current_dir();
+            continue;
         }
         if entry.file_type().is_file() {
             let ext = entry
@@ -505,12 +546,20 @@ fn count_executables(path: &Path) -> usize {
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_ascii_lowercase());
-            if matches!(ext.as_deref(), Some("exe" | "lnk" | "bat" | "cmd" | "app")) {
+            if matches!(
+                ext.as_deref(),
+                Some("exe" | "lnk" | "bat" | "cmd" | "command")
+            ) {
                 exes += 1;
             }
         }
     }
     exes
+}
+
+/// macOS 앱 번들인가 — 인덱서와 같은 판정(`Contents/Info.plist` 필수, docs/18 §9).
+fn is_app_bundle(path: &Path) -> bool {
+    crate::index::package::classify(path) == Some(crate::index::package::PackageKind::App)
 }
 
 fn add_item(path: &Path, hint: &str, use_emoji: bool) -> IndexItem {
@@ -709,6 +758,28 @@ mod tests {
             path_add_suggestion(&l, "vera", false).is_none(),
             "경로 모양이 아니면 디스크를 안 본다"
         );
+    }
+
+    #[test]
+    fn 앱_번들은_하나로_세고_안으로_내려가지_않는다() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = tmp.path().join("Foo.app").join("Contents").join("MacOS");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("Foo"), "").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join("Foo.app")
+                .join("Contents")
+                .join("Info.plist"),
+            "<plist/>",
+        )
+        .unwrap();
+        // Info.plist 없는 `web.app`은 앱이 아니다 (개발 폴더 이름)
+        std::fs::create_dir(tmp.path().join("web.app")).unwrap();
+        std::fs::write(tmp.path().join("tool.exe"), "").unwrap();
+        std::fs::write(tmp.path().join("run.command"), "").unwrap();
+        std::fs::write(tmp.path().join("readme.txt"), "").unwrap();
+        assert_eq!(count_executables(tmp.path()), 3);
     }
 
     #[test]
