@@ -1,5 +1,6 @@
 pub mod config;
 pub mod daemon;
+pub mod dojo;
 pub mod emoji;
 pub mod grep;
 pub mod history;

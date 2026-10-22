@@ -9,6 +9,7 @@ pub mod clipboard;
 pub mod config;
 pub mod content_index;
 pub mod db;
+pub mod dojo;
 pub mod folder_search;
 pub mod folder_suggest;
 pub mod fsutil;

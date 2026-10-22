@@ -155,9 +155,11 @@ memory. This mission is the whole point of keymander.
 for three consecutive days with zero mouse pickups for launching/navigation.
 When it stops feeling like practice, you've graduated.
 
-> **Coming: `kmd dojo`** — an interactive trainer that turns these missions
-> into timed, scored practice rounds inside the TUI. See the
-> [roadmap](#roadmap).
+> **`kmd dojo` — the keymap dojo.** A terminal trainer that turns these
+> missions into belts, key golf and design-rationale scrolls. The white belt
+> (summoning: launcher golf — fewest keystrokes to rank the target first) is
+> playable now; later belts follow. Instructions follow your own remapped
+> keymap. See the [plan](docs/10_dojo_plan.md).
 
 ---
 
@@ -778,8 +780,8 @@ toggle_preview = "ctrl+p"
 ## Roadmap
 
 **Toward v1.0.0**
-- **`kmd dojo`** — interactive keymap trainer: timed missions, scores, streaks
-  ([plan](docs/10_dojo_plan.md))
+- **`kmd dojo`** — keymap trainer: white belt shipped; key golf, layer drills,
+  pointer drills and daily streaks next ([plan](docs/10_dojo_plan.md))
 - Cloud-synced todo / memo (remote storage integration)
 - Clipboard history manager
 - Plugin marketplace & script-based plugins

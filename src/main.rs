@@ -9,6 +9,7 @@
 //!   kmd history      → View/clear launch history
 //!   kmd emoji <q>    → Search and copy Unicode emoji
 //!   kmd portable     → Manage portable mode
+//!   kmd dojo         → Keymap trainer (docs/10)
 
 mod cmd;
 mod tui;
@@ -127,6 +128,12 @@ enum Commands {
     Keymap {
         #[command(subcommand)]
         action: KeymapAction,
+    },
+    /// Keymap dojo — learn the layers like a martial art (belts, key golf, scrolls)
+    Dojo {
+        /// Jump straight to a lesson (e.g. white.1)
+        #[arg(long)]
+        lesson: Option<String>,
     },
 }
 
@@ -442,6 +449,9 @@ fn main() -> color_eyre::Result<()> {
                 KeymapAction::Init { profile } => cmd::keymap::Action::Init { profile },
                 KeymapAction::ListPresets => cmd::keymap::Action::ListPresets,
             })?;
+        }
+        Some(Commands::Dojo { lesson }) => {
+            cmd::dojo::run(lesson)?;
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {

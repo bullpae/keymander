@@ -1,0 +1,316 @@
+# kmd dojo 커리큘럼 — 띠·과·관문 (docs/10 §3)
+#
+# 문구에는 물리 키 이름을 쓰지 않는다. 수 자리표시자만 쓴다(docs/10 §6-5):
+#   {WordLeft}      → 사용자 배치의 전체 표기 (예: CapsLock+I)
+#   {key:WordLeft}  → 쥐는 키를 뺀 키 (예: I)
+#   {nav} {mouse}   → 레이어 트리거 (예: CapsLock, RAlt)
+#
+# kind 가 아직 구현되지 않은 과는 지도에 "수련장 공사 중"으로 보인다.
+# 구현된 kind: summon (M1)
+
+[[belt]]
+id = "white"
+name = "흰띠"
+theme = "첫 60초"
+motto = "찾지 말고 불러라. 소환 → 입력 → Enter, 나머지는 전부 이 루프의 확장이다."
+
+  [[belt.lesson]]
+  id = "white.1"
+  title = "이름 몇 글자로 소환"
+  kind = "summon"
+  set = "names"
+  why = "앱 이름을 다 칠 필요는 없다. 몇 글자면 1순위로 올라온다."
+  teach = ["런처를 띄우고 이름 몇 글자를 친다.", "1순위가 맞으면 Enter. 아니면 한 글자를 더 친다.", "↓↑ 로 고를 수도 있지만, 한 글자 더 치는 쪽이 대개 싸다."]
+  scroll = "十九"
+
+  [[belt.lesson]]
+  id = "white.2"
+  title = "확장자로 소환"
+  kind = "summon"
+  set = "ext"
+  why = ".pdf 처럼 점으로 시작하면 그 확장자 파일만 남는다."
+  teach = [".확장자 로 종류를 좁힌다.", "이름 조각을 아는 편이 대개 더 짧다 — 둘 중 싼 쪽을 고른다.", "목록이 길면 {Down} 으로 내려가 Enter."]
+  scroll = "二十"
+
+  [[belt.lesson]]
+  id = "white.3"
+  title = "의뢰 소환"
+  kind = "summon"
+  set = "asks"
+  why = "의뢰는 사람의 말로 온다. 파일 이름의 어느 조각이 가장 드문지 떠올려라."
+  teach = ["의뢰를 읽고 목표 파일 이름을 짐작한다.", "남들과 겹치지 않는 조각을 친다 — 짧고 드물수록 좋다.", "사부의 수는 결과 화면에서 공개된다."]
+  scroll = "二十四"
+
+  [[belt.lesson]]
+  id = "white.4"
+  title = "접두 비급"
+  kind = "summon"
+  set = "prefix"
+  why = "@ 는 웹, ! 는 셸. 접두사 하나가 검색창을 다른 도구로 바꾼다."
+  teach = ["@gh 검색어 — GitHub 에서 찾는다.", "@yt · @g · @w … 서비스마다 짧은 접두사가 있다.", "! 명령 — 셸에서 바로 실행한다."]
+  scroll = "二十三"
+
+  [belt.boss]
+  id = "white.boss"
+  name = "미아귀(迷兒鬼)"
+  kind = "summon"
+  set = "boss"
+  line = "탐색기를 열어라… 폴더를 하나씩 눌러 헤매거라…"
+  why = "탐색기에서 길을 잃게 만드는 귀신. 연속 의뢰를 제한 시간 안에 소환해 물리친다."
+  time_limit_s = 120
+  scroll = "二十二"
+
+[[belt]]
+id = "yellow"
+name = "노란띠"
+theme = "화살표 없는 화살표"
+motto = "왼손이 쥐고, 오른손이 움직인다. 화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다."
+
+  [[belt.lesson]]
+  id = "yellow.1"
+  title = "네 방향"
+  kind = "spar"
+  why = "{nav} 을 쥐고 {key:Left} {key:Down} {key:Up} {key:Right} — Vim 의 그 자리, 모든 앱에서."
+  teach = ["{nav} 은 쥐는 손, 방향 키는 움직이는 손.", "{key:Left} ← · {key:Down} ↓ · {key:Up} ↑ · {key:Right} →", "보지 말고 느껴라."]
+  needs = ["Left", "Down", "Up", "Right"]
+  scroll = "一"
+
+  [[belt.lesson]]
+  id = "yellow.2"
+  title = "미로 탈출"
+  kind = "maze"
+  why = "격자 미로를 레이어 방향키만으로 빠져나간다."
+  teach = ["벽에 부딪히면 한 칸 흔들린다.", "출구까지 가장 적은 수로."]
+  needs = ["Left", "Down", "Up", "Right"]
+  scroll = "二"
+
+  [[belt.lesson]]
+  id = "yellow.3"
+  title = "대련"
+  kind = "spar"
+  why = "제시된 방향을 결과 키로 받아친다. 콤보가 끊기지 않게."
+  teach = ["반응시간 막대가 줄기 전에.", "틀리면 콤보가 끊긴다."]
+  needs = ["Left", "Down", "Up", "Right"]
+  scroll = "三"
+
+  [belt.boss]
+  id = "yellow.boss"
+  name = "화살귀(箭鬼) 1형"
+  kind = "spar"
+  line = "네 오른손은 결국 화살표로 돌아올 것이다!"
+  why = "홈로우에서 화살표 키로 손을 끌어내는 귀신."
+  scroll = "十"
+
+[[belt]]
+id = "orange"
+name = "주황띠"
+theme = "축지법"
+motto = "적게 누르는 것이 곧 빠른 것이다."
+
+  [[belt.lesson]]
+  id = "orange.1"
+  title = "단어 점프"
+  kind = "golf"
+  why = "{WordRight} 두 번이면 {Right} 열두 번이 필요 없다."
+  teach = ["{key:WordLeft} 단어 ← · {key:WordRight} 단어 →", "깃발까지 가장 적은 타수로."]
+  needs = ["WordLeft", "WordRight"]
+  scroll = "五"
+
+  [[belt.lesson]]
+  id = "orange.2"
+  title = "줄 처음과 끝"
+  kind = "golf"
+  why = "같은 키를 두 번 톡톡 — {LineStart} 은 줄 처음, {LineEnd} 은 줄 끝."
+  teach = ["300ms 안에 두 번.", "첫 탭은 단어 이동으로 먼저 도착한다 — 그래서 2타다."]
+  needs = ["LineStart", "LineEnd"]
+  scroll = "十二"
+
+  [[belt.lesson]]
+  id = "orange.3"
+  title = "페이지"
+  kind = "golf"
+  why = "{PageUp} · {PageDown} — 긴 문서는 페이지로 건넌다."
+  teach = ["한 페이지 = 화면 한 장."]
+  needs = ["PageUp", "PageDown"]
+  scroll = "八"
+
+  [[belt.lesson]]
+  id = "orange.4"
+  title = "지우기"
+  kind = "golf"
+  why = "{Backspace} 는 앞을, {Delete} 는 뒤를 지운다. 백스페이스까지 손을 뻗지 않는다."
+  teach = ["{key:Backspace} 앞 글자 · {key:Delete} 뒷 글자"]
+  needs = ["Backspace", "Delete"]
+  scroll = "七"
+
+  [belt.boss]
+  id = "orange.boss"
+  name = "화살귀(箭鬼) 2형"
+  kind = "golf"
+  line = "열두 번 두드려라, 열두 번!"
+  why = "축지 코스 9홀을 지나 2형을 물리친다."
+  scroll = "六"
+
+[[belt]]
+id = "green"
+name = "초록띠"
+theme = "문서 수술"
+motto = "레이어는 에디터가 아니라 모든 앱에서 동작한다."
+
+  [[belt.lesson]]
+  id = "green.1"
+  title = "선택의 수"
+  kind = "golf"
+  why = "Shift 를 함께 쥐면 이동이 선택이 된다."
+  needs = ["WordLeft", "WordRight"]
+  scroll = "十八"
+
+  [[belt.lesson]]
+  id = "green.2"
+  title = "지우는 수"
+  kind = "surgery"
+  why = "선택한 뒤 {key:Backspace} 한 번 — 글자 하나씩 지우지 않는다."
+  needs = ["Backspace"]
+  scroll = "四"
+
+  [[belt.lesson]]
+  id = "green.3"
+  title = "실전: 오타 세 마리"
+  kind = "surgery"
+  why = "문단 속 군더더기 세 마리를 찾아 벤다."
+  needs = ["Backspace", "Delete"]
+
+  [[belt.lesson]]
+  id = "green.4"
+  title = "실전: 문단 손질"
+  kind = "surgery"
+  why = "긴 문단을 이동·선택·삭제만으로 다듬는다."
+  needs = ["Backspace"]
+
+  [belt.boss]
+  id = "green.boss"
+  name = "화살귀(箭鬼) 3형"
+  kind = "surgery"
+  line = "고쳐 보아라, 화살표 없이!"
+  why = "실전 혼합으로 3형을 물리친다."
+  scroll = "十七"
+
+[[belt]]
+id = "blue"
+name = "파란띠"
+theme = "한 손가락 두 얼굴"
+motto = "수십 년 쓴 그 자리다. 손가락은 이미 알고 있다."
+
+  [[belt.lesson]]
+  id = "blue.1"
+  title = "한영 리듬"
+  kind = "ime"
+  why = "{ToggleHangul} — 혼합 문장의 전환 지점에서 톡."
+  needs = ["ToggleHangul"]
+  scroll = "十一"
+
+  [[belt.lesson]]
+  id = "blue.2"
+  title = "톡과 쥠"
+  kind = "ime"
+  why = "짧게 톡이면 한/영, 길게 쥐면 레이어가 열린다."
+  needs = ["ToggleHangul"]
+  scroll = "九"
+
+  [[belt.lesson]]
+  id = "blue.3"
+  title = "300ms 안전장치"
+  kind = "ime"
+  why = "너무 빨리 두 번 치면 두 번째는 무시된다 — 전환 겹침을 막는 장치다."
+  needs = ["ToggleHangul"]
+
+  [belt.boss]
+  id = "blue.boss"
+  name = "양설귀(兩舌鬼)"
+  kind = "ime"
+  line = "한 입으로 두 말을 해 보아라!"
+  why = "혼합 문장 타임어택."
+
+[[belt]]
+id = "purple"
+name = "보라띠"
+theme = "보이지 않는 마우스"
+motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
+
+  [[belt.lesson]]
+  id = "purple.1"
+  title = "포인터 이동"
+  kind = "mouse"
+  why = "{mouse} 을 쥐고 {key:PointerUp} {key:PointerLeft} {key:PointerDown} {key:PointerRight} — 손은 홈포지션 그대로."
+  needs = ["PointerUp", "PointerDown", "PointerLeft", "PointerRight"]
+  scroll = "十三"
+
+  [[belt.lesson]]
+  id = "purple.2"
+  title = "조준"
+  kind = "mouse"
+  why = "{key:ClickLeft} 좌클릭, {key:ClickRight} 우클릭 — 이동 키의 왼쪽과 오른쪽."
+  needs = ["ClickLeft", "ClickRight"]
+  scroll = "十四"
+
+  [[belt.lesson]]
+  id = "purple.3"
+  title = "휠 수색"
+  kind = "mouse"
+  why = "{key:WheelUp} 위로, {key:WheelDown} 아래로."
+  needs = ["WheelUp", "WheelDown"]
+  scroll = "十六"
+
+  [[belt.lesson]]
+  id = "purple.4"
+  title = "드래그"
+  kind = "mouse"
+  why = "드래그는 엄지가 맡는다 — 이동 손가락과 겹치지 않는다."
+  needs = ["ClickLeft"]
+  scroll = "十五"
+
+  [[belt.lesson]]
+  id = "purple.5"
+  title = "새는 글자 0"
+  kind = "mouse"
+  why = "{mouse} 을 쥔 채 아무 글자나 마구 쳐 보아라. 한 글자도 새지 않는다."
+  needs = ["PointerUp"]
+
+  [belt.boss]
+  id = "purple.boss"
+  name = "쥐마왕(鼠魔王)"
+  kind = "mouse"
+  line = "결국 너는 나를 잡게 될 것이다!"
+  why = "마우스로 손을 끌어내는 마왕."
+  scroll = "二十一"
+
+[[belt]]
+id = "brown"
+name = "갈색띠"
+theme = "레이어 불변식"
+motto = "레이어에는 잘못 눌러도 해가 없는 수만 둔다."
+
+  [[belt.lesson]]
+  id = "brown.1"
+  title = "혼합 대련"
+  kind = "mixed"
+  why = "모든 레이어의 수를 섞어 받아친다."
+
+  [[belt.lesson]]
+  id = "brown.2"
+  title = "비급 종합 시험"
+  kind = "quiz"
+  why = "외운 자는 잊고, 납득한 자는 쓴다."
+
+  [[belt.lesson]]
+  id = "brown.3"
+  title = "실전: 홈로우를 떠나지 않는 하루"
+  kind = "mixed"
+  why = "소환 → 편집 → 다이얼로그, 손은 끝까지 홈로우 위에."
+
+  [belt.boss]
+  id = "brown.boss"
+  name = "이탈마(離脫魔)"
+  kind = "mixed"
+  line = "마우스로, 화살표로, 다른 기계로 — 떠나라!"
+  why = "세 가지 이탈을 모두 쓰는 마귀."

@@ -1,6 +1,6 @@
 # kmd dojo — 무협 도장 기획서
 
-> **상태: 미구현 기획 v2** (2026-10-23 전면 개정 — v0.17.0 기준, `dojo` 코드 0건) ·
+> **상태: M1 구현 (2026-10-23)** — 흰띠(소환술)·지도·입문·도감·기록·배치 해석·DB v5. M2(입문 의식 보정·대련·키 골프)부터 남음 ·
 > 착수 우선순위는 [17_feature_backlog.md](17_feature_backlog.md) F18 ·
 > 관련: README "미션" 섹션, [16_keymap_ergonomics.md](16_keymap_ergonomics.md)(비급의
 > 원전), [13_capslock_trigger.md](13_capslock_trigger.md), [08](08_layer_passthrough_plan.md)

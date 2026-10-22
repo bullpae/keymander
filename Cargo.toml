@@ -44,6 +44,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Serialization (for CLI JSON output)
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+# kmd dojo 콘텐츠(assets/dojo/*.toml) 파싱 — kmd-core 와 같은 버전
+toml = "0.8"
 
 # Unicode display width (for proper CJK cursor positioning)
 unicode-width = "0.2"
