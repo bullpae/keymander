@@ -32,6 +32,8 @@ pub struct BeltState {
     pub boss_cleared: bool,
     pub stars: u32,
     pub completed: bool,
+    /// 수련할 수 있는 과도 관문도 없다 (전부 공사 중)
+    pub building: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,8 @@ pub struct Standing {
     pub belts: Vec<BeltState>,
     /// 지금 수련 중인 띠 (첫 미완료 띠). 전부 끝났으면 `belts.len()`.
     pub current: usize,
+    /// 들어갈 수 있는 가장 먼 띠 — 공사 중인 띠는 길을 막지 않는다
+    pub reach: usize,
     pub stars: u32,
 }
 
@@ -61,6 +65,7 @@ pub fn standing(
 ) -> Standing {
     let mut belts = Vec::with_capacity(cur.belt.len());
     let mut current = None;
+    let mut stalled = None;
     let mut stars = 0;
     for (i, belt) in cur.belt.iter().enumerate() {
         let mut st = BeltState::default();
@@ -78,17 +83,24 @@ pub fn standing(
             st.boss_ready = boss.is_ready() && missing(boss, has).is_empty();
             st.boss_cleared = stars_of(progress, &boss.id) > 0;
         }
-        // 수련할 수 있는 것이 하나도 없는 띠(공사 중)는 완료로 치지 않는다 — 거기서 멈춘다
         st.completed =
             st.required > 0 && st.done == st.required && st.boss_ready && st.boss_cleared;
+        st.building = st.required == 0 && !st.boss_ready;
         stars += st.stars;
-        if !st.completed && current.is_none() {
+        // 전부 공사 중인 띠는 완료로 치지 않지만 길을 막지도 않는다 — 다음 띠가
+        // 열려 있으면 거기서 수련한다. 뒤에 수련할 띠가 하나도 없으면 첫 공사 중
+        // 띠에서 멈춘다(검은띠로 건너뛰지 않게).
+        if st.building {
+            stalled.get_or_insert(i);
+        } else if !st.completed && current.is_none() {
             current = Some(i);
         }
         belts.push(st);
     }
+    let reach = current.unwrap_or(belts.len());
     Standing {
-        current: current.unwrap_or(belts.len()),
+        current: current.or(stalled).unwrap_or(belts.len()),
+        reach,
         belts,
         stars,
     }
@@ -103,7 +115,7 @@ impl Standing {
         if !miss.is_empty() {
             return Access::Missing(miss);
         }
-        if belt_idx > self.current {
+        if belt_idx > self.reach {
             return Access::LockedBelt;
         }
         if lesson.is_boss() {
@@ -193,22 +205,54 @@ mod tests {
         let c = content();
         let st = standing(&c.curriculum, &BTreeMap::new(), ALL);
         let yellow = &c.curriculum.belt[1];
-        assert_eq!(st.access(1, &yellow.lesson[0], ALL), Access::Building);
+        assert_eq!(st.access(1, &yellow.lesson[0], ALL), Access::LockedBelt);
+        let green = c.lesson("green.2").unwrap();
+        assert_eq!(st.access(green.0, green.2, ALL), Access::Building);
     }
 
     #[test]
     fn 수가_없는_과는_미보유로_표시된다() {
         let c = content();
-        let st = standing(&c.curriculum, &BTreeMap::new(), &|a| a != Action::PageUp);
+        let has = |a| a != Action::PageUp;
+        let st = standing(&c.curriculum, &BTreeMap::new(), &has);
         let page = c.lesson("orange.3").unwrap().2;
-        // 공사 중 판정이 먼저다 — 구현되면 Missing 이 된다
         assert_eq!(
-            st.access(2, page, &|a| a != Action::PageUp),
-            Access::Building
+            st.access(0, page, &has),
+            Access::Missing(vec![Action::PageUp])
         );
+    }
+
+    /// 주황띠까지 끝내면 공사 중인 초록·파란띠를 건너 보라띠에서 수련한다
+    #[test]
+    fn 공사_중인_띠는_건너뛰고_끝에서는_멈춘다() {
+        let c = content();
+        let mut entries = Vec::new();
+        for b in &c.curriculum.belt[..3] {
+            for l in b.lesson.iter().chain(b.boss.iter()) {
+                entries.push((l.id.as_str(), 1));
+            }
+        }
+        let st = standing(&c.curriculum, &prog(&entries), ALL);
+        assert_eq!(c.curriculum.belt[st.current].id, "purple");
+        assert!(st.belts[3].building, "초록띠는 공사 중");
+
+        for l in c.curriculum.belt[5]
+            .lesson
+            .iter()
+            .chain(c.curriculum.belt[5].boss.iter())
+        {
+            entries.push((l.id.as_str(), 1));
+        }
+        let st = standing(&c.curriculum, &prog(&entries), ALL);
         assert_eq!(
-            missing(page, &|a| a != Action::PageUp),
-            vec![Action::PageUp]
+            c.curriculum.belt[st.current].id, "green",
+            "뒤에 수련할 띠가 없으면 첫 공사 중 띠에서 멈춘다"
+        );
+        let purple = &c.curriculum.belt[5].lesson[0];
+        assert_eq!(
+            st.access(5, purple, ALL),
+            Access::Open,
+            "끝낸 띠는 다시 할 수 있다"
         );
     }
 }

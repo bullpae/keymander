@@ -134,6 +134,9 @@ enum Commands {
         /// Jump straight to a lesson (e.g. white.1)
         #[arg(long)]
         lesson: Option<String>,
+        /// Free practice — every lesson open regardless of belt (runs are still recorded)
+        #[arg(long)]
+        free: bool,
     },
 }
 
@@ -450,8 +453,8 @@ fn main() -> color_eyre::Result<()> {
                 KeymapAction::ListPresets => cmd::keymap::Action::ListPresets,
             })?;
         }
-        Some(Commands::Dojo { lesson }) => {
-            cmd::dojo::run(lesson)?;
+        Some(Commands::Dojo { lesson, free }) => {
+            cmd::dojo::run(lesson, free)?;
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {

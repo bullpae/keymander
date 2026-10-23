@@ -6,7 +6,13 @@
 #   {nav} {mouse}   → 레이어 트리거 (예: CapsLock, RAlt)
 #
 # kind 가 아직 구현되지 않은 과는 지도에 "수련장 공사 중"으로 보인다.
-# 구현된 kind: summon (M1)
+# 구현된 kind: summon · spar · maze · golf · mouse (content.rs READY_KINDS)
+#
+# 종류별 설정
+#   spar   style = "card" | "rain", count, speed_ms(화살 간격), fall_ms(낙하 시간)
+#   maze   set = maze.toml 의 세트
+#   golf   set = golf.toml 의 코스
+#   mouse  set = move | aim | wheel | drag | leak | rats, count, par_time_s
 
 [[belt]]
 id = "white"
@@ -70,6 +76,8 @@ motto = "왼손이 쥐고, 오른손이 움직인다. 화살표 키로 손을 �
   id = "yellow.1"
   title = "네 방향"
   kind = "spar"
+  style = "card"
+  count = 16
   why = "{nav} 을 쥐고 {key:Left} {key:Down} {key:Up} {key:Right} — Vim 의 그 자리, 모든 앱에서."
   teach = ["{nav} 은 쥐는 손, 방향 키는 움직이는 손.", "{key:Left} ← · {key:Down} ↓ · {key:Up} ↑ · {key:Right} →", "보지 말고 느껴라."]
   needs = ["Left", "Down", "Up", "Right"]
@@ -79,17 +87,22 @@ motto = "왼손이 쥐고, 오른손이 움직인다. 화살표 키로 손을 �
   id = "yellow.2"
   title = "미로 탈출"
   kind = "maze"
+  set = "maze"
   why = "격자 미로를 레이어 방향키만으로 빠져나간다."
-  teach = ["벽에 부딪히면 한 칸 흔들린다.", "출구까지 가장 적은 수로."]
+  teach = ["벽에 부딪히면 한 타가 날아간다.", "엽전 ◆ 을 모두 주워야 문 門 이 열린다.", "세 번째 미로는 어둡다 — 지나온 길만 기억난다."]
   needs = ["Left", "Down", "Up", "Right"]
   scroll = "二"
 
   [[belt.lesson]]
   id = "yellow.3"
-  title = "대련"
+  title = "화살비"
   kind = "spar"
-  why = "제시된 방향을 결과 키로 받아친다. 콤보가 끊기지 않게."
-  teach = ["반응시간 막대가 줄기 전에.", "틀리면 콤보가 끊긴다."]
+  style = "rain"
+  count = 32
+  speed_ms = 620
+  fall_ms = 2000
+  why = "네 갈래로 떨어지는 화살을 판정선에서 받아친다. 콤보가 끊기지 않게."
+  teach = ["화살이 판정선 ━ 에 닿는 순간 그 방향.", "極 · 妙 · 可 — 박자가 맞을수록 높다.", "놓치거나 헛손질하면 콤보가 끊긴다."]
   needs = ["Left", "Down", "Up", "Right"]
   scroll = "三"
 
@@ -97,8 +110,13 @@ motto = "왼손이 쥐고, 오른손이 움직인다. 화살표 키로 손을 �
   id = "yellow.boss"
   name = "화살귀(箭鬼) 1형"
   kind = "spar"
+  style = "rain"
+  count = 48
+  speed_ms = 540
+  fall_ms = 1500
+  needs = ["Left", "Down", "Up", "Right"]
   line = "네 오른손은 결국 화살표로 돌아올 것이다!"
-  why = "홈로우에서 화살표 키로 손을 끌어내는 귀신."
+  why = "화살표 키로 손을 끌어내는 귀신. 화살비를 받아쳐 쓰러뜨려라."
   scroll = "十"
 
 [[belt]]
@@ -111,6 +129,7 @@ motto = "적게 누르는 것이 곧 빠른 것이다."
   id = "orange.1"
   title = "단어 점프"
   kind = "golf"
+  set = "jump"
   why = "{WordRight} 두 번이면 {Right} 열두 번이 필요 없다."
   teach = ["{key:WordLeft} 단어 ← · {key:WordRight} 단어 →", "깃발까지 가장 적은 타수로."]
   needs = ["WordLeft", "WordRight"]
@@ -120,6 +139,7 @@ motto = "적게 누르는 것이 곧 빠른 것이다."
   id = "orange.2"
   title = "줄 처음과 끝"
   kind = "golf"
+  set = "line"
   why = "같은 키를 두 번 톡톡 — {LineStart} 은 줄 처음, {LineEnd} 은 줄 끝."
   teach = ["300ms 안에 두 번.", "첫 탭은 단어 이동으로 먼저 도착한다 — 그래서 2타다."]
   needs = ["LineStart", "LineEnd"]
@@ -129,8 +149,9 @@ motto = "적게 누르는 것이 곧 빠른 것이다."
   id = "orange.3"
   title = "페이지"
   kind = "golf"
+  set = "page"
   why = "{PageUp} · {PageDown} — 긴 문서는 페이지로 건넌다."
-  teach = ["한 페이지 = 화면 한 장."]
+  teach = ["한 페이지 = 화면 한 장(8줄).", "{key:PageDown} 아래 장 · {key:PageUp} 위 장", "장을 넘긴 뒤 남은 몇 줄은 방향 키로."]
   needs = ["PageUp", "PageDown"]
   scroll = "八"
 
@@ -138,8 +159,9 @@ motto = "적게 누르는 것이 곧 빠른 것이다."
   id = "orange.4"
   title = "지우기"
   kind = "golf"
-  why = "{Backspace} 는 앞을, {Delete} 는 뒤를 지운다. 백스페이스까지 손을 뻗지 않는다."
-  teach = ["{key:Backspace} 앞 글자 · {key:Delete} 뒷 글자"]
+  set = "delete"
+  why = "{Backspace} 는 앞을, {Delete} 는 뒤를 — 백스페이스까지 손을 뻗지 않는다."
+  teach = ["{key:Backspace} 앞 글자 · {key:Delete} 뒷 글자", "빨간 군더더기만 지워진다 — 멀쩡한 글자는 칼이 튕겨 나온다.", "군더더기 앞에 서면 {key:Delete}, 뒤에 서면 {key:Backspace}."]
   needs = ["Backspace", "Delete"]
   scroll = "七"
 
@@ -147,6 +169,8 @@ motto = "적게 누르는 것이 곧 빠른 것이다."
   id = "orange.boss"
   name = "화살귀(箭鬼) 2형"
   kind = "golf"
+  set = "boss"
+  needs = ["WordLeft", "WordRight"]
   line = "열두 번 두드려라, 열두 번!"
   why = "축지 코스 9홀을 지나 2형을 물리친다."
   scroll = "六"
@@ -160,7 +184,7 @@ motto = "레이어는 에디터가 아니라 모든 앱에서 동작한다."
   [[belt.lesson]]
   id = "green.1"
   title = "선택의 수"
-  kind = "golf"
+  kind = "select"
   why = "Shift 를 함께 쥐면 이동이 선택이 된다."
   needs = ["WordLeft", "WordRight"]
   scroll = "十八"
@@ -241,6 +265,10 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
   id = "purple.1"
   title = "포인터 이동"
   kind = "mouse"
+  set = "move"
+  count = 8
+  par_time_s = 40
+  teach = ["과녁 ◎ 위에 포인터를 올리면 맞는다.", "멀면 쭉 누르고 있어라 — 가속이 붙는다. 가까우면 톡톡.", "포인터는 이 터미널 창 안에서만 보인다."]
   why = "{mouse} 을 쥐고 {key:PointerUp} {key:PointerLeft} {key:PointerDown} {key:PointerRight} — 손은 홈포지션 그대로."
   needs = ["PointerUp", "PointerDown", "PointerLeft", "PointerRight"]
   scroll = "十三"
@@ -249,6 +277,10 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
   id = "purple.2"
   title = "조준"
   kind = "mouse"
+  set = "aim"
+  count = 10
+  par_time_s = 45
+  teach = ["과녁에 적힌 버튼으로 눌러라 — 좌 는 {key:ClickLeft}, 우 는 {key:ClickRight}.", "작은 과녁은 {key:Precision} 을 함께 쥐면 느려진다.", "빗나가면 기록에 남는다."]
   why = "{key:ClickLeft} 좌클릭, {key:ClickRight} 우클릭 — 이동 키의 왼쪽과 오른쪽."
   needs = ["ClickLeft", "ClickRight"]
   scroll = "十四"
@@ -257,6 +289,10 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
   id = "purple.3"
   title = "휠 수색"
   kind = "mouse"
+  set = "wheel"
+  count = 4
+  par_time_s = 50
+  teach = ["긴 목록에서 찾는 비급을 휠로 끌어온다.", "{key:WheelDown} 아래로 · {key:WheelUp} 위로", "보이면 {key:ClickLeft} 로 집는다."]
   why = "{key:WheelUp} 위로, {key:WheelDown} 아래로."
   needs = ["WheelUp", "WheelDown"]
   scroll = "十六"
@@ -265,6 +301,9 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
   id = "purple.4"
   title = "드래그"
   kind = "mouse"
+  set = "drag"
+  par_time_s = 60
+  teach = ["파일 위에서 좌클릭을 쥔 채 옮겨 폴더에 놓는다.", "쥐는 일은 엄지(스페이스)가 — 이동 손가락과 겹치지 않게.", "폴더 밖에 놓으면 제자리로 돌아간다."]
   why = "드래그는 엄지가 맡는다 — 이동 손가락과 겹치지 않는다."
   needs = ["ClickLeft"]
   scroll = "十五"
@@ -273,6 +312,8 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
   id = "purple.5"
   title = "새는 글자 0"
   kind = "mouse"
+  set = "leak"
+  teach = ["Enter 로 시작 — 3초 안에 {mouse} 을 쥐어라.", "쥔 채로 6초 동안 아무 글자나 마구 쳐라. 포인터도 흔들어라.", "한 글자도 새지 않으면 통과다."]
   why = "{mouse} 을 쥔 채 아무 글자나 마구 쳐 보아라. 한 글자도 새지 않는다."
   needs = ["PointerUp"]
 
@@ -280,8 +321,10 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
   id = "purple.boss"
   name = "쥐마왕(鼠魔王)"
   kind = "mouse"
+  set = "rats"
+  needs = ["PointerUp", "PointerDown", "PointerLeft", "PointerRight", "ClickLeft"]
   line = "결국 너는 나를 잡게 될 것이다!"
-  why = "마우스로 손을 끌어내는 마왕."
+  why = "마우스로 손을 끌어내는 마왕. 과녁장을 가로지르는 쥐를 잡아라."
   scroll = "二十一"
 
 [[belt]]

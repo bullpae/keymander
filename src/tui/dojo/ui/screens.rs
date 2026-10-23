@@ -10,6 +10,7 @@ use super::*;
 use crate::tui::dojo::action::Action;
 use crate::tui::dojo::app::{App, MENU};
 use crate::tui::dojo::binding::Trust;
+use crate::tui::dojo::calib::{CalibRun, Step};
 use crate::tui::dojo::content::Lesson;
 use crate::tui::dojo::precheck::Backend;
 use crate::tui::dojo::progress::Access;
@@ -67,7 +68,7 @@ pub fn precheck(f: &mut Frame, stage: Rect, app: &App) {
         stage,
         "입문 의식",
         vec![span(term.clone(), fg(SUB))],
-        "Enter 도장으로   Ctrl+C 하산",
+        "Enter 도장으로   C 키 감응 시험   Ctrl+C 하산",
         app,
     );
 
@@ -125,27 +126,177 @@ pub fn precheck(f: &mut Frame, stage: Rect, app: &App) {
         boxed,
     );
 
+    let status = if app.calib.done {
+        Line::from(vec![
+            span("   ✓ ", bold(GREEN)),
+            span("이 터미널은 시험을 마쳤다", fg(TEXT)),
+        ])
+    } else {
+        Line::from(vec![
+            span("   ! ", bold(YELLOW)),
+            span("아직 시험 전 — 기본 별칭표로 판정한다. ", fg(TEXT)),
+            span("C", bold(ACT)),
+            span(" 로 시작 (1분)", fg(SUB)),
+        ])
+    };
+    let missing: Vec<&str> = app.calib.unobservable.iter().map(|a| a.label()).collect();
     let calib = vec![
-        Line::from(""),
         Line::from(span(
-            "   같은 수도 터미널마다 다른 키로 도착한다 (macOS 단어← → iTerm2 ESC b).",
-            fg(TEXT),
-        )),
-        Line::from(span(
-            "   수를 하나씩 눌러 도착을 듣는 보정은 노란띠와 함께 다음 판에 열린다.",
+            "   같은 수도 터미널마다 다른 키로 도착한다 (macOS 단어← → Terminal.app 은 ESC b).",
             fg(SUB),
         )),
-        Line::from(""),
+        status,
+        Line::from(span(
+            if missing.is_empty() {
+                "   관측 불가 수: 없음".to_string()
+            } else {
+                format!(
+                    "   관측 불가 수: {} — 그 수가 주제인 과는 미보유로, Par 는 그 수 없이 계산한다",
+                    missing.join(", ")
+                )
+            },
+            fg(if missing.is_empty() { SUB } else { YELLOW }),
+        )),
     ];
     f.render_widget(
         Paragraph::new(calib).block(panel(Line::from(span(" 키 감응 보정 ", bold(ACCENT))))),
-        sub(body, 1, 8, 78, 6),
+        sub(body, 1, 8, 78, 5),
     );
     f.render_widget(
         Paragraph::new(sensei_line(
             "같은 수라도 터미널마다 다른 소리로 도착한다. 듣는 법부터 익혀라.",
         )),
         row(body, 16),
+    );
+}
+
+// ── S2 키 감응 시험 ───────────────────────────────────────────────────────────
+
+pub fn calib(f: &mut Frame, stage: Rect, app: &App, run: &CalibRun) {
+    let term = app
+        .report
+        .terminal
+        .clone()
+        .unwrap_or_else(|| "알 수 없음".into());
+    let done = run.current().is_none();
+    let hint = if done {
+        "Enter 점검으로"
+    } else {
+        "요청한 수를 네 배치대로   Tab 도착하지 않음   Esc 그만"
+    };
+    let body = chrome(
+        f,
+        stage,
+        "입문 의식 · 키 감응 시험",
+        vec![span(term.clone(), fg(SUB))],
+        hint,
+        app,
+    );
+    let now = std::time::Instant::now();
+    let mut lines = Vec::new();
+    for (i, a) in run.steps.iter().enumerate() {
+        let chord = app.bindings.label(*a);
+        let (mark, status, style) = match run.results.get(i) {
+            Some(Step::Observed(id)) => (span(" ✓ ", bold(GREEN)), format!("도착 {id}"), fg(SUB)),
+            Some(Step::Missing) => (
+                span(" ✗ ", bold(YELLOW)),
+                "관측 불가".to_string(),
+                fg(YELLOW),
+            ),
+            None if i == run.results.len() => (
+                span(" ▶ ", bold(ACCENT)),
+                "기다리는 중".to_string(),
+                bold(TEXT),
+            ),
+            None => (span("   ", Style::new()), String::new(), fg(DIM)),
+        };
+        lines.push(Line::from(vec![
+            mark,
+            span(fit(a.label(), 16), style),
+            span(fit(&chord, 18), bold(ACT)),
+            span(status, fg(DIM)),
+        ]));
+    }
+    let h = lines.len() as u16 + 2;
+    f.render_widget(
+        Paragraph::new(lines).block(panel(Line::from(span(
+            format!(" {term} 에 도착하는 수 "),
+            bold(ACCENT),
+        )))),
+        sub(body, 1, 0, 50, h),
+    );
+    let mut side = Vec::new();
+    match run.current() {
+        Some(a) => {
+            side.push(Line::from(span(" 지금 누를 수", fg(SUB))));
+            side.push(Line::from(""));
+            side.push(Line::from(span(format!(" {}", a.label()), bold(GOLD))));
+            side.push(Line::from(span(
+                format!(" {}", app.bindings.label(a)),
+                bold(ACT),
+            )));
+            side.push(Line::from(""));
+            if run.is_double(a) {
+                side.push(Line::from(span(" 두 번 톡톡 — 첫 탭은", fg(SUB))));
+                side.push(Line::from(span(" 단어 이동으로 먼저 온다", fg(SUB))));
+            }
+            if let Some((other, at)) = run.wrong {
+                if now.duration_since(at) < std::time::Duration::from_millis(1500) {
+                    side.push(Line::from(span(
+                        format!(" 그건 {} 다 — 다시", other.label()),
+                        bold(RED),
+                    )));
+                }
+            }
+            let left = run.remaining(now).as_secs_f32();
+            let w = 20usize;
+            let fill = ((left / 8.0) * w as f32) as usize;
+            side.push(Line::from(""));
+            side.push(Line::from(vec![
+                span(" ", Style::new()),
+                span("▮".repeat(fill.min(w)), fg(ACCENT)),
+                span("▯".repeat(w - fill.min(w)), fg(DIM)),
+            ]));
+            side.push(Line::from(span(
+                format!(" {left:.0}초 뒤 관측 불가"),
+                fg(DIM),
+            )));
+        }
+        None => {
+            let ok = run
+                .results
+                .iter()
+                .filter(|r| matches!(r, Step::Observed(_)))
+                .count();
+            side.push(Line::from(span(" 감응 시험 끝", bold(GOLD))));
+            side.push(Line::from(""));
+            side.push(Line::from(span(
+                format!(" {} 수 중 {ok} 수 도착", run.steps.len()),
+                fg(TEXT),
+            )));
+            let miss: Vec<&str> = app.calib.unobservable.iter().map(|a| a.label()).collect();
+            if !miss.is_empty() {
+                side.push(Line::from(""));
+                side.push(Line::from(span(" 관측 불가", bold(YELLOW))));
+                for m in miss {
+                    side.push(Line::from(span(format!(" · {m}"), fg(YELLOW))));
+                }
+                side.push(Line::from(""));
+                side.push(Line::from(span(" 그 수 없이 Par 를 다시", fg(SUB))));
+                side.push(Line::from(span(" 계산한다. 잠기지 않는다.", fg(SUB))));
+            }
+        }
+    }
+    f.render_widget(
+        Paragraph::new(side).block(rounded(Line::from(span(" 감응 ", bold(GOLD))))),
+        sub(body, 53, 0, 26, 16),
+    );
+    let _ = done;
+    f.render_widget(
+        Paragraph::new(sensei_line(
+            "같은 수라도 터미널마다 다른 소리로 도착한다. 듣는 법부터 익혀라.",
+        )),
+        row(body, body.height - 1),
     );
 }
 
@@ -586,9 +737,29 @@ pub fn intro(f: &mut Frame, stage: Rect, app: &App, id: &str) {
             row(body, last),
         ),
         None => f.render_widget(
-            Paragraph::new(sensei_line(&app.sensei_line)),
+            Paragraph::new(sensei_line(intro_tip(lesson))),
             row(body, last),
         ),
+    }
+}
+
+/// 입문 화면 사부 한마디 — 수련 종류별 요령
+fn intro_tip(lesson: &Lesson) -> &'static str {
+    match (
+        lesson.kind.as_str(),
+        lesson.style.as_deref(),
+        lesson.set.as_deref(),
+    ) {
+        ("summon", ..) => "타수 = 친 글자 + ↓/↑ + Enter. 사부의 수는 결과에서 공개된다.",
+        ("spar", Some("rain"), _) => "시작하면 3초 뒤 화살이 떨어진다. 눈은 판정선에 둬라.",
+        ("spar", ..) => "처음 여섯 장은 키를 보여 준다. 그다음은 몸이 기억해야 한다.",
+        ("maze", ..) => "Tab 은 사부의 길을 비춘다 — 대신 별 하나를 내놓아라.",
+        ("golf", ..) => "타수 = 도착한 결과 키 수. 두 번 톡톡 수는 2타다.",
+        ("mouse", _, Some("leak")) => {
+            "이 수련은 이 창의 마우스 캡처로 판정한다. 포인터를 창 안에 둬라."
+        }
+        ("mouse", ..) => "포인터를 이 창 안으로 데려와라. 과녁장 밖은 판정하지 않는다.",
+        _ => "아직 짓는 중이다. 안내만 먼저 읽어 두어라.",
     }
 }
 

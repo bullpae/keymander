@@ -77,6 +77,25 @@ actions! {
 }
 
 impl Action {
+    /// 쓴 수 줄·리플레이에 쓰는 한 칸 기호
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Action::Left => "←",
+            Action::Down => "↓",
+            Action::Up => "↑",
+            Action::Right => "→",
+            Action::WordLeft => "«",
+            Action::WordRight => "»",
+            Action::LineStart => "⇤",
+            Action::LineEnd => "⇥",
+            Action::PageUp => "⇞",
+            Action::PageDown => "⇟",
+            Action::Backspace => "⌫",
+            Action::Delete => "⌦",
+            _ => "·",
+        }
+    }
+
     /// 키맵 대상 문자열(`"Ctrl+Left"`, `"mouse:click"`, `"Hangul"` …)을 수로 읽는다.
     /// 수가 아닌 대상(`"Ctrl+V"` 등)은 `None` — 배치 진단에서만 쓴다.
     pub fn from_target(target: &str, os: Os) -> Option<Self> {

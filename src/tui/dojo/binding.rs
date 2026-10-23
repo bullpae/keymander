@@ -41,6 +41,17 @@ impl Binding {
         }
     }
 
+    /// 손 벌점 — 쥐는 손과 다른 손의 키가 0, 엄지·모름 1, 같은 손 2.
+    /// 같은 수에 별칭이 여럿이면(좌클릭 = W · Space · J) "쥐는 손과 움직이는 손은
+    /// 다르다"는 원칙대로 반대 손 키를 대표로 보인다.
+    fn hand_penalty(&self) -> u8 {
+        match (self.hold.as_deref().and_then(hand), hand(&self.key)) {
+            (Some(h), Some(k)) if h != k => 0,
+            (Some(h), Some(k)) if h == k => 2,
+            _ => 1,
+        }
+    }
+
     /// 우선순위 — 레이어 > 트리거 탭 > 콤보 > 단순 리맵. 작을수록 먼저.
     fn rank(&self) -> u8 {
         match (&self.layer, self.tap_trigger, &self.hold) {
@@ -90,7 +101,7 @@ impl Bindings {
         let standard_keys = collect(standard, os)
             .into_iter()
             .filter_map(|(a, mut v)| {
-                v.sort_by_key(Binding::rank);
+                v.sort_by_key(|b| (b.rank(), b.hand_penalty()));
                 v.first().map(|b| (a, b.key.clone()))
             })
             .collect();
@@ -129,10 +140,24 @@ impl Bindings {
         let list = self.by_action.get(&a)?;
         let best_rank = list.first()?.rank();
         let std_key = self.standard_keys.get(&a);
-        list.iter()
-            .filter(|b| b.rank() == best_rank)
+        let best = || list.iter().filter(|b| b.rank() == best_rank);
+        best()
             .find(|b| Some(&b.key) == std_key)
-            .or_else(|| list.first())
+            .or_else(|| best().min_by_key(|b| b.hand_penalty()))
+    }
+
+    /// 2탭 수의 첫 탭으로 먼저 도착하는 수 — 줄 처음(I I) → 단어←(I).
+    /// 데몬 엔진은 첫 탭에 1탭 수를 즉시 보내므로 2탭 수는 두 이벤트로 도착한다.
+    pub fn double_partner(&self, a: Action) -> Option<Action> {
+        if self.trust == Trust::Unknown {
+            return None;
+        }
+        let b = self.primary(a).filter(|b| b.taps >= 2)?;
+        self.by_action.iter().find_map(|(other, list)| {
+            list.iter()
+                .any(|o| o.taps == 1 && o.key == b.key && o.hold == b.hold && o.layer == b.layer)
+                .then_some(*other)
+        })
     }
 
     /// 이 배치에 그 수가 있는가. 배치 미상이면 있다고 본다(판정은 보정이 맡는다).
@@ -261,6 +286,32 @@ impl Bindings {
             feed("\n");
         }
         format!("{h:016x}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hand {
+    Left,
+    Right,
+}
+
+/// ANSI 표준 운지 기준의 손 (docs/16 §2). 엄지(Space)와 모르는 키는 `None`.
+fn hand(key: &str) -> Option<Hand> {
+    let k = key.to_ascii_lowercase();
+    match k.as_str() {
+        "capslock" | "caps" | "lshift" | "lalt" | "lctrl" | "tab" | "esc" | "`" => Some(Hand::Left),
+        "ralt" | "rshift" | "rctrl" | "enter" | "backspace" => Some(Hand::Right),
+        _ if k.chars().count() == 1 => {
+            let c = k.chars().next()?;
+            if "qwertasdfgzxcvb12345".contains(c) {
+                Some(Hand::Left)
+            } else if "yuiophjklnm67890-=[]\\;',./".contains(c) {
+                Some(Hand::Right)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -396,6 +447,13 @@ mod tests {
         };
         km.layers.insert("nav".into(), layer);
         km
+    }
+
+    #[test]
+    fn 별칭이_여럿이면_쥐는_손의_반대편_키를_보인다() {
+        let b = bindings_for(KeymapConfig::default(), Os::Mac);
+        assert_eq!(b.key(Action::ClickLeft), "W", "RAlt(오른손) 이니 왼손 W");
+        assert_eq!(b.key(Action::ClickRight), "R");
     }
 
     #[test]

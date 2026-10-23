@@ -2,7 +2,7 @@
 
 use color_eyre::Result;
 
-pub fn run(lesson: Option<String>) -> Result<()> {
+pub fn run(lesson: Option<String>, free: bool) -> Result<()> {
     let config = super::load_config()?;
     // DB 가 없어도 수련은 된다 — 기록만 남지 않는다
     let db = match super::open_db() {
@@ -12,5 +12,5 @@ pub fn run(lesson: Option<String>) -> Result<()> {
             None
         }
     };
-    crate::tui::dojo::run(&config, db, lesson)
+    crate::tui::dojo::run(&config, db, lesson, free)
 }

@@ -13,9 +13,11 @@ const CURRICULUM: &str = include_str!("../../../assets/dojo/curriculum.toml");
 const SCROLLS: &str = include_str!("../../../assets/dojo/scrolls.toml");
 const SENSEI: &str = include_str!("../../../assets/dojo/sensei.toml");
 const SUMMON: &str = include_str!("../../../assets/dojo/summon.toml");
+const GOLF: &str = include_str!("../../../assets/dojo/golf.toml");
+const MAZE: &str = include_str!("../../../assets/dojo/maze.toml");
 
-/// 이번 판에 구현된 수련 종류. 나머지는 지도에 "공사 중"으로 보인다.
-pub const READY_KINDS: &[&str] = &["summon"];
+/// 구현된 수련 종류. 나머지는 지도에 "공사 중"으로 보인다.
+pub const READY_KINDS: &[&str] = &["summon", "spar", "maze", "golf", "mouse"];
 
 #[derive(Debug, Deserialize)]
 pub struct Curriculum {
@@ -51,6 +53,16 @@ pub struct Lesson {
     pub line: Option<String>,
     /// 보스 제한 시간
     pub time_limit_s: Option<u32>,
+    /// 대련 꼴 — `card`(기본) · `rain`
+    pub style: Option<String>,
+    /// 문항 수 (대련 카드·화살·과녁)
+    pub count: Option<u32>,
+    /// 화살비 박자 간격
+    pub speed_ms: Option<u32>,
+    /// 화살이 떨어지는 시간
+    pub fall_ms: Option<u32>,
+    /// 마우스 과의 기준 시간
+    pub par_time_s: Option<u32>,
 }
 
 impl Lesson {
@@ -107,6 +119,9 @@ pub struct SenseiLines {
     pub clear: Vec<String>,
     pub locked: Vec<String>,
     pub building: Vec<String>,
+    /// 콤보 10 단위
+    #[serde(default)]
+    pub combo: Vec<String>,
 }
 
 impl SenseiLines {
@@ -123,6 +138,7 @@ impl SenseiLines {
             &self.clear,
             &self.locked,
             &self.building,
+            &self.combo,
         ]
         .into_iter()
         .flatten()
@@ -157,11 +173,60 @@ pub struct Request {
     pub accept: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct Golf {
+    pub course: Vec<GolfCourse>,
+}
+
+/// 키 골프 코스 — 홀 여러 개
+#[derive(Debug, Deserialize)]
+pub struct GolfCourse {
+    pub id: String,
+    pub name: String,
+    /// 홀 기본 허용 수
+    pub moves: Vec<String>,
+    /// 페이지 이동 줄 수
+    pub page: Option<usize>,
+    pub hole: Vec<GolfHole>,
+}
+
+/// 홀 — `text` 표기는 [`super::golf::Hole::parse`]
+#[derive(Debug, Clone, Deserialize)]
+pub struct GolfHole {
+    pub title: String,
+    pub text: String,
+    pub moves: Option<Vec<String>>,
+    pub par: Option<u32>,
+    pub page: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Mazes {
+    pub set: Vec<MazeSet>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MazeSet {
+    pub id: String,
+    pub maze: Vec<MazeDef>,
+}
+
+/// 미로 — `#` 벽, `S` 시작, `E` 문, `$` 엽전
+#[derive(Debug, Deserialize)]
+pub struct MazeDef {
+    pub title: String,
+    pub map: String,
+    #[serde(default)]
+    pub fog: bool,
+}
+
 pub struct Content {
     pub curriculum: Curriculum,
     pub scrolls: Scrolls,
     pub sensei: SenseiLines,
     pub summon: Summon,
+    pub golf: Golf,
+    pub maze: Mazes,
 }
 
 impl Content {
@@ -171,6 +236,8 @@ impl Content {
             scrolls: toml::from_str(SCROLLS).map_err(|e| format!("scrolls.toml: {e}"))?,
             sensei: toml::from_str(SENSEI).map_err(|e| format!("sensei.toml: {e}"))?,
             summon: toml::from_str(SUMMON).map_err(|e| format!("summon.toml: {e}"))?,
+            golf: toml::from_str(GOLF).map_err(|e| format!("golf.toml: {e}"))?,
+            maze: toml::from_str(MAZE).map_err(|e| format!("maze.toml: {e}"))?,
         })
     }
 
@@ -190,6 +257,14 @@ impl Content {
 
     pub fn summon_set(&self, id: &str) -> Option<&SummonSet> {
         self.summon.set.iter().find(|s| s.id == id)
+    }
+
+    pub fn golf_course(&self, id: &str) -> Option<&GolfCourse> {
+        self.golf.course.iter().find(|c| c.id == id)
+    }
+
+    pub fn maze_set(&self, id: &str) -> Option<&MazeSet> {
+        self.maze.set.iter().find(|s| s.id == id)
     }
 
     /// 과의 총 개수 (보스 제외) — 별 만점 계산용
@@ -350,6 +425,44 @@ mod tests {
                         Some(t) => assert!(names.contains(t.as_str()), "{}: 없는 항목 {t}", l.id),
                         None => assert!(!r.accept.is_empty(), "{}: target 도 accept 도 없음", l.id),
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn 구현된_과는_있는_코스와_세트를_가리킨다() {
+        for b in &c().curriculum.belt {
+            for l in b
+                .lesson
+                .iter()
+                .chain(b.boss.iter())
+                .filter(|l| l.is_ready())
+            {
+                let set = l.set.as_deref();
+                match l.kind.as_str() {
+                    "golf" => assert!(
+                        set.and_then(|s| c().golf_course(s)).is_some(),
+                        "{}: 없는 코스",
+                        l.id
+                    ),
+                    "maze" => assert!(
+                        set.and_then(|s| c().maze_set(s)).is_some(),
+                        "{}: 없는 미로 세트",
+                        l.id
+                    ),
+                    "mouse" => assert!(
+                        ["move", "aim", "wheel", "drag", "leak", "rats"]
+                            .contains(&set.unwrap_or("")),
+                        "{}: 모르는 마우스 수련",
+                        l.id
+                    ),
+                    "spar" => assert!(
+                        matches!(l.style.as_deref(), None | Some("card") | Some("rain")),
+                        "{}: 모르는 대련 꼴",
+                        l.id
+                    ),
+                    _ => {}
                 }
             }
         }

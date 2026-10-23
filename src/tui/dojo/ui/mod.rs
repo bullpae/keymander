@@ -3,6 +3,7 @@
 //! 모든 화면은 80×24 무대 위에 그린다. 터미널이 더 크면 무대를 가운데에 둔다 —
 //! 넓어져도 시선 이동이 늘지 않게.
 
+mod modes;
 mod play;
 mod screens;
 
@@ -13,7 +14,8 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, Screen};
+use super::app::{App, Screen, SHAKE};
+use super::play::Play;
 
 pub const STAGE_W: u16 = 80;
 pub const STAGE_H: u16 = 24;
@@ -139,19 +141,33 @@ pub fn stars(n: u8) -> Vec<Span<'static>> {
 
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
-    let Some(stage) = stage(area) else {
+    let Some(mut stage) = stage(area) else {
         screens::too_small(f, area);
         return;
     };
+    // 실수 직후 무대가 한 칸 흔들린다 (docs/10 §4-2)
+    if let Some(at) = app.shake {
+        let e = at.elapsed();
+        if e < SHAKE && area.width > STAGE_W && (e.as_millis() / 35).is_multiple_of(2) {
+            stage.x += 1;
+        }
+    }
     match &app.screen {
         Screen::Precheck => screens::precheck(f, stage, app),
+        Screen::Calib(run) => screens::calib(f, stage, app, run),
         Screen::Lobby => screens::lobby(f, stage, app),
         Screen::Map => screens::map(f, stage, app),
         Screen::Intro(id) => screens::intro(f, stage, app, id),
         Screen::Codex => screens::codex(f, stage, app),
         Screen::Records => screens::records(f, stage, app),
-        Screen::Round(round) => {
-            play::round(f, stage, app, round);
+        Screen::Round(p) => {
+            match p.as_ref() {
+                Play::Summon(r) => play::round(f, stage, app, r),
+                Play::Golf(r) => modes::golf(f, stage, app, r),
+                Play::Spar(r) => modes::spar(f, stage, app, r),
+                Play::Maze(r) => modes::maze(f, stage, app, r),
+                Play::Mouse(r) => modes::mouse(f, stage, app, r),
+            }
             if let Some(sel) = app.pause {
                 play::pause(f, stage, sel);
             }
@@ -220,6 +236,17 @@ pub fn chrome(
     };
     f.render_widget(Paragraph::new(foot_line).style(hd), foot);
     body
+}
+
+/// 게이지 막대 — `█████░░░  70%`
+pub fn gauge(pct: i32, w: usize, color: Color) -> Vec<Span<'static>> {
+    let pct = pct.clamp(0, 100) as usize;
+    let filled = w * pct / 100;
+    vec![
+        span("█".repeat(filled), fg(color)),
+        span("░".repeat(w - filled), fg(DIM)),
+        span(format!(" {pct:>3}%"), fg(SUB)),
+    ]
 }
 
 /// 한 줄 사각형

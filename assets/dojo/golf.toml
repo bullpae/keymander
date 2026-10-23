@@ -1,0 +1,362 @@
+# 키 골프 코스 (docs/10 §4-1, §7)
+#
+# 홀 텍스트 표기: ‸ 시작 커서 · ⚑ 깃발(커서 목표) · «…» 군더더기(지울 글자)
+# 사부의 수·Par 는 실행 시 BFS 로 구한다 — 사용자 배치에 없는 수, 이 터미널에서
+# 관측되지 않는 수는 빼고 계산한다. 모든 홀은 테스트가 전수 검증한다(golf.rs).
+
+[[course]]
+id = "jump"
+name = "축지 코스"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight"]
+
+  [[course.hole]]
+  title = "함수 이름으로"
+  text = """
+‸fn main() -> Result<()> {
+    let config = load_config()?;
+    let index = ⚑build_index(&config);
+    run(index)
+}"""
+
+  [[course.hole]]
+  title = "뒤로 점프"
+  text = """
+let ⚑items = files.iter().filter(|f| f.is_dir()).collect();‸"""
+
+  [[course.hole]]
+  title = "인자 사이"
+  text = """
+‸spawn_worker(queue, retries, timeout_ms, ⚑on_error, logger);"""
+
+  [[course.hole]]
+  title = "한글도 단어다"
+  text = """
+레이어를 쥐는 손과 ‸조작하는 손은 항상 다르다.
+한 손으로 쥐어짜는 동작은 ⚑없다."""
+
+  [[course.hole]]
+  title = "두 줄 건너"
+  text = """
+match event {
+    Key(k) => handle_key(k),
+    Mouse(m) => ‸handle_mouse(m),
+    Resize(w, h) => ⚑redraw(w, h),
+}"""
+
+[[course]]
+id = "line"
+name = "끝과 끝 코스"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd"]
+
+  [[course.hole]]
+  title = "줄 끝으로"
+  text = """
+‸let total = items.iter().map(|i| i.price * i.qty).sum::<u64>();⚑"""
+
+  [[course.hole]]
+  title = "줄 처음으로"
+  text = """
+⚑    return Err(Error::new("connection reset by peer"));‸"""
+
+  [[course.hole]]
+  title = "윗줄 끝"
+  text = """
+let path = config_dir().join("keymander").join("config.toml");⚑
+let text = std::fs::read_to_string(&path)?‸;"""
+
+  [[course.hole]]
+  title = "두 줄 아래 처음"
+  text = """
+fn ‸parse(input: &str) -> Vec<Token> {
+    let mut out = Vec::new();
+⚑    for ch in input.chars() {
+        out.push(Token::from(ch));
+    }"""
+
+  [[course.hole]]
+  title = "끝에서 끝"
+  text = """
+‸// 손이 떠나면 진다 — 홈로우 위에서 끝낸다
+const HOME_ROW: [char; 8] = ['a', 's', 'd', 'f', 'j', 'k', 'l', ';'];⚑"""
+
+[[course]]
+id = "page"
+name = "긴 두루마리 코스"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd", "PageUp", "PageDown"]
+page = 8
+
+  [[course.hole]]
+  title = "아래 장으로"
+  text = """
+‸# keymander 수련 일지
+
+## 1. 첫 60초
+설치하고 런처를 부른다. 이름 몇 글자, 그리고 Enter.
+찾지 말고 불러라. 소환 루프가 모든 것의 시작이다.
+
+## 2. 화살표 없는 화살표
+레이어를 쥐는 손과 움직이는 손은 항상 다르다.
+오른손은 홈로우에서 방향을 만든다.
+화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다.
+
+## 3. 축지법
+적게 누르는 것이 곧 빠른 것이다.
+단어 두 번이면 글자 열두 번이 필요 없다.
+줄 처음과 끝은 같은 키를 두 번 톡톡.
+
+## 4. 문서 수술
+선택하고 한 번에 벤다. 글자 하나씩 지우지 않는다.
+레이어는 에디터가 아니라 모든 앱에서 동작한다.
+
+## 5. 한 손가락 두 얼굴
+짧게 톡이면 한영, 길게 쥐면 레이어.
+
+## 6. 보이지 않는 마우스
+⚑멀리는 빠르게, 가까이는 느리게.
+마구 쳐도 한 글자도 새지 않는다.
+
+## 7. 하산
+손이 떠나면 진다. 오늘도 홈로우 위에서."""
+
+  [[course.hole]]
+  title = "위 장으로"
+  text = """
+# keymander 수련 일지
+
+## 1. 첫 60초
+설치하고 런처를 부른다. 이름 몇 글자, 그리고 Enter.
+⚑찾지 말고 불러라. 소환 루프가 모든 것의 시작이다.
+
+## 2. 화살표 없는 화살표
+레이어를 쥐는 손과 움직이는 손은 항상 다르다.
+오른손은 홈로우에서 방향을 만든다.
+화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다.
+
+## 3. 축지법
+적게 누르는 것이 곧 빠른 것이다.
+단어 두 번이면 글자 열두 번이 필요 없다.
+줄 처음과 끝은 같은 키를 두 번 톡톡.
+
+## 4. 문서 수술
+선택하고 한 번에 벤다. 글자 하나씩 지우지 않는다.
+레이어는 에디터가 아니라 모든 앱에서 동작한다.
+
+## 5. 한 손가락 두 얼굴
+짧게 톡이면 한영, 길게 쥐면 레이어.
+
+## 6. 보이지 않는 마우스
+멀리는 빠르게, 가까이는 느리게.
+마구 쳐도 한 글자도 새지 않는다.
+
+‸## 7. 하산
+손이 떠나면 진다. 오늘도 홈로우 위에서."""
+
+  [[course.hole]]
+  title = "장 넘겨 줄 끝"
+  text = """
+# keymander 수련 일지
+
+## 1. 첫 60초
+‸설치하고 런처를 부른다. 이름 몇 글자, 그리고 Enter.
+찾지 말고 불러라. 소환 루프가 모든 것의 시작이다.
+
+## 2. 화살표 없는 화살표
+레이어를 쥐는 손과 움직이는 손은 항상 다르다.
+오른손은 홈로우에서 방향을 만든다.
+화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다.
+
+## 3. 축지법
+적게 누르는 것이 곧 빠른 것이다.
+단어 두 번이면 글자 열두 번이 필요 없다.
+줄 처음과 끝은 같은 키를 두 번 톡톡.
+
+## 4. 문서 수술
+선택하고 한 번에 벤다. 글자 하나씩 지우지 않는다.
+레이어는 에디터가 아니라 모든 앱에서 동작한다.⚑
+
+## 5. 한 손가락 두 얼굴
+짧게 톡이면 한영, 길게 쥐면 레이어.
+
+## 6. 보이지 않는 마우스
+멀리는 빠르게, 가까이는 느리게.
+마구 쳐도 한 글자도 새지 않는다.
+
+## 7. 하산
+손이 떠나면 진다. 오늘도 홈로우 위에서."""
+
+  [[course.hole]]
+  title = "끝까지"
+  text = """
+# keymander 수련 일지
+
+## 1. 첫 60초
+설치하고 런처를 부른다. 이름 몇 글자, 그리고 Enter.
+찾지 말고 불러라. 소환 루프가 모든 것의 시작이다.
+
+## 2. 화살표 없는 화살표
+레이어를 쥐는 손과 움직이는 손은 항상 다르다.
+‸오른손은 홈로우에서 방향을 만든다.
+화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다.
+
+## 3. 축지법
+적게 누르는 것이 곧 빠른 것이다.
+단어 두 번이면 글자 열두 번이 필요 없다.
+줄 처음과 끝은 같은 키를 두 번 톡톡.
+
+## 4. 문서 수술
+선택하고 한 번에 벤다. 글자 하나씩 지우지 않는다.
+레이어는 에디터가 아니라 모든 앱에서 동작한다.
+
+## 5. 한 손가락 두 얼굴
+짧게 톡이면 한영, 길게 쥐면 레이어.
+
+## 6. 보이지 않는 마우스
+멀리는 빠르게, 가까이는 느리게.
+마구 쳐도 한 글자도 새지 않는다.
+
+## 7. 하산⚑
+손이 떠나면 진다. 오늘도 홈로우 위에서."""
+
+[[course]]
+id = "delete"
+name = "군더더기 코스"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd", "Backspace", "Delete"]
+
+  [[course.hole]]
+  title = "한 글자"
+  text = """
+let conf«f»ig = load();‸"""
+
+  [[course.hole]]
+  title = "앞에서 지우기"
+  text = """
+‸«xx»fn main() {}"""
+
+  [[course.hole]]
+  title = "두 군데"
+  text = """
+print«l»n!("hello, «, »world");‸"""
+
+  [[course.hole]]
+  title = "반복된 단어"
+  text = """
+‸the «the »quick brown fox jumps"""
+
+  [[course.hole]]
+  title = "줄마다 하나"
+  text = """
+‸손은 홈로우를 떠나지 않«는»는다.
+화살표 키도, 마«우»우스도 필요 없다."""
+
+[[course]]
+id = "boss"
+name = "화살귀 2형 · 아홉 홀"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd", "PageUp", "PageDown", "Backspace", "Delete"]
+page = 8
+
+  [[course.hole]]
+  title = "一 · 열두 번의 유혹"
+  text = """
+‸let message = format!("{} keys pressed", ⚑count);"""
+
+  [[course.hole]]
+  title = "二 · 거꾸로"
+  text = """
+⚑if let Some(item) = results.get(selected) { open(item); }‸"""
+
+  [[course.hole]]
+  title = "三 · 군더더기"
+  text = """
+let res«s»ult = run(«run(»args);‸"""
+
+  [[course.hole]]
+  title = "四 · 아래로"
+  text = """
+fn ‸draw(frame: &mut Frame) {
+    let area = frame.area();
+    let block = Block::bordered();
+    frame.render_widget(block, ⚑area);
+}"""
+
+  [[course.hole]]
+  title = "五 · 장 넘기기"
+  text = """
+# keymander 수련 일지
+‸
+## 1. 첫 60초
+설치하고 런처를 부른다. 이름 몇 글자, 그리고 Enter.
+찾지 말고 불러라. 소환 루프가 모든 것의 시작이다.
+
+## 2. 화살표 없는 화살표
+레이어를 쥐는 손과 움직이는 손은 항상 다르다.
+오른손은 홈로우에서 방향을 만든다.
+화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다.
+
+## 3. 축지법
+적게 누르는 것이 곧 빠른 것이다.
+단어 두 번이면 글자 열두 번이 필요 없다.
+줄 처음과 끝은 같은 키를 두 번 톡톡.
+
+## 4. 문서 수술
+선택하고 한 번에 벤다. 글자 하나씩 지우지 않는다.
+레이어는 에디터가 아니라 모든 앱에서 동작한다.
+
+## 5. 한 손가락 두 얼굴
+짧게 톡이면 한영, 길게 쥐면 레이어.⚑
+
+## 6. 보이지 않는 마우스
+멀리는 빠르게, 가까이는 느리게.
+마구 쳐도 한 글자도 새지 않는다.
+
+## 7. 하산
+손이 떠나면 진다. 오늘도 홈로우 위에서."""
+
+  [[course.hole]]
+  title = "六 · 줄 처음"
+  text = """
+    ⚑items.sort_by_key(|i| std::cmp::Reverse(i.score));‸"""
+
+  [[course.hole]]
+  title = "七 · 두 마리"
+  text = """
+‸«//»return Ok(());
+let value = input.trim()«;»;"""
+
+  [[course.hole]]
+  title = "八 · 돌아오기"
+  text = """
+# keymander 수련 일지
+
+## 1. 첫 60초
+설치하고 런처를 부른다. 이름 몇 글자, 그리고 Enter.
+찾지 말고 불러라. 소환 루프가 모든 것의 시작이다.
+
+## 2. 화살표 없는 화살표
+⚑레이어를 쥐는 손과 움직이는 손은 항상 다르다.
+오른손은 홈로우에서 방향을 만든다.
+화살표 키로 손을 보내는 순간 홈로우를 떠난 것이다.
+
+## 3. 축지법
+적게 누르는 것이 곧 빠른 것이다.
+단어 두 번이면 글자 열두 번이 필요 없다.
+줄 처음과 끝은 같은 키를 두 번 톡톡.
+
+## 4. 문서 수술
+선택하고 한 번에 벤다. 글자 하나씩 지우지 않는다.
+레이어는 에디터가 아니라 모든 앱에서 동작한다.
+
+## 5. 한 손가락 두 얼굴
+짧게 톡이면 한영, 길게 쥐면 레이어.
+
+## 6. 보이지 않는 마우스
+멀리는 빠르게, 가까이는 느리게.
+마구 쳐도‸ 한 글자도 새지 않는다.
+
+## 7. 하산
+손이 떠나면 진다. 오늘도 홈로우 위에서."""
+
+  [[course.hole]]
+  title = "九 · 마지막 일격"
+  text = """
+let keymap = effective_keymap(&«&»config.launcher.keymap);‸
+⚑run(keymap)"""

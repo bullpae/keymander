@@ -11,6 +11,7 @@ use ratatui::Frame;
 use super::*;
 use crate::tui::dojo::action::Action;
 use crate::tui::dojo::app::{row_mark, App, Outcome};
+use crate::tui::dojo::play::rank;
 use crate::tui::dojo::summon::{Round, VISIBLE};
 use kmd_core::ItemKind;
 
@@ -21,16 +22,6 @@ fn kind_tag(kind: ItemKind) -> &'static str {
         ItemKind::WebSearch => "Web",
         _ => "File",
     }
-}
-
-fn gauge(pct: i32, w: usize, color: Color) -> Vec<Span<'static>> {
-    let pct = pct.clamp(0, 100) as usize;
-    let filled = w * pct / 100;
-    vec![
-        span("█".repeat(filled), fg(color)),
-        span("░".repeat(w - filled), fg(DIM)),
-        span(format!(" {pct:>3}%"), fg(SUB)),
-    ]
 }
 
 pub fn round(f: &mut Frame, stage: Rect, app: &App, round: &Round) {
@@ -222,6 +213,83 @@ fn sel_style() -> Style {
     sel()
 }
 
+fn rank_color(letter: &str) -> Color {
+    match letter {
+        "S" => GOLD,
+        "A" => GREEN,
+        "B" => ACCENT,
+        "C" => SUB,
+        _ => DIM,
+    }
+}
+
+fn kind_name(kind: &str) -> &'static str {
+    match kind {
+        "spar" => "대련",
+        "mouse" => "보이지 않는 마우스",
+        _ => "수련",
+    }
+}
+
+/// 반응·마우스 계열 결과 — 수치 판
+fn stats_panel(f: &mut Frame, body: Rect, app: &App, out: &Outcome) {
+    let mut lines = vec![Line::from("")];
+    for (name, value) in &out.stats {
+        lines.push(Line::from(vec![
+            span(format!("   {}", fit(name, 18)), fg(SUB)),
+            span(value.clone(), bold(TEXT)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(span(
+        format!(
+            "   실수 {}   {}초{}",
+            out.mistakes,
+            out.duration.as_secs(),
+            out.ki.map_or(String::new(), |k| format!("   남은 기 {k}%"))
+        ),
+        fg(DIM),
+    )));
+    let h = lines.len() as u16 + 2;
+    f.render_widget(
+        Paragraph::new(lines).block(panel(Line::from(span(
+            format!(" {} 전적 ", kind_name(&out.kind)),
+            bold(ACCENT),
+        )))),
+        sub(body, 14, 3, 52, h),
+    );
+    let mut y = 3 + h + 1;
+    if let Some(name) = &out.promoted {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                span("━━━━━  ", fg(DIM)),
+                span("승  급", bold(GOLD)),
+                span(format!("  ━━━━━   {name} 수련이 열렸다"), fg(TEXT)),
+            ]))
+            .alignment(Alignment::Center),
+            row(body, y),
+        );
+        y += 1;
+    }
+    if let Some(id) = &out.new_scroll {
+        if let Some(s) = app.content.scroll(id) {
+            f.render_widget(
+                Paragraph::new(Line::from(vec![
+                    span("  새 비급  ", bold(GOLD)),
+                    span(format!("卷{}  ", s.id), fg(GOLD)),
+                    span(s.title.clone(), bold(TEXT)),
+                    span("  — 문 › 비급 도감에서 펼쳐 보아라", fg(DIM)),
+                ])),
+                row(body, y),
+            );
+        }
+    }
+    f.render_widget(
+        Paragraph::new(sensei_line(&app.sensei_line)),
+        row(body, body.height - 1),
+    );
+}
+
 pub fn result(f: &mut Frame, stage: Rect, app: &App, out: &Outcome) {
     let Some((_, belt, _)) = app.content.lesson(&out.lesson_id) else {
         return;
@@ -237,9 +305,23 @@ pub fn result(f: &mut Frame, stage: Rect, app: &App, out: &Outcome) {
         (true, false) => ("완  주", GREEN),
         (false, _) => ("패  배", RED),
     };
+    // 별은 하나씩 켜진다 (0.3초 간격)
+    let lit = (out.shown_at.elapsed().as_millis() / 300).min(3) as u8;
     let mut top = vec![span(headline, bold(color)), span("    ", Style::new())];
-    top.extend(stars(out.stars));
+    top.extend(stars(out.stars.min(lit)));
     top.push(span(format!("    점수 {}", out.score), bold(TEXT)));
+    if out.cleared {
+        let (letter, title) = rank(out.score);
+        top.push(span("   ", Style::new()));
+        top.push(span(
+            format!(" {letter} "),
+            Style::new()
+                .bg(rank_color(letter))
+                .fg(MANTLE)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        top.push(span(format!(" {title}"), fg(rank_color(letter))));
+    }
     if out.new_best {
         top.push(span("   ◆ 최고 기록", bold(GOLD)));
     }
@@ -247,6 +329,11 @@ pub fn result(f: &mut Frame, stage: Rect, app: &App, out: &Outcome) {
         Paragraph::new(Line::from(top)).alignment(Alignment::Center),
         row(body, 1),
     );
+
+    if out.rows.is_empty() {
+        stats_panel(f, body, app, out);
+        return;
+    }
 
     // 스코어카드
     let mut lines = vec![Line::from(span(

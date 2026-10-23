@@ -11,6 +11,7 @@ use kmd_core::query_prefix::{prefix_of, QueryPrefix};
 use kmd_core::{IndexItem, ItemKind, SearchEngine, Source};
 
 use super::content::{Content, Lesson, Request};
+use super::play::{BossState, OutcomeRow, RoundEvent, Summary};
 use super::score::{self, HoleResult};
 
 /// 결과 목록에 보이는 줄 수 — 사부의 수도 이 안에서만 ↓ 를 쓴다
@@ -190,33 +191,6 @@ pub struct Cleared {
     pub hole: HoleResult,
 }
 
-/// 보스전 상태
-#[derive(Debug, Clone)]
-pub struct BossState {
-    /// 0~100
-    pub hp: i32,
-    /// 0~100, 0 이 되면 패배
-    pub ki: i32,
-    pub time_limit: Duration,
-}
-
-/// 키 하나를 처리한 결과
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoundEvent {
-    None,
-    /// 틀린 항목에서 Enter
-    Mistake,
-    /// 의뢰 하나 완료
-    Cleared {
-        over_par: bool,
-        sage_equal: bool,
-    },
-    /// 마지막 의뢰까지 완료
-    Finished,
-    /// 보스전 패배 (기 소진 · 시간 초과)
-    Failed,
-}
-
 /// 한 판의 진행 상태
 pub struct Round {
     pub lesson_id: String,
@@ -252,10 +226,10 @@ impl Round {
             .iter()
             .map(|s| score::par_from_sage(s.strokes()))
             .collect();
-        let boss = lesson.is_boss().then(|| BossState {
-            hp: 100,
-            ki: 100,
-            time_limit: Duration::from_secs(u64::from(lesson.time_limit_s.unwrap_or(120))),
+        let boss = lesson.is_boss().then(|| {
+            BossState::new(Some(Duration::from_secs(u64::from(
+                lesson.time_limit_s.unwrap_or(120),
+            ))))
         });
         Some(Self {
             lesson_id: lesson.id.clone(),
@@ -293,10 +267,8 @@ impl Round {
     }
 
     pub fn remaining_time(&self, now: Instant) -> Option<Duration> {
-        self.boss.as_ref().map(|b| {
-            b.time_limit
-                .saturating_sub(now.duration_since(self.started))
-        })
+        let limit = self.boss.as_ref()?.time_limit?;
+        Some(limit.saturating_sub(now.duration_since(self.started)))
     }
 
     /// 검색창 문자열에 따른 결과. 접두 비급 입력은 연습 목록 대신 그 도구의 한 줄을 보여 준다.
@@ -381,8 +353,7 @@ impl Round {
             self.total_mistakes += 1;
             self.fail_streak += 1;
             if let Some(b) = &mut self.boss {
-                b.ki -= 15;
-                if b.ki <= 0 {
+                if b.hurt_me(15) {
                     return RoundEvent::Failed;
                 }
             }
@@ -401,12 +372,9 @@ impl Round {
         self.cleared.push(Cleared { hole });
         let total = self.requests.len() as i32;
         if let Some(b) = &mut self.boss {
-            b.hp = 100 - 100 * self.cleared.len() as i32 / total;
-            if over_par {
-                b.ki -= 10;
-                if b.ki <= 0 {
-                    return RoundEvent::Failed;
-                }
+            b.hit(b.hp - (100 - 100 * self.cleared.len() as i32 / total));
+            if over_par && b.hurt_me(10) {
+                return RoundEvent::Failed;
             }
         }
         if self.idx + 1 >= self.requests.len() {
@@ -435,6 +403,29 @@ impl Round {
 
     pub fn holes(&self) -> Vec<HoleResult> {
         self.cleared.iter().map(|c| c.hole.clone()).collect()
+    }
+
+    pub fn summary(&self, cleared: bool) -> Summary {
+        let rows = self
+            .requests
+            .iter()
+            .enumerate()
+            .map(|(i, r)| OutcomeRow {
+                ask: r.ask.clone(),
+                sage: self.sages[i].display(),
+                sage_strokes: self.sages[i].strokes(),
+                par: self.pars[i],
+                strokes: self.cleared.get(i).map(|c| c.hole.strokes),
+            })
+            .collect();
+        Summary::from_holes(
+            &self.holes(),
+            rows,
+            cleared,
+            self.total_mistakes,
+            self.hints,
+            self.boss.as_ref(),
+        )
     }
 }
 
