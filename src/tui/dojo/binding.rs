@@ -149,6 +149,9 @@ impl Bindings {
     /// 2탭 수의 첫 탭으로 먼저 도착하는 수 — 줄 처음(I I) → 단어←(I).
     /// 데몬 엔진은 첫 탭에 1탭 수를 즉시 보내므로 2탭 수는 두 이벤트로 도착한다.
     pub fn double_partner(&self, a: Action) -> Option<Action> {
+        if let Some(base) = a.unshifted() {
+            return self.double_partner(base).and_then(Action::shifted);
+        }
         if self.trust == Trust::Unknown {
             return None;
         }
@@ -162,6 +165,9 @@ impl Bindings {
 
     /// 이 배치에 그 수가 있는가. 배치 미상이면 있다고 본다(판정은 보정이 맡는다).
     pub fn has(&self, a: Action) -> bool {
+        if let Some(base) = a.unshifted() {
+            return self.has(base);
+        }
         self.trust == Trust::Unknown || self.by_action.contains_key(&a)
     }
 
@@ -169,6 +175,20 @@ impl Bindings {
     pub fn label(&self, a: Action) -> String {
         if self.trust == Trust::Unknown {
             return format!("「{}」 수", a.label());
+        }
+        if let Some(base) = a.unshifted() {
+            // 선택 = 이동 + Shift 통과 (keymap: Shift+네비 = 선택 확장)
+            return match self.primary(base) {
+                Some(b) => {
+                    let mut b = b.clone();
+                    b.hold = Some(match b.hold {
+                        Some(h) => format!("{h}+Shift"),
+                        None => "Shift".into(),
+                    });
+                    b.chord()
+                }
+                None => "없음".into(),
+            };
         }
         match self.primary(a) {
             Some(b) => b.chord(),
@@ -180,6 +200,9 @@ impl Bindings {
     pub fn key(&self, a: Action) -> String {
         if self.trust == Trust::Unknown {
             return a.label().to_string();
+        }
+        if let Some(base) = a.unshifted() {
+            return format!("Shift+{}", self.key(base));
         }
         self.primary(a)
             .map(|b| {
@@ -290,13 +313,13 @@ impl Bindings {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Hand {
+pub enum Hand {
     Left,
     Right,
 }
 
 /// ANSI 표준 운지 기준의 손 (docs/16 §2). 엄지(Space)와 모르는 키는 `None`.
-fn hand(key: &str) -> Option<Hand> {
+pub fn hand(key: &str) -> Option<Hand> {
     let k = key.to_ascii_lowercase();
     match k.as_str() {
         "capslock" | "caps" | "lshift" | "lalt" | "lctrl" | "tab" | "esc" | "`" => Some(Hand::Left),
@@ -465,6 +488,18 @@ mod tests {
         assert_eq!(b.trigger("mouse"), Some("RAlt"));
         assert_eq!(b.label(Action::ToggleHangul), "RAlt 톡");
         assert_eq!(b.label(Action::LineStart), "CapsLock+I I");
+    }
+
+    #[test]
+    fn 선택은_이동에_shift_를_더한_수다() {
+        let b = bindings_for(KeymapConfig::default(), Os::current());
+        assert!(b.has(Action::SelWordLeft));
+        assert_eq!(b.label(Action::SelLeft), "CapsLock+Shift+H");
+        assert_eq!(b.label(Action::SelLineStart), "CapsLock+Shift+I I");
+        assert_eq!(
+            b.double_partner(Action::SelLineStart),
+            Some(Action::SelWordLeft)
+        );
     }
 
     #[test]

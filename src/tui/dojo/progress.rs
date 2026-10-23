@@ -137,7 +137,19 @@ impl Standing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::dojo::content::content;
+    use crate::tui::dojo::content::{content, Curriculum};
+
+    /// 실제 커리큘럼에서 `belt` 띠만 공사 중으로 바꾼 사본 — 콘텐츠가 채워져도
+    /// "공사 중 띠는 길을 막지 않는다" 규칙을 계속 시험한다.
+    fn with_building(belt: &str) -> Curriculum {
+        let mut c: Curriculum =
+            toml::from_str(include_str!("../../../assets/dojo/curriculum.toml")).unwrap();
+        let b = c.belt.iter_mut().find(|b| b.id == belt).unwrap();
+        for l in b.lesson.iter_mut().chain(b.boss.iter_mut()) {
+            l.kind = "wip".into();
+        }
+        c
+    }
 
     fn prog(entries: &[(&str, u8)]) -> BTreeMap<String, DojoProgress> {
         entries
@@ -206,8 +218,10 @@ mod tests {
         let st = standing(&c.curriculum, &BTreeMap::new(), ALL);
         let yellow = &c.curriculum.belt[1];
         assert_eq!(st.access(1, &yellow.lesson[0], ALL), Access::LockedBelt);
-        let green = c.lesson("green.2").unwrap();
-        assert_eq!(st.access(green.0, green.2, ALL), Access::Building);
+        let cur = with_building("green");
+        let st = standing(&cur, &BTreeMap::new(), ALL);
+        let green = &cur.belt[3];
+        assert_eq!(st.access(3, &green.lesson[1], ALL), Access::Building);
     }
 
     #[test]
@@ -222,10 +236,20 @@ mod tests {
         );
     }
 
+    struct Wrap {
+        curriculum: Curriculum,
+    }
+
     /// 주황띠까지 끝내면 공사 중인 초록·파란띠를 건너 보라띠에서 수련한다
     #[test]
     fn 공사_중인_띠는_건너뛰고_끝에서는_멈춘다() {
-        let c = content();
+        let mut cur = with_building("green");
+        for b in cur.belt.iter_mut().filter(|b| b.id == "blue") {
+            for l in b.lesson.iter_mut().chain(b.boss.iter_mut()) {
+                l.kind = "wip".into();
+            }
+        }
+        let c = Wrap { curriculum: cur };
         let mut entries = Vec::new();
         for b in &c.curriculum.belt[..3] {
             for l in b.lesson.iter().chain(b.boss.iter()) {

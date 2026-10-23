@@ -6,6 +6,7 @@
 use std::time::{Duration, Instant};
 
 use super::golf::GolfRound;
+use super::ime::ImeRound;
 use super::maze::MazeRound;
 use super::mouse::MouseRound;
 use super::score::HoleResult;
@@ -160,6 +161,7 @@ pub enum Play {
     Spar(Spar),
     Maze(MazeRound),
     Mouse(MouseRound),
+    Ime(ImeRound),
 }
 
 impl Play {
@@ -170,6 +172,7 @@ impl Play {
             Play::Spar(r) => &r.lesson_id,
             Play::Maze(r) => &r.lesson_id,
             Play::Mouse(r) => &r.lesson_id,
+            Play::Ime(r) => &r.lesson_id,
         }
     }
 
@@ -180,6 +183,7 @@ impl Play {
             Play::Spar(r) => r.started,
             Play::Maze(r) => r.started,
             Play::Mouse(r) => r.started,
+            Play::Ime(r) => r.started,
         }
     }
 
@@ -190,6 +194,7 @@ impl Play {
             Play::Spar(r) => r.fail_streak,
             Play::Maze(r) => r.fail_streak,
             Play::Mouse(r) => r.fail_streak,
+            Play::Ime(r) => r.fail_streak,
         }
     }
 
@@ -200,6 +205,7 @@ impl Play {
             Play::Spar(r) => r.total_mistakes,
             Play::Maze(r) => r.total_mistakes,
             Play::Mouse(r) => r.total_mistakes,
+            Play::Ime(r) => r.total_mistakes,
         }
     }
 
@@ -211,6 +217,7 @@ impl Play {
             Play::Spar(r) => r.flash,
             Play::Maze(r) => r.flash,
             Play::Mouse(r) => r.flash,
+            Play::Ime(r) => r.flash,
         }
     }
 
@@ -221,6 +228,7 @@ impl Play {
             Play::Spar(r) => r.flash = None,
             Play::Maze(r) => r.flash = None,
             Play::Mouse(r) => r.flash = None,
+            Play::Ime(r) => r.flash = None,
         }
     }
 
@@ -231,12 +239,17 @@ impl Play {
             Play::Spar(r) => r.boss.as_ref(),
             Play::Maze(_) => None,
             Play::Mouse(r) => r.boss.as_ref(),
+            Play::Ime(r) => r.boss.as_ref(),
         }
     }
 
     /// 마우스 캡처가 필요한가
     pub fn wants_mouse(&self) -> bool {
-        matches!(self, Play::Mouse(_))
+        match self {
+            Play::Mouse(_) => true,
+            Play::Ime(r) => r.wants_mouse(),
+            _ => false,
+        }
     }
 
     /// 프레임 단위로 다시 그려야 하는가 (떨어지는 화살·달리는 쥐·리플레이)
@@ -247,6 +260,7 @@ impl Play {
             Play::Spar(r) => r.animating(),
             Play::Maze(r) => r.animating(),
             Play::Mouse(r) => r.animating(),
+            Play::Ime(r) => r.animating(),
         }
     }
 
@@ -257,6 +271,7 @@ impl Play {
             Play::Spar(r) => r.tick(now),
             Play::Maze(r) => r.tick(now),
             Play::Mouse(r) => r.tick(now),
+            Play::Ime(r) => r.tick(now),
         }
     }
 
@@ -267,6 +282,7 @@ impl Play {
             Play::Spar(r) => r.summary(cleared),
             Play::Maze(r) => r.summary(cleared),
             Play::Mouse(r) => r.summary(cleared),
+            Play::Ime(r) => r.summary(cleared),
         }
     }
 }

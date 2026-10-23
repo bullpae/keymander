@@ -15,9 +15,10 @@ const SENSEI: &str = include_str!("../../../assets/dojo/sensei.toml");
 const SUMMON: &str = include_str!("../../../assets/dojo/summon.toml");
 const GOLF: &str = include_str!("../../../assets/dojo/golf.toml");
 const MAZE: &str = include_str!("../../../assets/dojo/maze.toml");
+const IME: &str = include_str!("../../../assets/dojo/ime.toml");
 
 /// 구현된 수련 종류. 나머지는 지도에 "공사 중"으로 보인다.
-pub const READY_KINDS: &[&str] = &["summon", "spar", "maze", "golf", "mouse"];
+pub const READY_KINDS: &[&str] = &["summon", "spar", "maze", "golf", "mouse", "ime"];
 
 #[derive(Debug, Deserialize)]
 pub struct Curriculum {
@@ -220,6 +221,21 @@ pub struct MazeDef {
     pub fog: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct Ime {
+    pub set: Vec<ImeSet>,
+}
+
+/// 한영 리듬 문장 묶음 (docs/10 §4-3 S11)
+#[derive(Debug, Deserialize)]
+pub struct ImeSet {
+    pub id: String,
+    /// 줄 사이에 마우스 과녁을 둔다 — 쥠(레이어)이 한/영을 건드리지 않는지 본다
+    #[serde(default)]
+    pub click: bool,
+    pub lines: Vec<String>,
+}
+
 pub struct Content {
     pub curriculum: Curriculum,
     pub scrolls: Scrolls,
@@ -227,6 +243,7 @@ pub struct Content {
     pub summon: Summon,
     pub golf: Golf,
     pub maze: Mazes,
+    pub ime: Ime,
 }
 
 impl Content {
@@ -238,6 +255,7 @@ impl Content {
             summon: toml::from_str(SUMMON).map_err(|e| format!("summon.toml: {e}"))?,
             golf: toml::from_str(GOLF).map_err(|e| format!("golf.toml: {e}"))?,
             maze: toml::from_str(MAZE).map_err(|e| format!("maze.toml: {e}"))?,
+            ime: toml::from_str(IME).map_err(|e| format!("ime.toml: {e}"))?,
         })
     }
 
@@ -265,6 +283,10 @@ impl Content {
 
     pub fn maze_set(&self, id: &str) -> Option<&MazeSet> {
         self.maze.set.iter().find(|s| s.id == id)
+    }
+
+    pub fn ime_set(&self, id: &str) -> Option<&ImeSet> {
+        self.ime.set.iter().find(|s| s.id == id)
     }
 
     /// 과의 총 개수 (보스 제외) — 별 만점 계산용
@@ -462,8 +484,42 @@ mod tests {
                         "{}: 모르는 대련 꼴",
                         l.id
                     ),
+                    "ime" => assert!(
+                        set.and_then(|s| c().ime_set(s)).is_some(),
+                        "{}: 없는 문장 묶음",
+                        l.id
+                    ),
                     _ => {}
                 }
+            }
+        }
+    }
+
+    /// 한영 리듬 문장은 한/영이 실제로 바뀌어야 수련이 된다
+    #[test]
+    fn 한영_문장은_전환을_품는다() {
+        use super::super::hangul::is_hangul;
+        for set in &c().ime.set {
+            for line in &set.lines {
+                let switches = line
+                    .chars()
+                    .filter(|ch| ch.is_alphabetic())
+                    .map(is_hangul)
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .filter(|w| w[0] != w[1])
+                    .count();
+                // 쥠 묶음은 일부러 전환 없는 줄을 둔다 — 쥠이 한/영을 건드렸는지 보려고
+                assert!(
+                    switches >= 1 || set.click,
+                    "{}: 전환이 없다 — {line}",
+                    set.id
+                );
+                assert!(
+                    line.chars().count() <= 40,
+                    "{}: 한 줄이 길다 — {line}",
+                    set.id
+                );
             }
         }
     }

@@ -159,8 +159,11 @@ When it stops feeling like practice, you've graduated.
 > missions into belts, key golf and design-rationale scrolls. Playable now:
 > white (launcher golf — fewest keystrokes to rank the target first), yellow
 > (arrow drills, maze, falling-arrow rhythm boss), orange (key golf with a
-> BFS-optimal "sage" line) and purple (pointer aim, wheel, drag, rat boss via
-> terminal mouse capture). Instructions follow your own remapped keymap;
+> BFS-optimal "sage" line), green (Shift-selection surgery on real-looking
+> paragraphs), blue (Hangul/English switching rhythm, judged by the characters
+> that arrive) and purple (pointer aim, wheel, drag, rat boss via terminal
+> mouse capture). A layout diagnosis checks your remaps against the design
+> rationale. Instructions follow your own remapped keymap;
 > `kmd dojo --free` opens every lesson. See the [plan](docs/10_dojo_plan.md).
 
 ---
@@ -782,8 +785,8 @@ toggle_preview = "ctrl+p"
 ## Roadmap
 
 **Toward v1.0.0**
-- **`kmd dojo`** — keymap trainer: white · yellow · orange · purple belts shipped;
-  selection surgery, IME rhythm and daily streaks next ([plan](docs/10_dojo_plan.md))
+- **`kmd dojo`** — keymap trainer: white through purple belts shipped (incl. selection
+  surgery and IME rhythm); brown/black belts and daily streaks next ([plan](docs/10_dojo_plan.md))
 - Cloud-synced todo / memo (remote storage integration)
 - Clipboard history manager
 - Plugin marketplace & script-based plugins

@@ -12,6 +12,7 @@ use super::*;
 use crate::tui::dojo::action::Action;
 use crate::tui::dojo::app::App;
 use crate::tui::dojo::golf::{self, GolfRound, Phase as GolfPhase};
+use crate::tui::dojo::ime::{ImeRound, Phase as ImePhase};
 use crate::tui::dojo::maze::{MazeRound, Phase as MazePhase, Tile};
 use crate::tui::dojo::mouse::{
     Drill, LeakPhase, MouseRound, RatState, ARENA_H, ARENA_W, LIST_VIEW, RAT_W,
@@ -183,17 +184,30 @@ pub fn golf(f: &mut Frame, stage: Rect, app: &App, r: &GolfRound) {
         None => (&r.buf, false),
     };
     let top = r.view_top(buf);
+    let selection = buf.selection();
+    let target = hole.target;
+    let inside =
+        |range: Option<(usize, usize)>, at: usize| range.is_some_and(|(a, b)| a <= at && at < b);
+    // 선형 위치 — 줄바꿈도 한 칸 (Buffer 의 선택·과녁 좌표계)
+    let mut lin: usize = buf.lines[..top].iter().map(|l| l.len() + 1).sum();
     let mut lines = Vec::new();
     for (i, cells) in buf.lines.iter().enumerate().skip(top).take(golf::VIEW) {
         let mut v = vec![span(format!(" {:>2}  ", i + 1), fg(DIM))];
         let n = cells.len();
+        let line_start = lin;
+        lin += n + 1;
         for c in 0..=n {
+            let at = line_start + c;
+            let selected = inside(selection, at);
+            let aimed = inside(target, at);
             let ch = cells
                 .get(c)
                 .map_or(" ".to_string(), |cell| cell.ch.to_string());
             let junk = cells.get(c).is_some_and(|cell| cell.junk);
             let is_cursor = buf.row == i && buf.col == c;
             let is_flag = hole.flag == Some((i, c));
+            // 줄 끝의 줄바꿈이 선택·과녁에 들면 한 칸으로 보인다
+            let shows_newline = c == n && (selected || aimed);
             let style = if is_cursor {
                 Style::new()
                     .bg(if ghost { GREEN } else { ACCENT })
@@ -204,14 +218,27 @@ pub fn golf(f: &mut Frame, stage: Rect, app: &App, r: &GolfRound) {
                     .bg(GOLD)
                     .fg(MANTLE)
                     .add_modifier(Modifier::BOLD)
+            } else if selected && aimed {
+                Style::new().bg(GREEN).fg(MANTLE)
+            } else if selected {
+                let s = Style::new().bg(HOLD).fg(MANTLE);
+                if junk {
+                    s.add_modifier(Modifier::CROSSED_OUT | Modifier::BOLD)
+                } else {
+                    s
+                }
             } else if junk {
                 Style::new()
                     .fg(RED)
                     .add_modifier(Modifier::CROSSED_OUT | Modifier::BOLD)
+            } else if aimed {
+                Style::new()
+                    .fg(GOLD)
+                    .add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
             } else {
                 fg(TEXT)
             };
-            if c == n && !is_cursor && !is_flag {
+            if c == n && !is_cursor && !is_flag && !shows_newline {
                 break;
             }
             v.push(span(ch, style));
@@ -244,14 +271,34 @@ pub fn golf(f: &mut Frame, stage: Rect, app: &App, r: &GolfRound) {
     }
 
     // 목표
-    let goal = match hole.flag {
-        Some((fr, fc)) => {
+    let goal = match (hole.flag, hole.target) {
+        (_, Some((a, b))) => {
+            let text: String = r
+                .hole()
+                .start
+                .lines
+                .iter()
+                .map(|l| l.iter().map(|c| c.ch).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("⏎")
+                .chars()
+                .skip(a)
+                .take(b - a)
+                .collect();
+            let text = if width(&text) > 30 {
+                fit(&text, 30)
+            } else {
+                text
+            };
+            format!("금빛 밑줄 「{text}」 을 정확히 감싸라")
+        }
+        (Some((fr, fc)), None) => {
             let ch = r.buf.lines[fr]
                 .get(fc)
                 .map_or("줄 끝".to_string(), |c| format!("'{}'", c.ch));
             format!("⚑ {}행 {} 로", fr + 1, ch)
         }
-        None => format!("빨간 군더더기 {}글자를 지워라", r.buf.junk_left()),
+        (None, None) => format!("빨간 군더더기 {}글자를 지워라", r.buf.junk_left()),
     };
     let used: Vec<&str> = r
         .used
@@ -297,13 +344,23 @@ pub fn golf(f: &mut Frame, stage: Rect, app: &App, r: &GolfRound) {
 
     // 허용된 수 — 사용자 배치의 키로
     let mut moves: Vec<Span> = vec![span("  허용 ", fg(SUB))];
+    let mut selecting = false;
     for e in &r.allowed[r.idx] {
+        // 선택 수는 줄이 넘치니 한 번만 — "Shift 를 더하면 선택"
+        if e.action.unshifted().is_some() {
+            selecting = true;
+            continue;
+        }
         let key = app.bindings.key(e.action);
         moves.push(span(key, bold(ACT)));
         moves.push(span(format!("{} ", e.action.glyph()), fg(SUB)));
         if e.seq.len() > 1 {
             moves.push(span("(2타) ", fg(DIM)));
         }
+    }
+    if selecting {
+        moves.push(span("+Shift", bold(HOLD)));
+        moves.push(span(" = 선택", fg(SUB)));
     }
     f.render_widget(Paragraph::new(Line::from(moves)), row(body, y));
     y += 1;
@@ -1252,5 +1309,188 @@ pub fn mouse(f: &mut Frame, stage: Rect, app: &App, r: &MouseRound) {
         );
     }
     feedback(f, row(body, 19), &r.feedback, YELLOW);
+    sensei_row(f, body, app);
+}
+
+// ── S11 한영 리듬 ─────────────────────────────────────────────────────────────
+
+pub fn ime(f: &mut Frame, stage: Rect, app: &App, r: &ImeRound) {
+    use unicode_width::UnicodeWidthChar;
+    let now = Instant::now();
+    let hint = match r.phase {
+        ImePhase::Click => "mouse 레이어를 쥐고 과녁을 클릭   Esc 일시정지",
+        _ => "따라 쳐라 · 틀리면 지우고   Esc 일시정지",
+    };
+    let body = round_chrome(f, stage, app, "한영 리듬", &r.lesson_id, hint);
+    let secs = r.elapsed(now).as_secs();
+    let mut head = vec![
+        span("  ■ 한영 리듬", bold(TEXT)),
+        span(format!("    {} / {} 줄", r.idx + 1, r.lines.len()), fg(SUB)),
+        span(
+            format!("    시간 {}:{:02}", secs / 60, secs % 60),
+            bold(if r.par_time.is_some_and(|p| r.elapsed(now) > p) {
+                RED
+            } else {
+                TEXT
+            }),
+        ),
+    ];
+    if let Some(p) = r.par_time {
+        head.push(span(format!(" / 기준 {}초", p.as_secs()), fg(DIM)));
+    }
+    head.push(span("    전환 놓침 ", fg(SUB)));
+    head.push(span(
+        r.mode_misses.to_string(),
+        bold(if r.mode_misses > 0 { RED } else { GREEN }),
+    ));
+    if r.combo >= 5 {
+        head.push(span(format!("    ×{}", r.combo), bold(GOLD)));
+    }
+    f.render_widget(Paragraph::new(Line::from(head)), row(body, 0));
+    if let Some(b) = &r.boss {
+        let name = app
+            .content
+            .lesson(&r.lesson_id)
+            .map(|(_, _, l)| l.title.clone())
+            .unwrap_or_default();
+        f.render_widget(Paragraph::new(boss_gauges(&name, b, now)), row(body, 1));
+    }
+
+    // 과녁장과 같은 자리 — 줄 사이 과녁의 마우스 좌표가 mouse 수련과 같다
+    let outer = sub(body, 1, 2, ARENA_W + 2, ARENA_H + 2);
+    let border = match r.flash {
+        Some((true, _)) => GREEN,
+        Some((false, _)) => RED,
+        None => BORDER,
+    };
+    f.render_widget(
+        panel(Line::from(span(" 두루마리 ", bold(ACCENT)))).border_style(fg(border)),
+        outer,
+    );
+    let arena = Rect {
+        x: outer.x + 1,
+        y: outer.y + 1,
+        width: ARENA_W,
+        height: ARENA_H,
+    };
+    let left = 4u16;
+    let line_at = |y: u16| Rect {
+        x: arena.x + left,
+        y: arena.y + y,
+        width: arena.width - left,
+        height: 1,
+    };
+
+    // 지금 상태 안내 — 다음 글자의 언어
+    let state = match r.want_hangul() {
+        _ if r.expected().is_none() && r.phase == ImePhase::Type => {
+            span(" ⌫ 지우고 다시 ", Style::new().bg(RED).fg(MANTLE))
+        }
+        Some(true) => span(" 다음 · 한글 ", Style::new().bg(HOLD).fg(MANTLE)),
+        Some(false) => span(" 다음 · 영문 ", Style::new().bg(ACT).fg(MANTLE)),
+        None => span("", fg(DIM)),
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            state,
+            span("   ", fg(DIM)),
+            span("^", bold(GOLD)),
+            span(
+                format!(" = {} 톡", app.bindings.key(Action::ToggleHangul)),
+                fg(SUB),
+            ),
+        ])),
+        line_at(0),
+    );
+
+    // 목표 문장 + 그 아래 톡 표시(^). 표시는 ASCII 라 글자 폭이 흔들리지 않는다.
+    let switches = r.switch_points(r.idx);
+    let mut marks: Vec<Span> = Vec::new();
+    let mut target: Vec<Span> = Vec::new();
+    let done = r.typed.iter().take_while(|t| t.slip.is_none()).count();
+    for (i, c) in r.line().chars().enumerate() {
+        let w = c.width().unwrap_or(1);
+        let mark = if switches.contains(&i) { "^" } else { " " };
+        marks.push(span(
+            format!("{mark}{}", " ".repeat(w.saturating_sub(1))),
+            bold(if i < done { DIM } else { GOLD }),
+        ));
+        let style = if i < done {
+            fg(GREEN)
+        } else if i == done && r.phase == ImePhase::Type {
+            Style::new()
+                .fg(MANTLE)
+                .bg(if super::super::hangul::is_hangul(c) {
+                    HOLD
+                } else {
+                    ACT
+                })
+                .add_modifier(Modifier::BOLD)
+        } else {
+            bold(TEXT)
+        };
+        target.push(span(c.to_string(), style));
+    }
+    f.render_widget(Paragraph::new(Line::from(target)), line_at(2));
+    f.render_widget(Paragraph::new(Line::from(marks)), line_at(3));
+
+    // 도착한 글자 — 틀린 글자는 빨갛게. 터미널 커서를 끝에 두면 IME 조합 중인
+    // 글자가 그 자리에 그려진다.
+    let mut typed: Vec<Span> = vec![span("› ", fg(DIM))];
+    let mut cursor_x = 2u16;
+    for t in &r.typed {
+        let style = match t.slip {
+            None => fg(TEXT),
+            Some(_) => Style::new().fg(MANTLE).bg(RED),
+        };
+        typed.push(span(t.ch.to_string(), style));
+        cursor_x += t.ch.width().unwrap_or(1) as u16;
+    }
+    let typed_row = line_at(5);
+    f.render_widget(
+        Paragraph::new(Line::from(typed)),
+        Rect {
+            x: typed_row.x - 2,
+            width: typed_row.width + 2,
+            ..typed_row
+        },
+    );
+    if r.phase == ImePhase::Type && app.pause.is_none() {
+        f.set_cursor_position((typed_row.x - 2 + cursor_x, typed_row.y));
+    }
+
+    // 다음 줄 미리 보기
+    if let Some(next) = r.lines.get(r.idx + 1) {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                span("다음  ", fg(DIM)),
+                span(next.clone(), fg(Color::Rgb(70, 74, 100))),
+            ])),
+            line_at(7),
+        );
+    }
+
+    match r.phase {
+        ImePhase::Click => {
+            if let Some(t) = &r.target {
+                draw_box(f, arena, t, "쥠 ◎", GOLD, true);
+            }
+        }
+        ImePhase::LineDone(_) => {
+            big_center(
+                f,
+                Rect {
+                    y: arena.y + 8,
+                    height: 3,
+                    ..arena
+                },
+                "— 한 줄 —",
+                GREEN,
+            );
+        }
+        ImePhase::Type => {}
+    }
+
+    feedback(f, row(body, body.height - 2), &r.feedback, YELLOW);
     sensei_row(f, body, app);
 }

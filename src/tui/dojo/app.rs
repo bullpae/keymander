@@ -11,7 +11,9 @@ use super::action::{Action, Os};
 use super::binding::Bindings;
 use super::calib::{Calib, CalibEvent, CalibRun, KEY_ACTIONS};
 use super::content::{content, Content, Lesson, SenseiLines};
+use super::diagnose::{self, Diagnosis};
 use super::golf::{Edge, GolfRound};
+use super::ime::ImeRound;
 use super::maze::MazeRound;
 use super::mouse::{MouseRound, ARENA_ORIGIN};
 use super::play::{OutcomeRow, Play, RoundEvent};
@@ -45,6 +47,8 @@ pub enum Screen {
     Result(Box<Outcome>),
     Codex,
     Records,
+    /// S19 배치 진단 — (진단, 스크롤)
+    Diagnose(Box<Diagnosis>, usize),
 }
 
 /// 로비 메뉴
@@ -217,8 +221,9 @@ impl App {
             quit: false,
         };
         app.sensei_line = app.say("lobby", |s| &s.lobby);
-        if keymap_changed {
-            app.notify("배치가 바뀌었다 — 안내를 네 배치로 다시 그렸다. 예전 기록에는 다른 배치 표식이 붙는다.");
+        if keymap_changed && initiated {
+            // S19 — 배치 지문이 바뀐 뒤 첫 입장
+            app.open_diagnose();
         }
         if let Some(id) = start_lesson {
             if app.content.lesson(&id).is_some() {
@@ -299,7 +304,9 @@ impl App {
                 let _ = d.kv_set(KV_KEYMAP_FP, &bindings.fingerprint);
             }
             self.bindings = bindings;
-            self.notify("배치가 바뀌었다 — 안내를 네 배치로 다시 그렸다.");
+            self.notify(
+                "배치가 바뀌었다 — 안내를 네 배치로 다시 그렸다. 입문 의식에서 D 로 진단을 본다.",
+            );
         } else {
             self.bindings = bindings;
         }
@@ -390,6 +397,7 @@ impl App {
             "spar" => Some(Play::Spar(Spar::new(lesson, now))),
             "maze" => MazeRound::new(content, lesson, now).map(Play::Maze),
             "mouse" => MouseRound::new(lesson, now).map(Play::Mouse),
+            "ime" => ImeRound::new(content, lesson, now).map(Play::Ime),
             _ => None,
         };
         match play {
@@ -397,7 +405,9 @@ impl App {
                 self.pause = None;
                 self.shake = None;
                 self.sensei_line = self.bindings.render(&lesson.why);
-                if lesson.kind == "golf" && !self.calib.done {
+                if lesson.kind == "ime" {
+                    self.notify("OS 한글 입력기(두벌식)를 켜 두어라 — 판정은 도착한 글자로 한다");
+                } else if lesson.kind == "golf" && !self.calib.done {
                     self.notify("키 감응 시험 전이다 — 수가 안 먹으면 입문 의식에서 C 로 이 터미널을 보정하라");
                 }
                 self.screen = Screen::Round(Box::new(p));
@@ -537,6 +547,7 @@ impl App {
         let out = match &mut self.screen {
             Screen::Round(play) => match play.as_mut() {
                 Play::Mouse(r) => r.on_mouse(ev.kind, x, y, now),
+                Play::Ime(r) => r.on_mouse(ev.kind, x, y, now),
                 _ => return false,
             },
             _ => return false,
@@ -560,6 +571,7 @@ impl App {
         match self.screen {
             Screen::Precheck => match key.code {
                 KeyCode::Char('c') | KeyCode::Char('C') => self.start_calib(),
+                KeyCode::Char('d') | KeyCode::Char('D') => self.open_diagnose(),
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char(' ') => {
                     if let Some(db) = &self.db {
                         let _ = db.kv_set(KV_INITIATED, "1");
@@ -602,7 +614,32 @@ impl App {
                     self.screen = Screen::Lobby;
                 }
             }
+            Screen::Diagnose(ref d, scroll) => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let s = scroll.saturating_sub(1);
+                    self.set_diag_scroll(s);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let s = (scroll + 1).min(d.rows.len().saturating_sub(1));
+                    self.set_diag_scroll(s);
+                }
+                // 권장: 입문 의식을 다시 — 바뀐 배치로 감응 시험
+                KeyCode::Enter => self.screen = Screen::Precheck,
+                KeyCode::Char(' ') | KeyCode::Esc => self.screen = Screen::Lobby,
+                _ => {}
+            },
             Screen::Round(_) | Screen::Calib(_) => unreachable!(),
+        }
+    }
+
+    fn open_diagnose(&mut self) {
+        let d = diagnose::from_config(&self.config, &self.bindings, self.content);
+        self.screen = Screen::Diagnose(Box::new(d), 0);
+    }
+
+    fn set_diag_scroll(&mut self, to: usize) {
+        if let Screen::Diagnose(_, s) = &mut self.screen {
+            *s = to;
         }
     }
 
@@ -722,6 +759,8 @@ impl App {
         }
         let now = Instant::now();
         let action = self.calib.translate(&key, Os::current());
+        // 선택을 모르는 모드에서 Shift 는 그냥 이동이다
+        let bare = action.map(|a| a.unshifted().unwrap_or(a));
         let mut fixture = self.fixture.take();
         let Screen::Round(play) = &mut self.screen else {
             return;
@@ -747,15 +786,16 @@ impl App {
                 }
                 _ => action.map_or(RoundEvent::None, |a| r.on_action(a, now)),
             },
-            Play::Spar(r) => action.map_or(RoundEvent::None, |a| r.on_action(a, now)),
+            Play::Spar(r) => bare.map_or(RoundEvent::None, |a| r.on_action(a, now)),
             Play::Maze(r) => match key.code {
                 KeyCode::Tab => {
                     r.hint();
                     RoundEvent::None
                 }
-                _ => action.map_or(RoundEvent::None, |a| r.on_action(a, now)),
+                _ => bare.map_or(RoundEvent::None, |a| r.on_action(a, now)),
             },
             Play::Mouse(r) => r.on_key(&key, now),
+            Play::Ime(r) => r.on_key(&key, now),
         };
         self.fixture = fixture;
         self.after_round_event(ev);
@@ -973,10 +1013,15 @@ mod tests {
 
     /// 수 하나를 macOS 데몬이 보내는 꼴로 도착시킨다
     fn send(app: &mut App, a: Action) {
+        // 선택 수 = 같은 이동 + Shift
+        let (a, shift) = match a.unshifted() {
+            Some(base) => (base, KeyModifiers::SHIFT),
+            None => (a, KeyModifiers::NONE),
+        };
         match a {
-            Action::WordLeft => key(app, KeyCode::Left, KeyModifiers::ALT),
-            Action::WordRight => key(app, KeyCode::Right, KeyModifiers::ALT),
-            _ => press(app, arrow(a)),
+            Action::WordLeft => key(app, KeyCode::Left, KeyModifiers::ALT | shift),
+            Action::WordRight => key(app, KeyCode::Right, KeyModifiers::ALT | shift),
+            _ => key(app, arrow(a), shift),
         }
     }
 
@@ -1192,9 +1237,15 @@ mod tests {
 
     #[test]
     fn 골프를_사부의_수로_치면_별_셋이다() {
+        for id in ["orange.1", "orange.4", "green.1", "green.2", "green.boss"] {
+            golf_by_sage(id);
+        }
+    }
+
+    fn golf_by_sage(id: &str) {
         let mut a = app();
         a.free = true;
-        a.screen = Screen::Intro("orange.1".into());
+        a.screen = Screen::Intro(id.into());
         press(&mut a, KeyCode::Enter);
         while let Screen::Round(p) = &a.screen {
             let (path, edges) = match p.as_ref() {
@@ -1212,10 +1263,10 @@ mod tests {
             press(&mut a, KeyCode::Enter);
         }
         let Screen::Result(out) = &a.screen else {
-            panic!("결과가 아니다")
+            panic!("{id}: 결과가 아니다")
         };
-        assert!(out.cleared);
-        assert_eq!(out.stars, 3);
+        assert!(out.cleared, "{id}");
+        assert_eq!(out.stars, 3, "{id}");
         assert!(draw(&a, 80, 24).contains("스코어카드"));
     }
 
@@ -1298,6 +1349,76 @@ mod tests {
         }
         assert!(matches!(a.screen, Screen::Result(_)));
         assert!(!a.wants_mouse());
+    }
+
+    /// 한영 리듬 — 글자를 따라 치고, 줄 사이 과녁은 과녁장 좌표로 클릭한다
+    #[test]
+    fn 톡과_쥠은_글자와_클릭으로_끝난다() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut a = app();
+        a.free = true;
+        a.on_resize(100, 30);
+        a.screen = Screen::Intro("blue.2".into());
+        press(&mut a, KeyCode::Enter);
+        assert!(a.wants_mouse(), "줄 사이 과녁이 있으니 마우스 캡처");
+        let (sx, sy) = (10u16, 3u16);
+        let mut now = Instant::now();
+        while let Screen::Round(p) = &a.screen {
+            let Play::Ime(r) = p.as_ref() else { panic!() };
+            match r.phase {
+                crate::tui::dojo::ime::Phase::Type => {
+                    let line = r.line().to_string();
+                    assert!(draw(&a, 100, 30).contains('^'), "톡 자리 표시");
+                    type_str(&mut a, &line);
+                }
+                crate::tui::dojo::ime::Phase::Click => {
+                    let t = r.target.unwrap();
+                    a.on_mouse(MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column: sx + ARENA_ORIGIN.0 + t.x + 1,
+                        row: sy + ARENA_ORIGIN.1 + t.y,
+                        modifiers: KeyModifiers::NONE,
+                    });
+                }
+                crate::tui::dojo::ime::Phase::LineDone(_) => {
+                    now += Duration::from_secs(1);
+                    a.on_tick(now);
+                }
+            }
+        }
+        let Screen::Result(out) = &a.screen else {
+            panic!()
+        };
+        assert_eq!(out.stars, 3);
+    }
+
+    #[test]
+    fn 배치가_바뀐_뒤_첫_입장은_배치_진단이다() {
+        let report = Report {
+            backend: Backend::Daemon,
+            trust: Trust::Full,
+            profile: "vim-nav".into(),
+            terminal: Some("TestTerm".into()),
+        };
+        let db = Database::open_in_memory().unwrap();
+        db.kv_set(KV_INITIATED, "1").unwrap();
+        db.kv_set(KV_KEYMAP_FP, "옛-지문").unwrap();
+        let mut a = App::with_report(&kmd_core::Config::default(), Some(db), None, report);
+        assert!(matches!(a.screen, Screen::Diagnose(..)));
+        let text = draw(&a, 80, 24);
+        assert!(
+            text.contains("배치가 바뀌었다") && text.contains("사부의 진단"),
+            "{text}"
+        );
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Char(' '));
+        assert!(matches!(a.screen, Screen::Lobby));
+        // 입문 의식에서 D 로 다시
+        a.screen = Screen::Precheck;
+        press(&mut a, KeyCode::Char('d'));
+        assert!(matches!(a.screen, Screen::Diagnose(..)));
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.screen, Screen::Precheck));
     }
 
     #[test]
@@ -1387,5 +1508,39 @@ mod tests {
         println!("{}", draw(&a, 80, 24));
         a.screen = Screen::Codex;
         println!("{}", draw(&a, 80, 24));
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_m3() {
+        let mut a = app();
+        a.free = true;
+        a.open_diagnose();
+        println!("{}", draw(&a, 80, 24));
+        for id in ["green.1", "green.3", "green.boss", "blue.1", "blue.boss"] {
+            a.screen = Screen::Intro(id.into());
+            println!("{}", draw(&a, 80, 24));
+            press(&mut a, KeyCode::Enter);
+            println!("{}", draw(&a, 80, 24));
+            match id {
+                "green.1" => {
+                    send(&mut a, Action::WordRight);
+                    send(&mut a, Action::Right);
+                    send(&mut a, Action::SelRight);
+                    send(&mut a, Action::SelRight);
+                }
+                "green.3" => {
+                    send(&mut a, Action::WordRight);
+                    send(&mut a, Action::SelWordRight);
+                    send(&mut a, Action::Backspace);
+                }
+                "blue.1" => type_str(&mut a, "kmd fh"),
+                "blue.boss" => type_str(&mut a, "did"),
+                _ => {}
+            }
+            println!("{}", draw(&a, 80, 24));
+            press(&mut a, KeyCode::Esc);
+            press(&mut a, KeyCode::Esc);
+        }
     }
 }

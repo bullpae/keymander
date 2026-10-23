@@ -360,3 +360,177 @@ let value = input.trim()«;»;"""
   text = """
 let keymap = effective_keymap(&«&»config.launcher.keymap);‸
 ⚑run(keymap)"""
+
+# ── 초록띠 · 문서 수술 ── 선택 수(Shift+이동)를 쓰는 코스.
+# ⟦…⟧ 과녁: 그 영역을 정확히 선택하면 홀 아웃. 선택 + 지우기는 선택 영역을 통째로 벤다.
+
+[[course]]
+id = "select"
+name = "선택의 수"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd",
+         "SelLeft", "SelRight", "SelUp", "SelDown", "SelWordLeft", "SelWordRight", "SelLineStart", "SelLineEnd"]
+
+  [[course.hole]]
+  title = "한 단어"
+  text = """
+‸let ⟦config⟧ = load();"""
+
+  [[course.hole]]
+  title = "뒤로 감싸기"
+  text = """
+fn ⟦handle_key⟧(k: Key) -> bool { true }‸"""
+
+  [[course.hole]]
+  title = "줄 끝까지"
+  text = """
+let total = ‸⟦items.iter().map(price).sum();⟧"""
+
+  [[course.hole]]
+  title = "두 단어"
+  text = """
+‸the ⟦quick brown⟧ fox jumps over"""
+
+  [[course.hole]]
+  title = "줄을 넘어"
+  text = """
+‸⟦레이어는 에디터가 아니라
+모든⟧ 앱에서 동작한다."""
+
+[[course]]
+id = "surgery"
+name = "지우는 수"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd",
+         "SelLeft", "SelRight", "SelUp", "SelDown", "SelWordLeft", "SelWordRight", "SelLineStart", "SelLineEnd",
+         "Backspace", "Delete"]
+
+  [[course.hole]]
+  title = "반복된 단어"
+  text = """
+‸the «the »quick brown fox"""
+
+  [[course.hole]]
+  title = "긴 군더더기"
+  text = """
+let «really_long_»name = 1;‸"""
+
+  [[course.hole]]
+  title = "인자 하나 빼기"
+  text = """
+‸call(a, «unused, »b);"""
+
+  [[course.hole]]
+  title = "꼬리 자르기"
+  text = """
+‸return value;« // FIXME»"""
+
+  [[course.hole]]
+  title = "한글 군더더기"
+  text = """
+‸손은 «정말로 »홈로우를 떠나지 않는다."""
+
+[[course]]
+id = "typo"
+name = "오타 세 마리"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd",
+         "SelLeft", "SelRight", "SelUp", "SelDown", "SelWordLeft", "SelWordRight", "SelLineStart", "SelLineEnd",
+         "Backspace", "Delete"]
+
+  [[course.hole]]
+  title = "첫째 문단"
+  text = """
+‸키맨더는 손을 홈로우에«에» 둔 채
+런처를 소환하고, 커«서»서를 옮기고,
+마우스«마우스»까지 다룬다."""
+
+  [[course.hole]]
+  title = "둘째 문단"
+  text = """
+CapsLock 을 쥐면 HJKL 이«이» 화살표가 된다.
+I 와 O 는 단어를 «단어를 »건너뛴다.
+두 번 치면 줄 끝까지 간«다»다.‸"""
+
+  [[course.hole]]
+  title = "코드 문단"
+  text = """
+fn main() {
+    let cfg = load(«load(»path);
+    run(‸cfg«, cfg»);
+}"""
+
+[[course]]
+id = "paragraph"
+name = "문단 손질"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd",
+         "SelLeft", "SelRight", "SelUp", "SelDown", "SelWordLeft", "SelWordRight", "SelLineStart", "SelLineEnd",
+         "Backspace", "Delete"]
+
+  [[course.hole]]
+  title = "군말 덜기"
+  text = """
+‸레이어는 «사실 »모든 앱에서
+«그냥 »동작한다. 터미널이든
+메신저든 «아무튼 »같은 손이다."""
+
+  [[course.hole]]
+  title = "README 다듬기"
+  text = """
+## 설치
+
+brew «install »install keymander
+kmd «-v »setup‸
+kmd dojo"""
+
+  [[course.hole]]
+  title = "주석 걷어내기"
+  text = """
+‸let page = 8;« // 임시»
+let step = page / 2;« // 임시»
+render(page, step);"""
+
+[[course]]
+id = "boss3"
+name = "화살귀 3형 · 일곱 홀"
+moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "LineStart", "LineEnd",
+         "SelLeft", "SelRight", "SelUp", "SelDown", "SelWordLeft", "SelWordRight", "SelLineStart", "SelLineEnd",
+         "Backspace", "Delete"]
+
+  [[course.hole]]
+  title = "一 · 이름을 감싸라"
+  text = """
+let ⟦message⟧ = format!("{} keys", count);‸"""
+
+  [[course.hole]]
+  title = "二 · 깃발로"
+  text = """
+‸if let Some(path) = args.next() {
+    open(⚑path)?;
+}"""
+
+  [[course.hole]]
+  title = "三 · 겹친 단어"
+  text = """
+‸화살표 «화살표 »없이 고쳐 보아라."""
+
+  [[course.hole]]
+  title = "四 · 줄 끝까지 감싸라"
+  text = """
+‸⟦return Err(timeout);⟧"""
+
+  [[course.hole]]
+  title = "五 · 두 군데"
+  text = """
+items.push(«old_»item);
+items.sort«_by_key»();‸"""
+
+  [[course.hole]]
+  title = "六 · 줄을 넘어 감싸라"
+  text = """
+match key {
+    ‸⟦Left => back(),
+    Right⟧ => forward(),
+}"""
+
+  [[course.hole]]
+  title = "七 · 마지막 일격"
+  text = """
+‸손은 홈로우를 «절대로 »떠나지 않는다«!!»."""

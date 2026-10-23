@@ -184,7 +184,8 @@ motto = "레이어는 에디터가 아니라 모든 앱에서 동작한다."
   [[belt.lesson]]
   id = "green.1"
   title = "선택의 수"
-  kind = "select"
+  kind = "golf"
+  set = "select"
   why = "Shift 를 함께 쥐면 이동이 선택이 된다."
   needs = ["WordLeft", "WordRight"]
   scroll = "十八"
@@ -192,7 +193,8 @@ motto = "레이어는 에디터가 아니라 모든 앱에서 동작한다."
   [[belt.lesson]]
   id = "green.2"
   title = "지우는 수"
-  kind = "surgery"
+  kind = "golf"
+  set = "surgery"
   why = "선택한 뒤 {key:Backspace} 한 번 — 글자 하나씩 지우지 않는다."
   needs = ["Backspace"]
   scroll = "四"
@@ -200,21 +202,24 @@ motto = "레이어는 에디터가 아니라 모든 앱에서 동작한다."
   [[belt.lesson]]
   id = "green.3"
   title = "실전: 오타 세 마리"
-  kind = "surgery"
+  kind = "golf"
+  set = "typo"
   why = "문단 속 군더더기 세 마리를 찾아 벤다."
   needs = ["Backspace", "Delete"]
 
   [[belt.lesson]]
   id = "green.4"
   title = "실전: 문단 손질"
-  kind = "surgery"
+  kind = "golf"
+  set = "paragraph"
   why = "긴 문단을 이동·선택·삭제만으로 다듬는다."
   needs = ["Backspace"]
 
   [belt.boss]
   id = "green.boss"
   name = "화살귀(箭鬼) 3형"
-  kind = "surgery"
+  kind = "golf"
+  set = "boss3"
   line = "고쳐 보아라, 화살표 없이!"
   why = "실전 혼합으로 3형을 물리친다."
   scroll = "十七"
@@ -229,6 +234,8 @@ motto = "수십 년 쓴 그 자리다. 손가락은 이미 알고 있다."
   id = "blue.1"
   title = "한영 리듬"
   kind = "ime"
+  set = "rhythm"
+  par_time_s = 90
   why = "{ToggleHangul} — 혼합 문장의 전환 지점에서 톡."
   needs = ["ToggleHangul"]
   scroll = "十一"
@@ -237,14 +244,18 @@ motto = "수십 년 쓴 그 자리다. 손가락은 이미 알고 있다."
   id = "blue.2"
   title = "톡과 쥠"
   kind = "ime"
+  set = "taphold"
+  par_time_s = 80
   why = "짧게 톡이면 한/영, 길게 쥐면 레이어가 열린다."
-  needs = ["ToggleHangul"]
+  needs = ["ToggleHangul", "ClickLeft"]
   scroll = "九"
 
   [[belt.lesson]]
   id = "blue.3"
   title = "300ms 안전장치"
   kind = "ime"
+  set = "guard"
+  par_time_s = 70
   why = "너무 빨리 두 번 치면 두 번째는 무시된다 — 전환 겹침을 막는 장치다."
   needs = ["ToggleHangul"]
 
@@ -252,6 +263,8 @@ motto = "수십 년 쓴 그 자리다. 손가락은 이미 알고 있다."
   id = "blue.boss"
   name = "양설귀(兩舌鬼)"
   kind = "ime"
+  set = "boss"
+  time_limit_s = 150
   line = "한 입으로 두 말을 해 보아라!"
   why = "혼합 문장 타임어택."
 

@@ -62,6 +62,14 @@ actions! {
     PageDown => "페이지 ↓",
     Backspace => "앞 글자 지우기",
     Delete => "뒷 글자 지우기",
+    SelLeft => "선택 ←",
+    SelRight => "선택 →",
+    SelUp => "선택 ↑",
+    SelDown => "선택 ↓",
+    SelWordLeft => "선택 단어 ←",
+    SelWordRight => "선택 단어 →",
+    SelLineStart => "선택 줄 처음",
+    SelLineEnd => "선택 줄 끝",
     PointerUp => "포인터 ↑",
     PointerDown => "포인터 ↓",
     PointerLeft => "포인터 ←",
@@ -92,8 +100,46 @@ impl Action {
             Action::PageDown => "⇟",
             Action::Backspace => "⌫",
             Action::Delete => "⌦",
+            Action::SelLeft => "⇧←",
+            Action::SelRight => "⇧→",
+            Action::SelUp => "⇧↑",
+            Action::SelDown => "⇧↓",
+            Action::SelWordLeft => "⇧«",
+            Action::SelWordRight => "⇧»",
+            Action::SelLineStart => "⇧⇤",
+            Action::SelLineEnd => "⇧⇥",
             _ => "·",
         }
+    }
+
+    /// 선택 수 → 바탕 이동 수 (Shift 를 뗀 수). 선택 수가 아니면 `None`.
+    pub fn unshifted(self) -> Option<Action> {
+        Some(match self {
+            Action::SelLeft => Action::Left,
+            Action::SelRight => Action::Right,
+            Action::SelUp => Action::Up,
+            Action::SelDown => Action::Down,
+            Action::SelWordLeft => Action::WordLeft,
+            Action::SelWordRight => Action::WordRight,
+            Action::SelLineStart => Action::LineStart,
+            Action::SelLineEnd => Action::LineEnd,
+            _ => return None,
+        })
+    }
+
+    /// 이동 수 → Shift 를 함께 쥔 선택 수. 이동 수가 아니면 `None`.
+    pub fn shifted(self) -> Option<Action> {
+        Some(match self {
+            Action::Left => Action::SelLeft,
+            Action::Right => Action::SelRight,
+            Action::Up => Action::SelUp,
+            Action::Down => Action::SelDown,
+            Action::WordLeft => Action::SelWordLeft,
+            Action::WordRight => Action::SelWordRight,
+            Action::LineStart => Action::SelLineStart,
+            Action::LineEnd => Action::SelLineEnd,
+            _ => return None,
+        })
     }
 
     /// 키맵 대상 문자열(`"Ctrl+Left"`, `"mouse:click"`, `"Hangul"` …)을 수로 읽는다.
@@ -173,6 +219,16 @@ mod tests {
             Some(Action::LineEnd)
         );
         assert_eq!(Action::from_target("End", Os::Linux), Some(Action::LineEnd));
+    }
+
+    #[test]
+    fn 선택_수는_shift_를_뗀_이동_수와_짝이다() {
+        for &a in Action::ALL {
+            if let Some(base) = a.unshifted() {
+                assert_eq!(base.shifted(), Some(a));
+            }
+        }
+        assert_eq!(Action::Backspace.shifted(), None);
     }
 
     #[test]

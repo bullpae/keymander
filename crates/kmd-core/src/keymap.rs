@@ -1567,6 +1567,129 @@ mod tests {
         }
     }
 
+    /// kanata 토큰 → 엔진 대상(정규화). `_`·`XX` 는 매핑 없음.
+    fn kbd_target(tok: &str) -> Option<String> {
+        let t = match tok {
+            "_" | "XX" => return None,
+            "left" => "left",
+            "down" => "down",
+            "up" => "up",
+            "rght" => "right",
+            "pgup" => "pageup",
+            "pgdn" => "pagedown",
+            "bspc" => "backspace",
+            "del" => "delete",
+            "@launch-kmd" => "launch:kmd-desktop",
+            "@i-dt" => "wordleft|linestart",
+            "@o-dt" => "wordright|lineend",
+            "@ms-u" => "mouse:up",
+            "@ms-d" => "mouse:down",
+            "@ms-l" => "mouse:left",
+            "@ms-r" => "mouse:right",
+            "mlft" | "@ms-lclk" => "mouse:click",
+            "mrgt" => "mouse:rclick",
+            "mmid" => "mouse:mclick",
+            "@ms-wu" => "mouse:wheel-up",
+            "@ms-wd" => "mouse:wheel-down",
+            "@ms-slow" => "mouse:slow",
+            other => return Some(format!("?{other}")),
+        };
+        Some(t.to_string())
+    }
+
+    /// 엔진 대상 정규화 — 의도된 OS 차이(macOS 단어 이동 = Alt, 줄 = Cmd)는 같은 수로 본다
+    fn engine_target(t: &str) -> String {
+        match t.to_ascii_lowercase().replace(' ', "").as_str() {
+            "ctrl+left" | "alt+left" => "wordleft".into(),
+            "ctrl+right" | "alt+right" => "wordright".into(),
+            "home" | "cmd+left" => "linestart".into(),
+            "end" | "cmd+right" => "lineend".into(),
+            other => other.to_string(),
+        }
+    }
+
+    fn kbd_key(k: &str) -> String {
+        match k {
+            "caps" => "CapsLock".into(),
+            "ralt" => "RAlt".into(),
+            "lsft" => "LShift".into(),
+            "spc" => "Space".into(),
+            other => other.to_ascii_uppercase(),
+        }
+    }
+
+    fn alias_body<'a>(kbd: &'a str, name: &str) -> &'a str {
+        kbd.lines()
+            .map(str::trim)
+            .find(|l| l.split_whitespace().next() == Some(name))
+            .unwrap_or_else(|| panic!("defalias {name} 없음"))
+    }
+
+    /// docs/10 §6-5 — kanata 프리셋 원본과 데몬 엔진 기본값은 같은 배치다("One keymap").
+    /// dojo 는 kanata + 프리셋 원본이면 엔진 기본값으로 배치를 해석하므로, 이 동등성이
+    /// 깨지면 도장이 사용자에게 틀린 키를 가르친다.
+    #[test]
+    fn kanata_프리셋과_엔진_기본_배치가_같다() {
+        let kbd = preset_content("vim-nav").expect("vim-nav 프리셋");
+        let src = kbd_block_tokens(kbd, "(defsrc");
+        let eff = effective_keymap(&keymap_with_profile("vim-nav"));
+        for (block, name) in [
+            ("(deflayer navigation", "nav"),
+            ("(deflayer mouse", "mouse"),
+        ] {
+            let cols = kbd_block_tokens(kbd, block);
+            let from_kbd: std::collections::BTreeMap<String, String> = src
+                .iter()
+                .zip(&cols)
+                .filter_map(|(k, tok)| kbd_target(tok).map(|t| (kbd_key(k), t)))
+                .collect();
+            let layer = eff.layers.get(name).expect("엔진 레이어");
+            let mut from_engine: std::collections::BTreeMap<String, String> = layer
+                .mappings
+                .iter()
+                .map(|(k, t)| (k.clone(), engine_target(t)))
+                .collect();
+            for (k, dt) in &layer.double_taps {
+                from_engine.insert(
+                    k.clone(),
+                    format!(
+                        "{}|{}",
+                        engine_target(&dt.single),
+                        engine_target(&dt.double)
+                    ),
+                );
+            }
+            assert_eq!(
+                from_kbd, from_engine,
+                "{name} 레이어가 kanata 프리셋과 다르다"
+            );
+        }
+
+        // 별칭 본문 — 이름만 맞고 내용이 어긋나는 일을 막는다
+        let i = alias_body(kbd, "i-dt");
+        assert!(i.contains("C-left") && i.contains("home"), "{i}");
+        let o = alias_body(kbd, "o-dt");
+        assert!(o.contains("C-rght") && o.contains("end"), "{o}");
+        for (alias, dir) in [
+            ("ms-u", "up"),
+            ("ms-d", "down"),
+            ("ms-l", "left"),
+            ("ms-r", "right"),
+        ] {
+            let body = alias_body(kbd, alias);
+            assert!(body.contains(&format!("movemouse-accel-{dir}")), "{body}");
+        }
+        // 트리거 — caps 홀드 = nav, ralt 탭 = 한/영(물리 한영키) · 홀드 = mouse
+        assert!(alias_body(kbd, "nav-mod").contains("layer-toggle navigation"));
+        let m = alias_body(kbd, "mouse-mod");
+        assert!(
+            m.contains("ralt") && m.contains("layer-toggle mouse"),
+            "{m}"
+        );
+        assert_eq!(eff.layers["mouse"].trigger, "RAlt");
+        assert_eq!(eff.layers["mouse"].tap_action.as_deref(), Some("Hangul"));
+    }
+
     #[test]
     fn kanata_프리셋에_금지된_액션이_없다() {
         let kbd = preset_content("vim-nav").expect("vim-nav 프리셋");

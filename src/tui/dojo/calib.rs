@@ -114,14 +114,33 @@ impl Calib {
     }
 
     pub fn translate(&self, key: &KeyEvent, os: Os) -> Option<Action> {
-        self.learned
-            .get(&key_id(key))
-            .copied()
-            .or_else(|| default_action(key, os))
+        // Shift 를 함께 쥐면 이동이 선택이 된다 (keymap: Shift 통과). 감응 시험은
+        // Shift 없이 배우므로 Shift 를 떼고 번역한 뒤 선택 수로 올린다.
+        // ESC B 처럼 대문자로 오는 Alt 문자도 Shift 로 본다.
+        let upper = matches!(key.code, KeyCode::Char(c) if c.is_ascii_uppercase());
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT) || upper;
+        if let Some(a) = self.learned.get(&key_id(key)).filter(|_| !shift) {
+            return Some(*a);
+        }
+        if shift {
+            let mut bare = *key;
+            bare.modifiers -= KeyModifiers::SHIFT;
+            if let KeyCode::Char(c) = bare.code {
+                bare.code = KeyCode::Char(c.to_ascii_lowercase());
+            }
+            let base = self
+                .learned
+                .get(&key_id(&bare))
+                .copied()
+                .or_else(|| default_action(&bare, os));
+            return base.map(|a| a.shifted().unwrap_or(a));
+        }
+        default_action(key, os)
     }
 
+    /// 선택 수는 바탕 이동 수가 도착하면 도착한다고 본다
     pub fn observable(&self, a: Action) -> bool {
-        !self.unobservable.contains(&a)
+        !self.unobservable.contains(&a.unshifted().unwrap_or(a))
     }
 
     pub fn to_json(&self) -> String {
@@ -289,6 +308,28 @@ mod tests {
 
     fn k(code: KeyCode, m: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, m)
+    }
+
+    #[test]
+    fn shift_를_쥐면_이동은_선택이_된다() {
+        let c = Calib::default();
+        let mac = Os::Mac;
+        let t = |code, m| c.translate(&k(code, m), mac);
+        assert_eq!(t(KeyCode::Left, KeyModifiers::SHIFT), Some(Action::SelLeft));
+        assert_eq!(
+            t(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            Some(Action::SelWordLeft)
+        );
+        // Terminal.app: Shift+Option+← = ESC B
+        assert_eq!(
+            t(KeyCode::Char('B'), KeyModifiers::ALT),
+            Some(Action::SelWordLeft)
+        );
+        assert_eq!(
+            t(KeyCode::Backspace, KeyModifiers::SHIFT),
+            Some(Action::Backspace)
+        );
+        assert_eq!(t(KeyCode::Left, KeyModifiers::NONE), Some(Action::Left));
     }
 
     #[test]

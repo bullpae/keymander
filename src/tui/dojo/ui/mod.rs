@@ -160,6 +160,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::Intro(id) => screens::intro(f, stage, app, id),
         Screen::Codex => screens::codex(f, stage, app),
         Screen::Records => screens::records(f, stage, app),
+        Screen::Diagnose(d, scroll) => screens::diagnose(f, stage, app, d, *scroll),
         Screen::Round(p) => {
             match p.as_ref() {
                 Play::Summon(r) => play::round(f, stage, app, r),
@@ -167,6 +168,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 Play::Spar(r) => modes::spar(f, stage, app, r),
                 Play::Maze(r) => modes::maze(f, stage, app, r),
                 Play::Mouse(r) => modes::mouse(f, stage, app, r),
+                Play::Ime(r) => modes::ime(f, stage, app, r),
             }
             if let Some(sel) = app.pause {
                 play::pause(f, stage, sel);

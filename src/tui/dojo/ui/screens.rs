@@ -11,7 +11,8 @@ use crate::tui::dojo::action::Action;
 use crate::tui::dojo::app::{App, MENU};
 use crate::tui::dojo::binding::Trust;
 use crate::tui::dojo::calib::{CalibRun, Step};
-use crate::tui::dojo::content::Lesson;
+use crate::tui::dojo::content::{Belt, Lesson};
+use crate::tui::dojo::diagnose::{Diagnosis, Level};
 use crate::tui::dojo::precheck::Backend;
 use crate::tui::dojo::progress::Access;
 
@@ -68,7 +69,7 @@ pub fn precheck(f: &mut Frame, stage: Rect, app: &App) {
         stage,
         "입문 의식",
         vec![span(term.clone(), fg(SUB))],
-        "Enter 도장으로   C 키 감응 시험   Ctrl+C 하산",
+        "Enter 도장으로   C 키 감응 시험   D 배치 진단   Ctrl+C 하산",
         app,
     );
 
@@ -581,10 +582,18 @@ pub fn map(f: &mut Frame, stage: Rect, app: &App) {
 // ── S4 과 입문 ────────────────────────────────────────────────────────────────
 
 /// 과에 필요한 수의 쥐는 키·누르는 키
-fn lesson_keys(app: &App, l: &Lesson) -> (Vec<String>, Vec<String>) {
+fn lesson_keys(app: &App, actions: &[Action]) -> (Vec<String>, Vec<String>) {
     let mut hold = Vec::new();
     let mut act = Vec::new();
-    for a in l.needed_actions() {
+    for &a in actions {
+        // 선택 수 = 바탕 이동 + Shift
+        let (a, shift) = match a.unshifted() {
+            Some(base) => (base, true),
+            None => (a, false),
+        };
+        if shift && !hold.iter().any(|h: &String| h == "LShift") {
+            hold.push("LShift".into());
+        }
         if let Some(b) = app.bindings.primary(a) {
             if b.tap_trigger {
                 act.push(b.key.clone());
@@ -599,6 +608,35 @@ fn lesson_keys(app: &App, l: &Lesson) -> (Vec<String>, Vec<String>) {
         }
     }
     (hold, act)
+}
+
+/// 과가 쓰는 수 — 관문은 따로 적지 않으면 그 띠의 과들이 쓰는 수 전부.
+/// 선택 코스면 Shift 도 쥐는 손으로 칠한다.
+fn lesson_actions(app: &App, belt: &Belt, lesson: &Lesson) -> (Vec<Action>, bool) {
+    let mut v = lesson.needed_actions();
+    if v.is_empty() && lesson.is_boss() {
+        for l in &belt.lesson {
+            v.extend(l.needed_actions());
+        }
+    }
+    let selecting = lesson.kind == "golf"
+        && lesson
+            .set
+            .as_deref()
+            .and_then(|s| app.content.golf_course(s))
+            .is_some_and(|c| {
+                c.moves
+                    .iter()
+                    .filter_map(|m| Action::from_id(m))
+                    .any(|a| a.unshifted().is_some())
+            });
+    let mut seen = Vec::new();
+    v.retain(|a| {
+        let new = !seen.contains(a);
+        seen.push(*a);
+        new
+    });
+    (v, selecting)
 }
 
 pub fn intro(f: &mut Frame, stage: Rect, app: &App, id: &str) {
@@ -668,8 +706,12 @@ pub fn intro(f: &mut Frame, stage: Rect, app: &App, id: &str) {
     );
 
     let y = 3 + teach_h;
-    let (hold, act) = lesson_keys(app, lesson);
-    if lesson.needs.is_empty() {
+    let (actions, selecting) = lesson_actions(app, belt, lesson);
+    let (mut hold, act) = lesson_keys(app, &actions);
+    if selecting {
+        hold.push("LShift".into());
+    }
+    if lesson.kind == "summon" {
         // 소환술 — 키보드 대신 루프를 보여 준다
         let lines = vec![
             Line::from(""),
@@ -754,11 +796,24 @@ fn intro_tip(lesson: &Lesson) -> &'static str {
         ("spar", Some("rain"), _) => "시작하면 3초 뒤 화살이 떨어진다. 눈은 판정선에 둬라.",
         ("spar", ..) => "처음 여섯 장은 키를 보여 준다. 그다음은 몸이 기억해야 한다.",
         ("maze", ..) => "Tab 은 사부의 길을 비춘다 — 대신 별 하나를 내놓아라.",
+        ("golf", _, Some("select")) => {
+            "Shift 를 함께 쥐고 움직이면 선택이 된다. 금빛 밑줄을 정확히 감싸라."
+        }
+        ("golf", _, Some("surgery" | "typo" | "paragraph" | "boss3")) => {
+            "감싸고 한 번에 벤다. 성한 글자가 섞인 선택은 칼이 튕긴다."
+        }
         ("golf", ..) => "타수 = 도착한 결과 키 수. 두 번 톡톡 수는 2타다.",
         ("mouse", _, Some("leak")) => {
             "이 수련은 이 창의 마우스 캡처로 판정한다. 포인터를 창 안에 둬라."
         }
         ("mouse", ..) => "포인터를 이 창 안으로 데려와라. 과녁장 밖은 판정하지 않는다.",
+        ("ime", _, Some("taphold")) => {
+            "줄 사이 과녁은 mouse 레이어를 쥐고 클릭 — 놓은 뒤에도 한/영은 그대로여야 한다."
+        }
+        ("ime", _, Some("guard")) => {
+            "톡 톡을 너무 빨리 치면 두 번째는 무시된다(300ms). 한 번이면 충분하다."
+        }
+        ("ime", ..) => "^ 표시가 있는 글자 앞에서 톡. 틀린 언어로 쳤다면 사부가 되짚어 준다.",
         _ => "아직 짓는 중이다. 안내만 먼저 읽어 두어라.",
     }
 }
@@ -910,5 +965,117 @@ pub fn records(f: &mut Frame, stage: Rect, app: &App) {
     f.render_widget(
         Paragraph::new(lines).block(panel(Line::from(span(" 최근 ", bold(ACCENT))))),
         sub(body, 1, 1, 78, 20),
+    );
+}
+
+// ── S19 배치 진단 ─────────────────────────────────────────────────────────────
+
+pub fn diagnose(f: &mut Frame, stage: Rect, app: &App, d: &Diagnosis, scroll: usize) {
+    let changed = d.changed();
+    let right = vec![span(
+        if app.keymap_changed {
+            "배치가 바뀌었다".to_string()
+        } else {
+            "네 배치와 표준".to_string()
+        },
+        fg(if app.keymap_changed { YELLOW } else { SUB }),
+    )];
+    let body = chrome(
+        f,
+        stage,
+        "배치 진단",
+        right,
+        "Enter 입문 의식 다시 (권장)   Space 그대로 수련   ↑↓ 표 넘기기",
+        app,
+    );
+    let say = if app.keymap_changed {
+        "배치가 바뀌었구나. 도장은 네 손에 맞춰 다시 차린다."
+    } else if changed == 0 {
+        "표준 그대로다. 비급의 이치가 네 손에 그대로 있다."
+    } else {
+        "네 배치다. 이치에 비추어 보마 — 무엇도 막지는 않는다."
+    };
+    f.render_widget(Paragraph::new(sensei_line(say)), row(body, 1));
+
+    // 수 대 수 표 — 바뀐 줄이 먼저
+    let view = 8usize;
+    let start = scroll.min(d.rows.len().saturating_sub(view));
+    let mut lines = vec![Line::from(vec![
+        span(format!(" {}", fit("수", 14)), fg(DIM)),
+        span(fit("도장 표준", 20), fg(DIM)),
+        span(fit("네 배치", 22), fg(DIM)),
+    ])];
+    for r in d.rows.iter().skip(start).take(view) {
+        let mark = if r.changed { "•" } else { " " };
+        let mut v = vec![
+            span(mark, bold(YELLOW)),
+            span(fit(&r.name, 14), fg(if r.changed { TEXT } else { SUB })),
+            span(fit(&r.standard, 20), fg(SUB)),
+            span(
+                fit(&r.mine, 22),
+                if r.changed { bold(ACT) } else { fg(SUB) },
+            ),
+        ];
+        if let Some(n) = &r.note {
+            v.push(span(fit(n, 18), fg(YELLOW)));
+        }
+        lines.push(Line::from(v));
+    }
+    let more = if d.rows.len() > view {
+        format!(
+            " {}–{}/{} ",
+            start + 1,
+            (start + view).min(d.rows.len()),
+            d.rows.len()
+        )
+    } else {
+        String::new()
+    };
+    let title = Line::from(vec![
+        span(
+            format!(" 바뀐 수  {changed} / {} ", d.rows.len()),
+            bold(ACCENT),
+        ),
+        span(more, fg(DIM)),
+    ]);
+    let table_h = lines.len() as u16 + 2;
+    f.render_widget(
+        Paragraph::new(lines).block(panel(title)),
+        sub(body, 1, 2, 78, table_h),
+    );
+
+    // 사부의 진단 — 경고 · 정보 · 칭찬
+    let y = 2 + table_h;
+    let room = body.height.saturating_sub(y + 4) as usize;
+    let mut diag = Vec::new();
+    if d.findings.is_empty() {
+        diag.push(Line::from(span(
+            "  배치를 해석할 수 없어 진단은 쉰다 — 판정과 보정은 그대로 동작한다.",
+            fg(SUB),
+        )));
+    }
+    for fd in d.findings.iter().take(room.max(1)) {
+        let (mark, color) = match fd.level {
+            Level::Warn => ("!", YELLOW),
+            Level::Info => ("i", ACCENT),
+            Level::Good => ("✓", GREEN),
+        };
+        diag.push(Line::from(vec![
+            span(format!(" {mark} "), bold(color)),
+            span(format!("卷{} ", fd.scroll), bold(GOLD)),
+            span(fit(&fd.text, 66), fg(TEXT)),
+        ]));
+    }
+    let diag_h = diag.len() as u16 + 2;
+    f.render_widget(
+        Paragraph::new(diag).block(panel(Line::from(span(" 사부의 진단 ", bold(GOLD))))),
+        sub(body, 1, y, 78, diag_h),
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(span(
+            "  안내 문구 · 시연 · Par 는 네 배치로 다시 계산했다. 예전 기록은 남는다.",
+            fg(SUB),
+        ))),
+        row(body, y + diag_h),
     );
 }

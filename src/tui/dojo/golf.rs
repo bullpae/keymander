@@ -35,6 +35,8 @@ pub struct Buffer {
     pub col: usize,
     /// ↑↓ 이동 때 기억하는 원래 열
     sticky: Option<usize>,
+    /// 선택의 닻 (선형 위치) — 커서와 닻 사이가 선택 영역이다
+    pub anchor: Option<usize>,
 }
 
 /// 군더더기가 아닌 글자를 지우려 했다
@@ -91,8 +93,55 @@ impl Buffer {
         self.sticky = Some(want);
     }
 
+    pub fn cursor_linear(&self) -> usize {
+        self.linear_at(self.row, self.col)
+    }
+
+    /// 선택 영역 `[시작, 끝)` (선형). 비었으면 `None`.
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        let here = self.cursor_linear();
+        let a = self.anchor?;
+        (a != here).then(|| (a.min(here), a.max(here)))
+    }
+
     /// 수 하나를 적용한다. 군더더기가 아닌 글자 삭제는 거절한다(버퍼는 그대로).
+    ///
+    /// 선택 수(Shift+이동)는 닻을 내리고 커서만 옮긴다. 선택이 있을 때 ←/→ 는
+    /// 선택의 앞/뒤로 접히고, 지우기는 선택 영역을 통째로 지운다(전부 군더더기일 때만).
     pub fn apply(&mut self, a: Action, os: Os, page: usize) -> Result<(), NotJunk> {
+        if let Some(base) = a.unshifted() {
+            let anchor = self.anchor.unwrap_or_else(|| self.cursor_linear());
+            self.step(base, os, page)?;
+            self.anchor = (anchor != self.cursor_linear()).then_some(anchor);
+            return Ok(());
+        }
+        let Some((lo, hi)) = self.selection() else {
+            self.anchor = None;
+            return self.step(a, os, page);
+        };
+        match a {
+            Action::Left | Action::Right => {
+                let to = if a == Action::Left { lo } else { hi };
+                (self.row, self.col) = self.pos_at(to);
+                self.sticky = None;
+            }
+            Action::Backspace | Action::Delete => {
+                let (r, c0) = self.pos_at(lo);
+                let (r1, c1) = self.pos_at(hi);
+                if r != r1 || !self.lines[r][c0..c1].iter().all(|c| c.junk) {
+                    return Err(NotJunk);
+                }
+                self.lines[r].drain(c0..c1);
+                (self.row, self.col) = (r, c0);
+                self.sticky = None;
+            }
+            _ => self.step(a, os, page)?,
+        }
+        self.anchor = None;
+        Ok(())
+    }
+
+    fn step(&mut self, a: Action, os: Os, page: usize) -> Result<(), NotJunk> {
         let keep_sticky = matches!(
             a,
             Action::Up | Action::Down | Action::PageUp | Action::PageDown
@@ -192,9 +241,13 @@ pub struct Hole {
     pub start: Buffer,
     /// 이동 홀의 깃발
     pub flag: Option<(usize, usize)>,
+    /// 선택 홀의 과녁 — 이 영역을 정확히 선택하면 홀 아웃 (선형 `[시작, 끝)`)
+    pub target: Option<(usize, usize)>,
     pub moves: Vec<Action>,
     pub par: Option<u32>,
     pub page: usize,
+    /// 군더더기 덩어리(«…» 하나)마다 그 글자들의 비트
+    runs: Vec<u32>,
 }
 
 impl Hole {
@@ -203,19 +256,29 @@ impl Hole {
         let mut lines = Vec::new();
         let mut start = None;
         let mut flag = None;
+        let mut mark = (None, None);
         let mut junk = false;
         let mut jid = 0u8;
+        let mut runs: Vec<u32> = Vec::new();
         for (r, raw) in h.text.trim_end_matches('\n').lines().enumerate() {
             let mut line = Vec::new();
             for ch in raw.chars() {
                 match ch {
                     '‸' => start = Some((r, line.len())),
                     '⚑' => flag = Some((r, line.len())),
-                    '«' => junk = true,
+                    '⟦' => mark.0 = Some((r, line.len())),
+                    '⟧' => mark.1 = Some((r, line.len())),
+                    '«' => {
+                        junk = true;
+                        runs.push(0);
+                    }
                     '»' => junk = false,
                     _ => {
                         line.push(Cell { ch, junk, jid });
                         if junk {
+                            if let Some(r) = runs.last_mut() {
+                                *r |= 1 << jid;
+                            }
                             jid += 1;
                         }
                     }
@@ -236,9 +299,23 @@ impl Hole {
             row,
             col,
             sticky: None,
+            anchor: None,
         };
-        if flag.is_none() && buf.junk_left() == 0 {
-            return Err(format!("{}: 깃발도 군더더기도 없다", h.title));
+        let target = match mark {
+            (Some((r0, c0)), Some((r1, c1))) => {
+                Some((buf.linear_at(r0, c0), buf.linear_at(r1, c1)))
+            }
+            (None, None) => None,
+            _ => return Err(format!("{}: 과녁 ⟦⟧ 짝이 맞지 않는다", h.title)),
+        };
+        if target.is_some() && (flag.is_some() || buf.junk_left() > 0) {
+            return Err(format!(
+                "{}: 과녁 홀에는 깃발·군더더기를 두지 않는다",
+                h.title
+            ));
+        }
+        if flag.is_none() && target.is_none() && buf.junk_left() == 0 {
+            return Err(format!("{}: 깃발도 군더더기도 과녁도 없다", h.title));
         }
         if jid > 16 {
             return Err(format!("{}: 군더더기는 16글자까지", h.title));
@@ -247,14 +324,30 @@ impl Hole {
             title: h.title.clone(),
             start: buf,
             flag,
+            target,
             moves,
             par: h.par,
             page: h.page.unwrap_or(page),
+            runs,
         })
     }
 
+    /// 지금 커서에 닻을 내려 쓸모가 있는가 — 사부의 수 탐색 가지치기.
+    /// 선택은 과녁의 양 끝, 또는 군더더기 덩어리의 경계에서 시작해야만 득이 된다
+    /// (군더더기가 아닌 글자가 섞인 선택은 지울 수 없다).
+    fn anchor_useful(&self, buf: &Buffer) -> bool {
+        let here = buf.cursor_linear();
+        if let Some((a, b)) = self.target {
+            return here == a || here == b;
+        }
+        let line = &buf.lines[buf.row];
+        line.get(buf.col).is_some_and(|c| c.junk) || (buf.col > 0 && line[buf.col - 1].junk)
+    }
+
     pub fn done(&self, buf: &Buffer) -> bool {
-        buf.junk_left() == 0 && self.flag.is_none_or(|f| (buf.row, buf.col) == f)
+        buf.junk_left() == 0
+            && self.flag.is_none_or(|f| (buf.row, buf.col) == f)
+            && self.target.is_none_or(|t| buf.selection() == Some(t))
     }
 }
 
@@ -301,6 +394,7 @@ struct Key {
     row: u16,
     col: u16,
     sticky: u16,
+    anchor: u16,
 }
 
 const NO_STICKY: u16 = u16::MAX;
@@ -320,6 +414,7 @@ impl Buffer {
             row: self.row as u16,
             col: self.col as u16,
             sticky: self.sticky.map_or(NO_STICKY, |s| s as u16),
+            anchor: self.anchor.map_or(NO_STICKY, |s| s as u16),
         }
     }
 
@@ -340,12 +435,22 @@ impl Buffer {
         self.row = usize::from(k.row);
         self.col = usize::from(k.col);
         self.sticky = (k.sticky != NO_STICKY).then_some(usize::from(k.sticky));
+        self.anchor = (k.anchor != NO_STICKY).then_some(usize::from(k.anchor));
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static EXPANDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// 사부의 수를 구한다 (docs/10 §7-2). 간선 비용 = 도착 이벤트 수(1 또는 2)라
-/// 순수 BFS 대신 다익스트라를 쓴다. 상태는 (남은 군더더기, 커서) 로 압축하고,
+/// 순수 BFS 대신 다익스트라를 쓴다. 상태는 (남은 군더더기, 커서, 닻) 으로 압축하고,
 /// 이동 홀은 글자가 바뀌지 않으니 버퍼를 복제하지 않고 커서만 옮겨 본다.
+///
+/// 군더더기 덩어리가 여럿이면 부분 삭제 조합이 곱으로 늘어난다. 덩어리 둘을
+/// 번갈아 조금씩 지우는 수는 득이 없으니, **덜 지운 덩어리는 한 번에 하나**만
+/// 허용해 상태를 줄인다. 같은 타수면 선택 수를 덜 쓴 길을 고른다(보이는 수가 자연스럽다).
 pub fn sage(hole: &Hole, edges: &[Edge], os: Os) -> Option<SagePath> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
@@ -358,16 +463,37 @@ pub fn sage(hole: &Hole, edges: &[Edge], os: Os) -> Option<SagePath> {
     }
     let junky = hole.start.junk_left() > 0;
     let start = hole.start.key(junky);
-    let mut scratch = hole.start.clone();
-    let mut dist: HashMap<Key, u32> = HashMap::from([(start, 0)]);
-    let mut prev: HashMap<Key, (Key, Action)> = HashMap::new();
-    let mut heap = BinaryHeap::from([Reverse((0u32, start))]);
-    while let Some(Reverse((cost, k))) = heap.pop() {
-        if dist.get(&k).is_some_and(|d| *d < cost) {
-            continue;
+    // 덜 지운 덩어리는 하나만, 그리고 남은 부분이 이어져 있어야 한다
+    // (가운데를 파내 두 조각으로 남기는 수는 득이 없다)
+    let partial_ok = |mask: u32| {
+        let mut partial = 0;
+        for r in &hole.runs {
+            let left = mask & *r;
+            if left != 0 && left != *r {
+                partial += 1;
+                let bits = left >> left.trailing_zeros();
+                if partial > 1 || bits & (bits + 1) != 0 {
+                    return false;
+                }
+            }
         }
-        scratch.load(&hole.start, k, junky);
-        if hole.done(&scratch) {
+        true
+    };
+    // A* 하한 — 남은 군더더기 덩어리마다 적어도 한 타(지우기)는 든다
+    let h = |mask: u32| hole.runs.iter().filter(|r| mask & **r != 0).count() as u32;
+    // 비용 = (타수, 선택 수 사용 횟수) — 사전순. 힙에는 (타수 + 하한) 으로 넣는다.
+    let mut scratch = hole.start.clone();
+    let mut base = hole.start.clone();
+    let mut dist: HashMap<Key, (u32, u32)> = HashMap::from([(start, (0, 0))]);
+    let mut prev: HashMap<Key, (Key, Action)> = HashMap::new();
+    let mut heap = BinaryHeap::from([Reverse(((h(start.mask), 0u32), start))]);
+    while let Some(Reverse((f, k))) = heap.pop() {
+        let cost = dist[&k];
+        if f != (cost.0 + h(k.mask), cost.1) {
+            continue; // 더 싼 길로 이미 갱신된 낡은 항목
+        }
+        base.load(&hole.start, k, junky);
+        if hole.done(&base) {
             let mut moves = Vec::new();
             let mut cur = k;
             while let Some((p, a)) = prev.get(&cur) {
@@ -377,26 +503,55 @@ pub fn sage(hole: &Hole, edges: &[Edge], os: Os) -> Option<SagePath> {
             moves.reverse();
             return Some(SagePath {
                 moves,
-                strokes: cost,
+                strokes: cost.0,
             });
         }
         if dist.len() > BFS_LIMIT {
             return None;
         }
+        #[cfg(test)]
+        EXPANDED.with(|c| c.set(c.get() + 1));
         for e in edges {
-            scratch.load(&hole.start, k, junky);
-            if e.seq
+            // 이동만 하는 수는 글자를 바꾸지 않는다 — 복제 없이 커서만 옮겼다 되돌린다
+            let edits = e
+                .seq
                 .iter()
-                .any(|a| scratch.apply(*a, os, hole.page).is_err())
-            {
+                .any(|a| matches!(a, Action::Backspace | Action::Delete));
+            base.load(&hole.start, k, false);
+            let buf = if edits {
+                scratch.clone_from(&base);
+                &mut scratch
+            } else {
+                &mut base
+            };
+            if e.seq.iter().any(|a| buf.apply(*a, os, hole.page).is_err()) {
                 continue;
             }
-            let next = scratch.key(junky);
-            let nc = cost + e.seq.len() as u32;
-            if next != k && dist.get(&next).is_none_or(|d| nc < *d) {
+            let next = if edits {
+                buf.key(junky)
+            } else {
+                Key {
+                    mask: k.mask,
+                    ..buf.key(false)
+                }
+            };
+            if next == k || (next.mask != k.mask && !partial_ok(next.mask)) {
+                continue;
+            }
+            if k.anchor == NO_STICKY && next.anchor != NO_STICKY {
+                base.load(&hole.start, k, false);
+                if !hole.anchor_useful(&base) {
+                    continue;
+                }
+            }
+            let nc = (
+                cost.0 + e.seq.len() as u32,
+                cost.1 + u32::from(e.action.unshifted().is_some()),
+            );
+            if dist.get(&next).is_none_or(|d| nc < *d) {
                 dist.insert(next, nc);
                 prev.insert(next, (k, e.action));
-                heap.push(Reverse((nc, next)));
+                heap.push(Reverse(((nc.0 + h(next.mask), nc.1), next)));
             }
         }
     }
@@ -561,11 +716,17 @@ impl GolfRound {
         self.strokes += 1;
         self.used.push(a);
         let page = self.hole().page;
+        let had_selection = self.buf.selection().is_some();
         if self.buf.apply(a, self.os, page).is_err() {
             self.total_mistakes += 1;
             self.fail_streak += 1;
             self.flash = Some((false, now));
-            self.feedback = Some(("군더더기가 아니다 — 그 글자는 살린다".into(), now));
+            let msg = if had_selection {
+                "선택에 성한 글자가 섞였다 — 칼이 튕긴다"
+            } else {
+                "군더더기가 아니다 — 그 글자는 살린다"
+            };
+            self.feedback = Some((msg.into(), now));
             if let Some(b) = &mut self.boss {
                 if b.hurt_me(5) {
                     return RoundEvent::Failed;
@@ -751,6 +912,62 @@ mod tests {
     }
 
     #[test]
+    fn 선택은_닻과_커서_사이다() {
+        let h = hole("‸ab ⟦cd⟧", &["Left"]);
+        let mut b = h.start.clone();
+        b.apply(Action::Right, Os::Mac, 8).unwrap();
+        b.apply(Action::SelRight, Os::Mac, 8).unwrap();
+        assert_eq!(b.selection(), Some((1, 2)));
+        b.apply(Action::SelLeft, Os::Mac, 8).unwrap();
+        assert_eq!(b.selection(), None, "닻으로 돌아오면 선택이 사라진다");
+        // 과녁 cd 를 단어 선택으로
+        let mut b = h.start.clone();
+        b.apply(Action::WordRight, Os::Mac, 8).unwrap();
+        b.apply(Action::Right, Os::Mac, 8).unwrap();
+        b.apply(Action::SelWordRight, Os::Mac, 8).unwrap();
+        assert!(h.done(&b));
+        // ← 는 선택의 앞으로 접힌다
+        b.apply(Action::Left, Os::Mac, 8).unwrap();
+        assert_eq!((b.col, b.selection()), (3, None));
+    }
+
+    #[test]
+    fn 선택_지우기는_군더더기만_통째로() {
+        let h = hole("‸the «the »cat", &["Left"]);
+        let mut b = h.start.clone();
+        b.apply(Action::WordRight, Os::Mac, 8).unwrap();
+        b.apply(Action::SelWordRight, Os::Mac, 8).unwrap();
+        // " the" — 앞 공백은 군더더기가 아니다
+        assert_eq!(b.apply(Action::Backspace, Os::Mac, 8), Err(NotJunk));
+        assert_eq!(b.junk_left(), 4);
+        let mut b = h.start.clone();
+        for a in [Action::Right; 4] {
+            b.apply(a, Os::Mac, 8).unwrap();
+        }
+        b.apply(Action::SelWordRight, Os::Mac, 8).unwrap();
+        b.apply(Action::SelRight, Os::Mac, 8).unwrap();
+        b.apply(Action::Delete, Os::Mac, 8).unwrap();
+        assert!(h.done(&b));
+        assert_eq!(b.cursor_linear(), 4);
+    }
+
+    #[test]
+    fn 선택_수가_있으면_사부는_통째로_지운다() {
+        let h = hole("‸the «quick »brown fox", &[]);
+        let mut moves = vec![
+            Action::Left,
+            Action::Right,
+            Action::WordRight,
+            Action::Backspace,
+            Action::Delete,
+        ];
+        let plain = sage(&h, &edges(&moves), Os::Mac).unwrap();
+        moves.extend([Action::SelRight, Action::SelWordRight]);
+        let sel = sage(&h, &edges(&moves), Os::Mac).unwrap();
+        assert!(sel.strokes < plain.strokes, "{sel:?} vs {plain:?}");
+    }
+
+    #[test]
     fn 사부의_수는_단어_점프가_화살표보다_싸다() {
         let h = hole("‸let config = load_config(path);⚑", &[]);
         let arrows = sage(&h, &edges(&[Action::Left, Action::Right]), Os::Mac).unwrap();
@@ -786,14 +1003,21 @@ mod tests {
             for h in &course.hole {
                 let hole = Hole::parse(h, &course.moves, course.page.unwrap_or(8))
                     .unwrap_or_else(|e| panic!("{}: {e}", course.id));
-                // 군더더기가 길면 부분 삭제 상태가 2^n 으로 늘어 라운드 시작이 느려진다
+                // 군더더기가 길면 부분 삭제 상태가 2^n 으로 늘어 라운드 시작이 느려진다.
+                // 선택 수가 있는 코스는 통째로 지우니 상태가 덜 늘어 더 허용한다.
+                let selecting = hole.moves.iter().any(|a| a.unshifted().is_some());
+                let cap = if selecting { 12 } else { 6 };
                 assert!(
-                    hole.start.junk_left() <= 6,
-                    "{}: 군더더기는 홀당 6글자까지",
+                    hole.start.junk_left() <= cap,
+                    "{}: 군더더기는 홀당 {cap}글자까지",
                     h.title
                 );
+                EXPANDED.with(|c| c.set(0));
                 let full = sage(&hole, &edges(&hole.moves), Os::Mac)
                     .unwrap_or_else(|| panic!("{} / {}: 풀리지 않는다", course.id, h.title));
+                // 디버그 빌드 라운드 시작이 굼뜨지 않게 — 홀당 탐색 상태 상한
+                let n = EXPANDED.with(|c| c.get());
+                assert!(n < 20_000, "{} / {}: 탐색 상태 {n}", course.id, h.title);
                 assert!(full.strokes >= 1, "{}: 이미 끝난 홀", h.title);
                 let basic: Vec<Action> = hole
                     .moves
@@ -808,6 +1032,10 @@ mod tests {
                                 | Action::Down
                                 | Action::Backspace
                                 | Action::Delete
+                                | Action::SelLeft
+                                | Action::SelRight
+                                | Action::SelUp
+                                | Action::SelDown
                         )
                     })
                     .collect();
@@ -841,8 +1069,18 @@ mod tests {
         for course in &c.golf.course {
             for h in &course.hole {
                 let hole = Hole::parse(h, &course.moves, course.page.unwrap_or(8)).unwrap();
+                let t = std::time::Instant::now();
+                EXPANDED.with(|c| c.set(0));
                 let p = sage(&hole, &edges(&hole.moves), Os::Mac).unwrap();
-                println!("{} / {}: {} {}", course.id, h.title, p.strokes, p.display());
+                println!(
+                    "{} / {}: {} {}  ({:?}, {} 상태)",
+                    course.id,
+                    h.title,
+                    p.strokes,
+                    p.display(),
+                    t.elapsed(),
+                    EXPANDED.with(|c| c.get())
+                );
             }
         }
     }
