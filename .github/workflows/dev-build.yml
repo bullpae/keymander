@@ -1,7 +1,8 @@
 name: Dev Build (Windows desktop)
 
-# 개발 브랜치의 kmd-desktop.exe 를 Rust 툴체인이 없는 실기기(예: MX250 노트북)에서
-# 바로 시험할 수 있도록 빌드해 Actions 아티팩트로 올린다. 릴리스와 무관하다.
+# 개발 브랜치의 kmd.exe·kmd-desktop.exe·kmd-daemon.exe 를 Rust 툴체인이 없는
+# 실기기(예: MX250 노트북)에서 바로 시험할 수 있도록 빌드해 Actions 아티팩트로
+# 올린다. 릴리스와 무관하다.
 on:
   push:
     branches: ["claude/**"]
@@ -15,7 +16,7 @@ env:
 
 jobs:
   build:
-    name: kmd-desktop (x86_64-pc-windows-msvc)
+    name: kmd (x86_64-pc-windows-msvc)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -23,11 +24,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release -p kmd-desktop --locked
+        run: cargo build --release -p keymander -p kmd-desktop -p kmd-daemon --locked
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kmd-desktop-x86_64-pc-windows-msvc
-          path: target/release/kmd-desktop.exe
+          name: kmd-x86_64-pc-windows-msvc
+          path: |
+            target/release/kmd.exe
+            target/release/kmd-desktop.exe
+            target/release/kmd-daemon.exe
           retention-days: 7
