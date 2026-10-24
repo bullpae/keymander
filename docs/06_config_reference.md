@@ -125,6 +125,15 @@ toggle_preview = "ctrl+p"
 | multi_llm_prefixes | Vec\<String\> | @llm,@ll,… | `@llm` 별칭 |
 | llm_autopilot | bool | false | LLM 자동 제출(데몬 키 주입, Windows). `@gpt`/`@claude`는 Enter, `@gemini`는 붙여넣기+Enter를 전경창 검증 후 주입. `@@ <질문>`으로 이어서 질문. 자동 키 주입이라 opt-in (docs/09) |
 
+### 4.2.0 [launcher.route] — `:길` 카카오맵 길찾기 (docs/20)
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| use_location | bool | true | 출발지를 안 적으면 현재 위치(OS 위치 서비스, 데몬이 메모리에만 보관)에서 출발 |
+| origin | String? | 없음 | 현재 위치를 못 얻었거나 `use_location = false`일 때의 출발지 (내 장소 이름) |
+| places | Map\<String, String\> | {} | 내 장소: 이름 = "위도,경도" (`[launcher.route.places]`) |
+| kakao_key_file | Path? | `~/.config/nextmove/kakao.env` | 처음 가는 곳의 후보 검색용 카카오 REST 키 파일. 환경 변수 `KAKAO_REST_API_KEY`가 먼저 |
+
 ### 4.2.1 [launcher.content_search] — 문서 본문 검색 (docs/15)
 
 파일 이름이 아니라 **내용**으로 찾는 FTS5 인덱스. 스캔 범위는 `search_paths` +

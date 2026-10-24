@@ -532,6 +532,7 @@ leading `/` (e.g. `/help`, `/calc 2+3`). Unknown `:command` input shows an
 | `:prompt` / `:pt` | Prompt templates | `:prompt add review ...` | Manage reusable prompt templates for `@ll` |
 | `:f` | Folder search | `:f ~/docs report` | Search inside a specific folder |
 | `:scope` | Search scope | `:scope D:\Util` | Add/remove folders to index (Ctrl+Del remove, Ctrl+Z undo) — indexed right away |
+| `:길` / `:route` | Route (Kakao Map) | `:길 판교역`, `:길 차 회사 → 강남역` | Open Kakao Map directions (transit/car/walk/bike); saved places + place search |
 | `:keys` / `:k` | Keybinding sheet | `:keys` | Show keybinding cheatsheet |
 | `:keymap` / `:km` | Keymap control | `:km on`, `:km off` | Keymap status, on/off, profile switch |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |

@@ -55,6 +55,9 @@ impl App {
             Prefix::Clipboard => {
                 post_task = self.handle_clip_query(trimmed, generation);
             }
+            Prefix::Route => {
+                post_task = self.handle_route_query(trimmed, generation);
+            }
             Prefix::General => self.handle_main_search(trimmed),
         }
 
@@ -176,6 +179,95 @@ impl App {
             .unwrap_or_else(|e| Err(format!("클립보드 검색 작업 실패: {e}")));
             Message::ClipSearchFinished { generation, result }
         })
+    }
+
+    /// `:길` / `:route` — 카카오맵 길찾기 (docs/20).
+    ///
+    /// 첫 화면은 네트워크 없이 낸다(현재 위치 자리는 `origin`, 처음 가는 곳은 장소
+    /// 검색 링크). 그다음 워커에서 데몬에게 현재 위치를 묻고, 카카오 키가 있으면
+    /// 장소 검색 API 로 후보를 찾아 [`Message::RouteSearchFinished`] 로 바꿔 끼운다.
+    /// 키 입력마다 호출하지 않도록 잠깐 기다렸다가 그 사이 새 검색이 시작됐으면 건너뛴다.
+    pub(super) fn handle_route_query(&mut self, query: &str, generation: u64) -> Task<Message> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static LATEST: AtomicU64 = AtomicU64::new(0);
+
+        let cfg = self.runtime_config.launcher.route.clone();
+        let use_emoji = self.use_emoji;
+        let plan = kmd_core::route::parse(&cfg, query);
+        let key = cfg.kakao_key().filter(|_| plan.needs_lookup());
+        let mut first = kmd_core::route::items(&cfg, query, use_emoji);
+        if plan.needs_here() {
+            first.insert(
+                0,
+                kmd_core::route::notice("현재 위치를 확인하는 중…", "", use_emoji),
+            );
+        }
+        self.apply_contains_items(first);
+        if !plan.needs_here() && key.is_none() {
+            return Task::none();
+        }
+        LATEST.store(generation, Ordering::Relaxed);
+        Task::future(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            if LATEST.load(Ordering::Relaxed) != generation {
+                return Message::RouteSearchFinished {
+                    generation,
+                    result: Err(String::new()),
+                };
+            }
+            let result = tokio::task::spawn_blocking(move || {
+                use kmd_core::route;
+                let (here, note) = if plan.needs_here() {
+                    current_location()
+                } else {
+                    (None, None)
+                };
+                let plan = plan.with_here(&cfg, here);
+                let mut items = match &key {
+                    Some(k) if plan.needs_lookup() => route::lookup_items(k, &plan, use_emoji)?,
+                    _ => route::items_for(&cfg, &plan, use_emoji),
+                };
+                if let Some(note) = note {
+                    items.insert(
+                        0,
+                        route::notice("현재 위치를 쓰지 못했습니다", &note, use_emoji),
+                    );
+                }
+                Ok(items)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("장소 검색 작업 실패: {e}")));
+            Message::RouteSearchFinished { generation, result }
+        })
+    }
+
+    /// 장소 검색 결과 반영 — 늦은 응답(쿼리가 바뀜)은 버린다
+    pub(super) fn handle_route_search_finished(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<kmd_core::IndexItem>, String>,
+    ) -> Task<Message> {
+        if generation != self.search_generation || prefix_of(self.query.trim()) != Prefix::Route {
+            return Task::none();
+        }
+        match result {
+            Ok(items) => self.apply_contains_items(items),
+            Err(message) => {
+                tracing::warn!("장소 검색 실패: {message}");
+                let mut items = vec![kmd_core::route::notice(
+                    "장소 검색에 실패했습니다",
+                    &message,
+                    self.use_emoji,
+                )];
+                items.extend(kmd_core::route::items(
+                    &self.runtime_config.launcher.route,
+                    self.query.trim(),
+                    self.use_emoji,
+                ));
+                self.apply_contains_items(items);
+            }
+        }
+        Task::none()
     }
 
     /// :keys / :k — 키 맵핑 치트시트
@@ -448,5 +540,27 @@ pub(super) fn clip_notice(title: &str, usage: &str, use_emoji: bool) -> IndexIte
         source: Source::Plugin,
         keywords: "kmd:clip:notice".to_string(),
         icon_path: None,
+    }
+}
+
+/// 데몬에게 현재 위치를 묻는다 — (장소, 못 얻은 이유). 블로킹 IPC.
+fn current_location() -> (Option<kmd_core::route::Place>, Option<String>) {
+    use kmd_core::ipc::{send_request_result, Request, Response};
+    match send_request_result(&Request::Location) {
+        Ok(Response::Location {
+            lat,
+            lng,
+            accuracy_m,
+            age_secs,
+        }) => (
+            Some(kmd_core::route::here_place(lat, lng, accuracy_m, age_secs)),
+            None,
+        ),
+        Ok(Response::Error { message }) => (None, Some(message)),
+        Ok(other) => (None, Some(format!("예기치 않은 데몬 응답: {other:?}"))),
+        Err(_) => (
+            None,
+            Some("데몬이 실행 중이 아니라 현재 위치를 알 수 없습니다".to_string()),
+        ),
     }
 }

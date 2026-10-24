@@ -712,6 +712,16 @@ fn process_request(
             }
         }
 
+        Request::Location => match crate::location::current() {
+            Ok((fix, age_secs)) => Response::Location {
+                lat: fix.lat,
+                lng: fix.lng,
+                accuracy_m: fix.accuracy_m,
+                age_secs,
+            },
+            Err(message) => Response::Error { message },
+        },
+
         Request::InjectPaste => {
             keybind::inject_paste();
             Response::Ok {

@@ -69,6 +69,7 @@ pub(super) fn update_search(
         // 클립보드 히스토리는 데몬+데스크톱 기능이다 (TUI는 상주 감시가 없음).
         // TUI에서는 일반 검색으로 흘려보낸다.
         QueryPrefix::Clipboard => handle_main_search(&query, state, engine),
+        QueryPrefix::Route => handle_route_query(&query, state),
         QueryPrefix::General => {
             handle_main_search(&query, state, engine);
             // 범위 밖 폴더 경로를 그대로 쳤으면 맨 위에 "검색 범위에 추가" (docs/18 E1)
@@ -170,6 +171,14 @@ pub(super) fn handle_prompt_query(query: &str, state: &mut AppState) {
 /// Handle :calc prefix (explicit calculator mode)
 fn handle_calc_query(query: &str, state: &mut AppState) {
     let items = kmd_core::query_prefix::calc_items(query, state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.selected_index = 0;
+}
+
+/// `:길` — 카카오맵 길찾기. TUI는 키마다 네트워크를 기다릴 수 없어 내 장소와
+/// 장소 검색 링크만 낸다 (후보 검색은 데스크톱, docs/20).
+fn handle_route_query(query: &str, state: &mut AppState) {
+    let items = kmd_core::route::items(&state.config.launcher.route, query, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.selected_index = 0;
 }
