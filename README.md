@@ -173,8 +173,11 @@ When it stops feeling like practice, you've graduated.
 >
 > **Key-habit stats (opt-in).** `kmd keymap stats on` lets the daemon count
 > layer moves, bare arrow presses and trigger hold times — counts only, never
-> letters, never order or timestamps, never leaves the machine. `kmd keymap
-> stats` reads them back with advice ([details](docs/19_key_stats.md)).
+> letters, never order or timestamps, and nothing leaves the machine unless you
+> pick a sync folder. `kmd keymap stats` reads them back with advice;
+> `kmd keymap stats sync <folder>` on each machine (iCloud/OneDrive/Dropbox) and
+> `kmd keymap stats compare` puts your Mac and Windows habits side by side
+> ([details](docs/19_key_stats.md)).
 
 ---
 

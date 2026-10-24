@@ -199,6 +199,7 @@ flowchart TD
 | profile_dir | Path? | None | 프로파일 디렉토리 (None = `config_dir/keymap`) |
 | active_profile | String | "vim-nav" | 활성 프로파일 이름 |
 | stats | bool | false | 손버릇 통계 — 데몬이 레이어 수 사용·맨 화살표·트리거 홀드 시간을 **횟수로만** 센다(글자는 안 셈). `kmd keymap stats on/off` 로도 바꾼다 ([19](19_key_stats.md)) |
+| stats_sync | path | (없음) | 손버릇 통계를 내보낼 공유 폴더 — 데몬이 저장할 때마다 `kmd-keystats-<기기>.json` 을 쓴다. `kmd keymap stats sync <폴더\|off>` ([19 §6](19_key_stats.md)) |
 
 ```toml
 [launcher.keymap]

@@ -294,8 +294,8 @@ enum KeymapAction {
     ListPresets,
     /// Key-habit stats — layer moves, bare arrows, trigger holds (counts only, never letters; off by default)
     Stats {
-        /// on | off | clear — without it, print the report
-        toggle: Option<String>,
+        /// on | off | clear | sync <DIR|off> | export [PATH] | compare [PATH...] — without it, print the report
+        args: Vec<String>,
         /// Report period in days (today included)
         #[arg(long, default_value_t = 7)]
         days: u32,
@@ -483,7 +483,7 @@ fn main() -> color_eyre::Result<()> {
                 KeymapAction::Use { profile } => cmd::keymap::Action::Use { profile },
                 KeymapAction::Init { profile } => cmd::keymap::Action::Init { profile },
                 KeymapAction::ListPresets => cmd::keymap::Action::ListPresets,
-                KeymapAction::Stats { toggle, days } => cmd::keymap::Action::Stats { toggle, days },
+                KeymapAction::Stats { args, days } => cmd::keymap::Action::Stats { args, days },
             })?;
         }
         Some(Commands::Dojo {

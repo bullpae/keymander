@@ -73,6 +73,11 @@ All notable changes to keymander are documented here.
   센다 — 글자·순서·시각은 남기지 않는다. 5분마다 DB v6 `key_stats` 에 날짜별로 더하고,
   `kmd keymap stats [--days N]` 가 많이 쓴 수·안 쓴 수·맨 화살표 비율·홀드 분포를 사부의
   해석과 함께 보여 준다. 켬/끔 결정 열이 같음을 테스트로 고정.
+  - **여러 기기 합쳐 보기** (docs/19 §6). `kmd keymap stats sync <폴더>` 를 정하면 데몬이 저장할
+    때마다 `kmd-keystats-<기기>.json`(날짜별 횟수 + 그 기기 배치)을 공유 폴더에 쓴다.
+    `kmd keymap stats compare [경로…]` 가 이 기기와 다른 기기를 같은 물리 키 축으로 나란히 놓고
+    맨 화살표 차이·한쪽에서만 쓰는 수·새끼손가락 수·어디서도 안 쓴 수·홀드 차이를 마크다운으로
+    읽는다. `export [경로|-]` 로 손으로 옮길 수도 있다.
 
 ## [0.17.0] — 2026-10-19
 

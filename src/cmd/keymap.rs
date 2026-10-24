@@ -10,7 +10,7 @@ pub enum Action {
     Use { profile: String },
     Init { profile: Option<String> },
     ListPresets,
-    Stats { toggle: Option<String>, days: u32 },
+    Stats { args: Vec<String>, days: u32 },
 }
 
 pub fn run(action: Action) -> Result<()> {
@@ -83,7 +83,7 @@ pub fn run(action: Action) -> Result<()> {
                 println!("(내장 프리셋 '{profile_name}' 사용)");
             }
         }
-        Action::Stats { toggle, days } => stats(&mut config, toggle.as_deref(), days)?,
+        Action::Stats { args, days } => stats(&mut config, &args, days)?,
         Action::ListPresets => {
             println!("사용 가능한 내장 프리셋:");
             for (name, desc) in kmd_core::keymap::list_presets() {
@@ -98,10 +98,14 @@ pub fn run(action: Action) -> Result<()> {
 }
 
 /// `kmd keymap stats` — 손버릇 통계 (docs/19)
-fn stats(config: &mut kmd_core::Config, toggle: Option<&str>, days: u32) -> Result<()> {
-    match toggle {
+fn stats(config: &mut kmd_core::Config, args: &[String], days: u32) -> Result<()> {
+    let rest = args.get(1..).unwrap_or_default();
+    match args.first().map(String::as_str) {
+        Some("sync") => return stats_sync(config, rest),
+        Some("export") => return stats_export(config, rest),
+        Some("compare") => return stats_compare(config, rest, days),
         Some("on") | Some("off") => {
-            let on = toggle == Some("on");
+            let on = args[0] == "on";
             config.launcher.keymap.stats = on;
             config.save()?;
             if on {
@@ -119,7 +123,9 @@ fn stats(config: &mut kmd_core::Config, toggle: Option<&str>, days: u32) -> Resu
             return Ok(());
         }
         Some(other) => {
-            color_eyre::eyre::bail!("모르는 인자: {other} — on | off | clear 중 하나");
+            color_eyre::eyre::bail!(
+                "모르는 인자: {other} — on | off | clear | sync | export | compare 중 하나"
+            );
         }
         None => {}
     }
@@ -196,5 +202,91 @@ fn stats(config: &mut kmd_core::Config, toggle: Option<&str>, days: u32) -> Resu
     for s in r.insights() {
         println!("    · {s}");
     }
+    Ok(())
+}
+
+/// `kmd keymap stats sync <DIR|off>` — 공유 폴더를 정하면 데몬이 저장할 때마다 내보낸다
+fn stats_sync(config: &mut kmd_core::Config, rest: &[String]) -> Result<()> {
+    let km = &mut config.launcher.keymap;
+    match rest.first().map(String::as_str) {
+        None => {
+            match kmd_core::keystats::sync_dir(km) {
+                Some(dir) => println!(
+                    "공유 폴더: {} (기기 이름 {})",
+                    dir.display(),
+                    kmd_core::keystats::device_name()
+                ),
+                None => println!("공유 폴더가 없다 — kmd keymap stats sync <폴더> 로 정한다."),
+            }
+            return Ok(());
+        }
+        Some("off") => {
+            km.stats_sync = None;
+            config.save()?;
+            println!("공유 폴더 내보내기를 껐다 (이미 쓴 파일은 남는다).");
+            return Ok(());
+        }
+        Some(dir) => km.stats_sync = Some(std::path::PathBuf::from(dir)),
+    }
+    config.save()?;
+    let km = &config.launcher.keymap;
+    let db = super::open_db()?;
+    let effective = kmd_core::keymap::effective_keymap(km);
+    match kmd_core::keystats::sync_export(&db, km, &effective)? {
+        Some(path) => println!("공유 폴더를 정했다 — 지금 내보냄: {}", path.display()),
+        None => println!("공유 폴더를 정했다."),
+    }
+    println!(
+        "데몬이 통계를 저장할 때(5분마다)마다 이 파일을 새로 쓴다 — kmd daemon restart 후부터."
+    );
+    println!("다른 기기에서도 같은 폴더로 sync 를 켜고, 아무 기기에서나 kmd keymap stats compare");
+    if !km.stats {
+        println!("(수집이 꺼져 있다 — kmd keymap stats on)");
+    }
+    Ok(())
+}
+
+/// `kmd keymap stats export [PATH]` — 경로가 없으면 표준 출력
+fn stats_export(config: &kmd_core::Config, rest: &[String]) -> Result<()> {
+    let db = super::open_db()?;
+    let effective = kmd_core::keymap::effective_keymap(&config.launcher.keymap);
+    let snap =
+        kmd_core::keystats::Snapshot::from_db(&db, &kmd_core::keystats::device_name(), &effective);
+    match rest.first().map(String::as_str) {
+        None | Some("-") => println!("{}", serde_json::to_string_pretty(&snap)?),
+        Some(p) => {
+            let path = snap.write_to(std::path::Path::new(p))?;
+            eprintln!("내보냄: {} ({}줄)", path.display(), snap.rows.len());
+        }
+    }
+    Ok(())
+}
+
+/// `kmd keymap stats compare [PATH...]` — 이 기기(DB) + 경로(없으면 공유 폴더)의 스냅숏을 나란히
+fn stats_compare(config: &kmd_core::Config, rest: &[String], days: u32) -> Result<()> {
+    use kmd_core::keystats::{device_name, sync_dir, Compare, Snapshot};
+    let db = super::open_db()?;
+    let me = device_name();
+    let effective = kmd_core::keymap::effective_keymap(&config.launcher.keymap);
+    let mut snaps = vec![Snapshot::from_db(&db, &me, &effective)];
+
+    let paths: Vec<std::path::PathBuf> = if rest.is_empty() {
+        sync_dir(&config.launcher.keymap).into_iter().collect()
+    } else {
+        rest.iter().map(std::path::PathBuf::from).collect()
+    };
+    if paths.is_empty() {
+        eprintln!("다른 기기 파일이 없다 — kmd keymap stats sync <공유 폴더> 를 정하거나 compare <파일|폴더> 로 준다.");
+    }
+    for p in &paths {
+        let (ok, bad) = Snapshot::load(p);
+        for (f, why) in bad {
+            eprintln!("못 읽음: {} — {why}", f.display());
+        }
+        // 이 기기 것은 DB 가 더 새롭다
+        snaps.extend(ok.into_iter().filter(|s| s.device != me));
+    }
+    let since = db.local_date(1 - days.max(1) as i32);
+    print!("{}", Compare::new(&snaps, &since, days).markdown());
     Ok(())
 }

@@ -327,8 +327,26 @@ fn save_key_stats() {
             if let Err(e) = db.key_stats_add(&stats) {
                 tracing::warn!("손버릇 통계 저장 실패: {e}");
             }
+            sync_key_stats(&db);
         }
         Err(e) => tracing::warn!("손버릇 통계 DB 열기 실패: {e}"),
+    }
+}
+
+/// `stats_sync` 공유 폴더가 정해져 있으면 이 기기 스냅숏을 거기 쓴다 (docs/19 §6)
+fn sync_key_stats(db: &kmd_core::Database) {
+    let Ok(config) = Config::load(&Config::default_config_dir()) else {
+        return;
+    };
+    let km = &config.launcher.keymap;
+    if km.stats_sync.is_none() {
+        return;
+    }
+    let effective = kmd_core::keymap::effective_keymap(km);
+    match kmd_core::keystats::sync_export(db, km, &effective) {
+        Ok(Some(path)) => tracing::debug!("손버릇 통계 내보냄: {}", path.display()),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("손버릇 통계 공유 폴더 쓰기 실패: {e}"),
     }
 }
 

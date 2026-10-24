@@ -176,8 +176,10 @@ Option)로 통일됩니다. CapsLock을 실수로 짧게 스쳐도 아무 일도
 > ([기획 문서](docs/10_dojo_plan.md))
 >
 > **손버릇 통계 (선택).** `kmd keymap stats on` 이면 데몬이 레이어 수 사용·맨 화살표·트리거
-> 홀드 시간을 셉니다 — 횟수만, 글자·순서·시각은 남기지 않고 이 기기 밖으로 나가지 않습니다.
-> `kmd keymap stats` 가 사부의 해석과 함께 보여 줍니다 ([설명](docs/19_key_stats.md)).
+> 홀드 시간을 셉니다 — 횟수만, 글자·순서·시각은 남기지 않고, 공유 폴더를 정하지 않으면 이 기기
+> 밖으로 나가지 않습니다. `kmd keymap stats` 가 사부의 해석과 함께 보여 주고, 기기마다
+> `kmd keymap stats sync <폴더>`(iCloud·OneDrive·Dropbox) 를 켜면 `kmd keymap stats compare` 가
+> 맥과 윈도우의 손버릇을 나란히 비교합니다 ([설명](docs/19_key_stats.md)).
 
 ---
 
