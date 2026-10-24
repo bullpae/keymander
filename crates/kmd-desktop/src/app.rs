@@ -237,6 +237,11 @@ pub enum Message {
         generation: u64,
         result: Result<Vec<kmd_core::ipc::ClipHit>, String>,
     },
+    /// `:길` 장소 검색 완료 (docs/20)
+    RouteSearchFinished {
+        generation: u64,
+        result: Result<Vec<kmd_core::IndexItem>, String>,
+    },
     /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
     ClipActionFinished(Result<String, String>),
     /// `:scope` 추가·제거 후 리빌드 완료 → 새 캐시로 엔진 교체 (docs/18)
@@ -678,6 +683,9 @@ impl App {
             Message::ShellDone(result) => self.handle_shell_done(result),
             Message::ClipSearchFinished { generation, result } => {
                 self.handle_clip_search_finished(generation, result)
+            }
+            Message::RouteSearchFinished { generation, result } => {
+                self.handle_route_search_finished(generation, result)
             }
             Message::ScopeReindexed(result) => self.handle_scope_reindexed(result),
             Message::ClipActionFinished(result) => match result {

@@ -87,6 +87,15 @@ All notable changes to keymander are documented here.
     절대 경로로 저장한다(풀리지 않은 환경 변수는 거절).
 - **CapsLock 트리거의 Launch 는 바로 뜬다** — 레이어 Launch 를 트리거 해제까지 미루는 것은
   수정자(Alt 등) 트리거일 때만 한다. CapsLock+Space 가 트리거를 떼는 시간만큼 빨라진다.
+- **`:길` / `:route` — 카카오맵 길찾기를 런처에서 바로 연다** (docs/20).
+  `:길 판교역`, `:길 차 회사 → 강남역`처럼 치면 카카오맵 웹의 경로 화면(대중교통·자동차·도보·자전거)이 열린다.
+  - 출발지를 안 적으면 **현재 위치**에서 출발한다. 데몬이 OS 위치 서비스(Windows Geolocation, macOS
+    CoreLocation)로 재서 메모리에만 둔다. 못 얻으면 이유를 보이고 `origin`에서 출발한다.
+    macOS는 처음 한 번 위치 접근 허용 창이 뜬다.
+  - 자주 가는 곳은 `[launcher.route.places]`에 좌표로 적어 두면 바로 열린다.
+  - 처음 가는 곳은 카카오 REST 키(NextMove 와 같은 `~/.config/nextmove/kakao.env`)가 있으면 장소 후보를
+    거리와 함께 보여 준다. 키가 없으면 카카오맵 장소 검색 화면을 연다.
+  - 검색 결과는 저장하지 않는다(카카오 약관). HTTP 라이브러리 없이 OS 기본 `curl` 을 쓴다.
 
 ## [0.17.0] — 2026-10-19
 

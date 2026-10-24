@@ -34,6 +34,7 @@
 | [15_content_search_plan.md](15_content_search_plan.md) | ✅ P0~P3 (v0.15.0~v0.16.9) · P4 조건부 | `crates/kmd-core/src/content_index.rs` |
 | [12_clipboard_plan.md](12_clipboard_plan.md) | ✅ v0.13.x (P1–P3) | `crates/kmd-daemon/src/clipboard.rs` |
 | [14_testing_plan.md](14_testing_plan.md) | ✅ Tier 1 + Tier 2(E2E 키 주입) | `crates/kmd-daemon/tests/`, `.github/workflows/ci.yml` |
+| [20_route_kakao_map.md](20_route_kakao_map.md) | ✅ `:길` 카카오맵 길찾기 (2026-10-24) | `crates/kmd-core/src/route.rs` |
 
 ## 계획 — 아직 구현되지 않음
 

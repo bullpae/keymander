@@ -45,6 +45,8 @@ pub enum QueryPrefix {
     ContentSearch,
     /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B)
     Clipboard,
+    /// `:길` / `:route` — 카카오맵 길찾기 (docs/20)
+    Route,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
     General,
 }
@@ -182,6 +184,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ";",
         icon_emoji: "\u{1F4CB}",
         icon_ascii: "[CLIP]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Route,
+        aliases: crate::route::ROUTE_ALIASES,
+        title: ":길  Route (Kakao Map)",
+        usage: "Type :길 destination  (e.g. :길 판교역, :길 차 회사 → 강남역)",
+        seed: ":길 ",
+        icon_emoji: "\u{1F687}",
+        icon_ascii: "[RT]",
     },
     CommandSpec {
         prefix: QueryPrefix::Help,

@@ -186,6 +186,9 @@ pub struct LauncherConfig {
     /// 문서 본문 검색(FTS5) 설정 (docs/15).
     #[serde(default)]
     pub content_search: ContentSearchConfig,
+    /// `:길` 카카오맵 길찾기 — 내 장소·기본 출발지·카카오 키 파일 (docs/20).
+    #[serde(default)]
+    pub route: crate::route::RouteConfig,
 }
 
 /// 문서 본문 검색(FTS5) 설정 — `[launcher.content_search]` (docs/15).
@@ -322,6 +325,7 @@ impl Default for LauncherConfig {
             keymap: KeymapConfig::default(),
             prompt_templates: vec![],
             content_search: ContentSearchConfig::default(),
+            route: Default::default(),
         }
     }
 }
