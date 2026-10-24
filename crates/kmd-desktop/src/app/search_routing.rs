@@ -49,6 +49,9 @@ impl App {
             Prefix::Shell => self.handle_shell_query(trimmed),
             Prefix::Keymap => self.handle_keymap_query(trimmed),
             Prefix::Keys => self.handle_keys_query(),
+            Prefix::Dojo => {
+                self.apply_contains_items(kmd_core::query_prefix::dojo_items(self.use_emoji))
+            }
             Prefix::FolderSearch => self.handle_folder_search(trimmed),
             Prefix::Scope => self.handle_scope_query(trimmed),
             Prefix::ContentSearch => self.handle_content_search(trimmed),

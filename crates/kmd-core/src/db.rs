@@ -462,6 +462,24 @@ impl Database {
             )?;
         }
 
+        if version < 6 {
+            // v6: 손버릇 통계 (docs/19) — 데몬이 날마다 지표별 횟수만 더한다.
+            // 글자·순서·시각은 담지 않는다.
+            self.conn.execute_batch(
+                "
+                    BEGIN;
+                    CREATE TABLE IF NOT EXISTS key_stats (
+                        day    TEXT    NOT NULL,
+                        metric TEXT    NOT NULL,
+                        count  INTEGER NOT NULL,
+                        PRIMARY KEY (day, metric)
+                    );
+                    PRAGMA user_version = 6;
+                    COMMIT;
+                    ",
+            )?;
+        }
+
         Ok(())
     }
 }
@@ -678,7 +696,7 @@ mod tests {
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5, "DB 버전이 5로 업그레이드");
+        assert_eq!(version, 6, "DB 버전이 6으로 업그레이드");
 
         // idx_history_executed_at 인덱스 존재 확인
         let idx_exists: bool = db

@@ -6,13 +6,20 @@
 #   {nav} {mouse}   → 레이어 트리거 (예: CapsLock, RAlt)
 #
 # kind 가 아직 구현되지 않은 과는 지도에 "수련장 공사 중"으로 보인다.
-# 구현된 kind: summon · spar · maze · golf · mouse (content.rs READY_KINDS)
+# 구현된 kind: summon · spar · maze · golf · mouse · ime · mixed · quiz · daily · seal
+#              (content.rs READY_KINDS)
 #
 # 종류별 설정
 #   spar   style = "card" | "rain", count, speed_ms(화살 간격), fall_ms(낙하 시간)
 #   maze   set = maze.toml 의 세트
 #   golf   set = golf.toml 의 코스
 #   mouse  set = move | aim | wheel | drag | leak | rats, count, par_time_s
+#   ime    set = ime.toml 의 묶음, par_time_s
+#   mixed  [[stage]] 를 잇는다 — from(빌려 올 과) · label · skip · take · count
+#   quiz   count(문항 수) — 비급 시험
+#   daily  days(연속일 조건) — 오늘의 수련
+#   seal   seals(인장 수 조건) — 인장 화면
+#   공통   skip · take = 세트에서 쓸 구간, moves = 대련 카드의 수 묶음
 
 [[belt]]
 id = "white"
@@ -344,29 +351,148 @@ motto = "멀리는 빠르게, 가까이는 느리게. 가속은 네 편이다."
 id = "brown"
 name = "갈색띠"
 theme = "레이어 불변식"
-motto = "레이어에는 잘못 눌러도 해가 없는 수만 둔다."
+motto = "잘못 눌러도 해가 없는 수만 둔다. 그래서 섞어도 된다."
 
   [[belt.lesson]]
   id = "brown.1"
   title = "혼합 대련"
-  kind = "mixed"
-  why = "모든 레이어의 수를 섞어 받아친다."
+  kind = "spar"
+  style = "card"
+  count = 20
+  moves = ["Left", "Right", "Up", "Down", "WordLeft", "WordRight", "PageUp", "PageDown", "Backspace", "Delete"]
+  why = "모든 레이어의 수를 섞어 받아친다. 무엇이 올지 모르니 손이 기억해야 한다."
+  teach = ["카드는 한 칸·단어·페이지·지우기가 섞여 나온다.", "이 터미널에서 관측되지 않는 수는 카드에서 빠진다.", "줄 처음과 끝(두 번 톡)은 대련 대신 골프에서 쓴다."]
+  needs = ["Left", "Right", "Up", "Down"]
 
   [[belt.lesson]]
   id = "brown.2"
   title = "비급 종합 시험"
   kind = "quiz"
-  why = "외운 자는 잊고, 납득한 자는 쓴다."
+  count = 10
+  why = "외운 자는 잊고, 납득한 자는 쓴다. 열 문제 중 여섯을 맞히면 통과다."
+  teach = ["연 비급에서 먼저 낸다. 보기 순서는 판마다 섞인다.", "맞힌 권은 숙련 별이 하나 오른다(최대 셋).", "틀리면 그 권의 가르침을 바로 펼쳐 보여 준다."]
 
   [[belt.lesson]]
   id = "brown.3"
   title = "실전: 홈로우를 떠나지 않는 하루"
   kind = "mixed"
-  why = "소환 → 편집 → 다이얼로그, 손은 끝까지 홈로우 위에."
+  why = "소환 → 편집 → 메신저 → 다이얼로그. 손은 끝까지 홈로우 위에."
+  teach = ["하루치 일을 다섯 단계로 줄였다. 단계는 앞에서 배운 과를 빌려 온다.", "한 단계가 끝나면 바로 다음 단계가 열린다.", "별은 단계 별의 평균이다."]
+
+    [[belt.lesson.stage]]
+    from = "white.3"
+    label = "아침 — 의뢰 소환"
+    take = 2
+
+    [[belt.lesson.stage]]
+    from = "green.3"
+    label = "오전 — 오타 잡기"
+    take = 1
+
+    [[belt.lesson.stage]]
+    from = "blue.1"
+    label = "점심 — 한영 메신저"
+    take = 2
+
+    [[belt.lesson.stage]]
+    from = "purple.2"
+    label = "오후 — 다이얼로그 단추"
+    count = 4
+
+    [[belt.lesson.stage]]
+    from = "green.4"
+    label = "저녁 — 문단 손질"
+    take = 1
 
   [belt.boss]
   id = "brown.boss"
   name = "이탈마(離脫魔)"
   kind = "mixed"
-  line = "마우스로, 화살표로, 다른 기계로 — 떠나라!"
-  why = "세 가지 이탈을 모두 쓰는 마귀."
+  time_limit_s = 360
+  line = "마우스로, 화살표로 — 떠나라! 떠나면 편하다!"
+  why = "세 가지 이탈을 모두 쓰는 마귀. 여섯 머리를 차례로 꺾어라."
+  teach = ["앞의 띠에서 만난 마귀들의 수를 한 판에 잇는다.", "실수 하나에 기가 깎이고, 파를 넘긴 홀도 기를 깎는다.", "단계를 넘길 때마다 이탈마의 기운이 꺾인다."]
+
+    [[belt.boss.stage]]
+    from = "yellow.3"
+    label = "화살비 — 화살표의 유혹"
+    count = 12
+
+    [[belt.boss.stage]]
+    from = "orange.4"
+    label = "축지 — 지우는 수"
+    skip = 1
+    take = 1
+
+    [[belt.boss.stage]]
+    from = "green.2"
+    label = "수술 — 선택해 지우기"
+    skip = 2
+    take = 1
+
+    [[belt.boss.stage]]
+    from = "blue.3"
+    label = "두 혀 — 한영 안전장치"
+    take = 2
+
+    [[belt.boss.stage]]
+    from = "purple.1"
+    label = "쥐 — 손을 떼지 않는 포인터"
+    count = 4
+
+    [[belt.boss.stage]]
+    from = "white.2"
+    label = "미아 — 찾지 말고 불러라"
+    take = 2
+
+[[belt]]
+id = "black"
+name = "검은띠"
+theme = "졸업"
+motto = "띠는 매는 것이 아니라 매일 다시 매는 것이다."
+
+  [[belt.lesson]]
+  id = "black.1"
+  title = "오늘의 수련 3일 연속"
+  kind = "daily"
+  days = 3
+  why = "2분짜리 오늘의 수련을 사흘 잇는다. 하루를 거르면 처음부터다."
+  teach = ["오늘의 수련은 날짜를 씨앗으로 연 과에서 골프 세 홀·대련·소환을 뽑는다.", "도장 입구의 '오늘의 수련'으로도 바로 들어간다.", "사흘을 이으면 검은띠, 그리고 이 OS 의 인장이 찍힌다."]
+
+[[belt]]
+id = "dan"
+name = "단"
+theme = "삼국 통일"
+motto = "One keymap, three OSes — 손은 하나로 충분하다."
+
+  [[belt.lesson]]
+  id = "dan.1"
+  title = "세 OS 의 인장"
+  kind = "seal"
+  seals = 3
+  why = "macOS · Windows · Linux 에서 모두 검은띠를 따면 인장 셋이 모인다."
+  teach = ["기기마다 기록이 따로라 인장은 코드로 옮긴다.", "인장을 딴 기기에서 kmd dojo seal export, 다른 기기에서 kmd dojo seal import <코드>.", "이 화면에서 E 로 코드를 보고, I 로 붙여 넣는다."]
+
+  [belt.boss]
+  id = "dan.boss"
+  name = "삼두마(三頭魔)"
+  kind = "mixed"
+  time_limit_s = 240
+  line = "머리가 셋이면 손버릇도 셋이어야 하지 않겠느냐!"
+  why = "머리 하나가 OS 하나. 같은 손버릇으로 세 머리를 모두 꺾어라."
+  teach = ["세 머리는 OS 마다 다르게 굳은 손버릇을 노린다.", "keymander 의 배치는 셋 모두에서 같다 — 손은 하나로 충분하다.", "실수와 파 초과가 기를 깎는다."]
+
+    [[belt.boss.stage]]
+    from = "orange.1"
+    label = "macOS 의 머리 — 단어 점프"
+    take = 2
+
+    [[belt.boss.stage]]
+    from = "orange.2"
+    label = "Windows 의 머리 — 줄 처음과 끝"
+    take = 2
+
+    [[belt.boss.stage]]
+    from = "blue.1"
+    label = "Linux 의 머리 — 한영 전환"
+    take = 2

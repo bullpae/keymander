@@ -198,6 +198,7 @@ flowchart TD
 | kanata_path | Path? | None | kanata 바이너리 경로 (None = PATH에서 탐색) |
 | profile_dir | Path? | None | 프로파일 디렉토리 (None = `config_dir/keymap`) |
 | active_profile | String | "vim-nav" | 활성 프로파일 이름 |
+| stats | bool | false | 손버릇 통계 — 데몬이 레이어 수 사용·맨 화살표·트리거 홀드 시간을 **횟수로만** 센다(글자는 안 셈). `kmd keymap stats on/off` 로도 바꾼다 ([19](19_key_stats.md)) |
 
 ```toml
 [launcher.keymap]

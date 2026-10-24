@@ -120,6 +120,43 @@ fn combo_trigger_matches(
             .all(|m| modifier_satisfied(m, modifiers_held))
 }
 
+/// 손버릇 통계의 한 칸 (docs/19). **글자는 세지 않는다** — 레이어가 실행한 수,
+/// 레이어 밖에서 누른 맨 이동 키, 트리거를 쥔 시간만. 순서·시각도 남기지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Metric {
+    /// 레이어 매핑 실행 — (레이어 번호, 매핑 키)
+    Move(usize, VKey),
+    /// 레이어 밖에서 누른 맨 화살표·Home·End·PgUp·PgDn ("화살귀")
+    Raw(VKey),
+    /// 트리거를 쥔 시간 — 100ms 칸 (10 = 1초 이상)
+    Hold(u8),
+    /// 트리거를 쥐었다가 아무 수도 안 쓰고 놓았다 (스침)
+    IdleTap(usize),
+}
+
+/// 손버릇 통계 — 엔진 Mutex 안에서 세고, 데몬이 주기적으로 꺼내 DB 에 더한다
+#[derive(Debug, Default)]
+pub struct KeyStats {
+    counts: HashMap<Metric, u32>,
+    /// 오토리피트를 한 번으로 세려고 — 지금 눌려 있는 키
+    held: Option<VKey>,
+}
+
+/// 맨 이동 키 — 레이어를 두고도 손이 화살표로 갔는지 본다
+fn is_raw_nav(vkey: VKey) -> bool {
+    matches!(
+        vkey,
+        VKey::Left
+            | VKey::Right
+            | VKey::Up
+            | VKey::Down
+            | VKey::Home
+            | VKey::End
+            | VKey::PageUp
+            | VKey::PageDown
+    )
+}
+
 /// 키 바인딩 런타임 상태 (플랫폼 공용)
 pub struct EngineState {
     pub config: KeybindConfig,
@@ -179,6 +216,8 @@ pub struct EngineState {
     /// 현재 눌려 있는 마우스 바인딩 키 → 바인딩. 레이어 트리거 해제 시 전체 정지,
     /// 그리고 레이어 밖에서 온 key-up도 해제로 바꾸는 데 쓴다([`Self::step_held_mouse_release`]).
     mouse_keys_held: HashMap<VKey, MouseBind>,
+    /// 손버릇 통계 — `config.stats` 가 켜졌을 때만 센다
+    stats: KeyStats,
 }
 
 impl EngineState {
@@ -207,6 +246,7 @@ impl EngineState {
             tap_hold_down_tick: 0,
             tap_hold_engaged: false,
             mouse_keys_held: HashMap::new(),
+            stats: KeyStats::default(),
         }
     }
 
@@ -362,6 +402,112 @@ impl EngineState {
     /// `tick`은 밀리초 단위 단조 증가 카운터 (wrapping 허용 —
     /// Windows의 GetTickCount / KBDLLHOOKSTRUCT.time과 동일 규약).
     pub fn process_key(&mut self, vkey: VKey, is_down: bool, tick: u32) -> KeyDecision {
+        if !self.config.stats {
+            return self.decide(vkey, is_down, tick);
+        }
+        let before = (
+            self.active_layer,
+            self.layer_key_used,
+            self.trigger_down_tick,
+        );
+        let decision = self.decide(vkey, is_down, tick);
+        self.count(vkey, is_down, tick, &decision, before);
+        decision
+    }
+
+    /// 손버릇 통계 — 결정이 난 뒤 센다. 해시맵 한 칸 증가뿐이라 훅 경로에 부담이 없다.
+    fn count(
+        &mut self,
+        vkey: VKey,
+        is_down: bool,
+        tick: u32,
+        decision: &KeyDecision,
+        (layer_before, used_before, down_tick): (Option<usize>, bool, u32),
+    ) {
+        if !self.keymap_enabled {
+            return;
+        }
+        let metric = if is_down {
+            // 오토리피트는 한 번으로
+            if self.stats.held == Some(vkey) {
+                return;
+            }
+            self.stats.held = Some(vkey);
+            match decision {
+                KeyDecision::Execute {
+                    layer_trigger: Some(_),
+                    ..
+                }
+                | KeyDecision::MouseEngage(_) => {
+                    let Some(layer) = self.active_layer.or(layer_before) else {
+                        return;
+                    };
+                    Metric::Move(layer, vkey)
+                }
+                KeyDecision::PassThrough
+                    if layer_before.is_none()
+                        && self.active_layer.is_none()
+                        && is_raw_nav(vkey) =>
+                {
+                    Metric::Raw(vkey)
+                }
+                _ => return,
+            }
+        } else {
+            if self.stats.held == Some(vkey) {
+                self.stats.held = None;
+            }
+            let Some(layer) = layer_before else {
+                return;
+            };
+            let released = self.active_layer.is_none()
+                && self
+                    .config
+                    .layers
+                    .get(layer)
+                    .is_some_and(|l| l.trigger == vkey || l.trigger_aliases.contains(&vkey));
+            if !released {
+                return;
+            }
+            let ms = tick.wrapping_sub(down_tick);
+            *self
+                .stats
+                .counts
+                .entry(Metric::Hold((ms / 100).min(10) as u8))
+                .or_default() += 1;
+            if used_before {
+                return;
+            }
+            Metric::IdleTap(layer)
+        };
+        *self.stats.counts.entry(metric).or_default() += 1;
+    }
+
+    /// 쌓인 손버릇 통계를 꺼낸다 — (지표 이름, 횟수). 이름은 DB 의 `key_stats.metric`:
+    /// `move:<레이어>:<키>` · `raw:<키>` · `hold:<100ms 칸>` · `idle:<레이어>`
+    pub fn take_stats(&mut self) -> Vec<(String, u32)> {
+        let counts = std::mem::take(&mut self.stats.counts);
+        let layer_name = |i: usize| {
+            self.config
+                .layers
+                .get(i)
+                .map_or_else(|| i.to_string(), |l| l.name.clone())
+        };
+        counts
+            .into_iter()
+            .map(|(m, n)| {
+                let name = match m {
+                    Metric::Move(l, k) => format!("move:{}:{k:?}", layer_name(l)),
+                    Metric::Raw(k) => format!("raw:{k:?}"),
+                    Metric::Hold(b) => format!("hold:{b}"),
+                    Metric::IdleTap(l) => format!("idle:{}", layer_name(l)),
+                };
+                (name, n)
+            })
+            .collect()
+    }
+
+    fn decide(&mut self, vkey: VKey, is_down: bool, tick: u32) -> KeyDecision {
         let is_up = !is_down;
 
         // 수정자 물리 상태는 어떤 단계보다 먼저 갱신한다 — 아래 모든 판정이
@@ -1159,6 +1305,84 @@ mod tests {
             } => assert_eq!(k, expected),
             other => panic!("Execute(SendKey({expected:?})) 기대, 실제: {other:?}"),
         }
+    }
+
+    // ── 손버릇 통계 (docs/19) ──
+
+    #[test]
+    fn 손버릇_통계는_레이어_수와_맨_화살표와_홀드만_센다() {
+        let mut cfg = layer_config();
+        cfg.stats = true;
+        let mut e = EngineState::new(cfg);
+        // 글자 — 세지 않는다
+        e.process_key(VKey::A, true, 0);
+        e.process_key(VKey::A, false, 10);
+        // 맨 화살표 — 오토리피트까지 한 번
+        e.process_key(VKey::Left, true, 20);
+        e.process_key(VKey::Left, true, 50);
+        e.process_key(VKey::Left, false, 60);
+        // 레이어를 쥐고 H 두 번 (첫 번째는 오토리피트 포함)
+        e.process_key(VKey::LAlt, true, 100);
+        e.process_key(VKey::H, true, 150);
+        e.process_key(VKey::H, true, 180);
+        e.process_key(VKey::H, false, 200);
+        e.process_key(VKey::H, true, 220);
+        e.process_key(VKey::H, false, 240);
+        e.process_key(VKey::LAlt, false, 450);
+        // 쥐었다가 그냥 놓음
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::LAlt, false, 1050);
+
+        let mut got = e.take_stats();
+        got.sort();
+        let want: Vec<(String, u32)> = [
+            ("hold:0", 1),
+            ("hold:3", 1),
+            ("idle:nav", 1),
+            ("move:nav:H", 2),
+            ("raw:Left", 1),
+        ]
+        .iter()
+        .map(|(k, n)| (k.to_string(), *n))
+        .collect();
+        assert_eq!(got, want);
+        assert!(e.take_stats().is_empty(), "꺼내면 비워진다");
+    }
+
+    #[test]
+    fn 손버릇_통계가_꺼져_있으면_아무것도_세지_않는다() {
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::Left, true, 0);
+        e.process_key(VKey::LAlt, true, 10);
+        e.process_key(VKey::H, true, 20);
+        e.process_key(VKey::H, false, 30);
+        e.process_key(VKey::LAlt, false, 400);
+        assert!(e.take_stats().is_empty());
+    }
+
+    #[test]
+    fn 손버릇_통계는_결정을_바꾸지_않는다() {
+        let keys = [
+            (VKey::LAlt, true, 0),
+            (VKey::H, true, 20),
+            (VKey::H, false, 30),
+            (VKey::I, true, 40),
+            (VKey::I, false, 50),
+            (VKey::I, true, 100),
+            (VKey::I, false, 110),
+            (VKey::LAlt, false, 400),
+            (VKey::Left, true, 500),
+            (VKey::Left, false, 510),
+        ];
+        let run = |stats: bool| {
+            let mut cfg = layer_config();
+            cfg.stats = stats;
+            let mut e = EngineState::new(cfg);
+            keys.iter()
+                .map(|(k, d, t)| format!("{:?}", e.process_key(*k, *d, *t)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(true), run(false));
     }
 
     // ── 단순 리맵 ──

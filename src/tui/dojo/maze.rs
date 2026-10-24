@@ -168,8 +168,8 @@ pub struct MazeRound {
 impl MazeRound {
     pub fn new(content: &Content, lesson: &Lesson, now: Instant) -> Option<Self> {
         let set = content.maze_set(lesson.set.as_deref()?)?;
-        let mazes: Vec<Maze> = set
-            .maze
+        let mazes: Vec<Maze> = lesson
+            .window(&set.maze)
             .iter()
             .map(Maze::parse)
             .collect::<Result<_, _>>()

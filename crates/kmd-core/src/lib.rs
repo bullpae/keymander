@@ -18,6 +18,7 @@ pub mod history;
 pub mod index;
 pub mod ipc;
 pub mod keymap;
+pub mod keystats;
 pub mod plugin;
 pub mod portable;
 pub mod process;

@@ -42,7 +42,8 @@
 | [18_search_scope_ux.md](18_search_scope_ux.md) | **설계안** (2026-10-19) — `:scope` 검색 범위 관리(추가·삭제·즉시 인덱싱) + 포터블 프로그램 폴더 모드 |
 | [17_feature_backlog.md](17_feature_backlog.md) | **기능 백로그** — 계획·누락 기능 전수 조사(2026-10-05, v0.16.8). 어떤 "향후"가 진짜 미구현이고 어떤 게 이미 됐는지, 무엇을 영구 보류할지 |
 | [11_refactor_backlog.md](11_refactor_backlog.md) | **리팩토링·코드건강 백로그** — 코드 모양·블로킹 지점 (2026-10-18 전수 리뷰 반영, 진행 중) |
-| [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-10-18 / v0.16.12 재확인 — 코드 0건) |
+| [10_dojo_plan.md](10_dojo_plan.md) | **구현 (M1~M5, 브랜치 `bullpae/dojo`)** — 흰띠~단, 오늘의 수련, 결과 카드, 인장. 남은 것: v2 hard mode |
+| [19_key_stats.md](19_key_stats.md) | **구현 (기본 꺼짐)** — 손버릇 통계: 레이어 수·맨 화살표·트리거 홀드 횟수만 모아 분석 |
 | [deferred-ideas.md](deferred-ideas.md) | v0.3 로드맵에서 보류한 아이디어 모음 — 재검토용 |
 
 ## 변경 이력

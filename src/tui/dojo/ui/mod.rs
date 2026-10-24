@@ -48,6 +48,8 @@ pub fn belt_color(id: &str) -> Color {
         "blue" => Color::Rgb(74, 163, 255),
         "purple" => Color::Rgb(183, 125, 255),
         "brown" => Color::Rgb(176, 122, 79),
+        "black" => Color::Rgb(150, 150, 160),
+        "dan" => GOLD,
         _ => Color::Rgb(138, 138, 138),
     }
 }
@@ -161,14 +163,21 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::Codex => screens::codex(f, stage, app),
         Screen::Records => screens::records(f, stage, app),
         Screen::Diagnose(d, scroll) => screens::diagnose(f, stage, app, d, *scroll),
+        Screen::Card => screens::card(f, stage, app),
+        Screen::Seals(v) => screens::seals(f, stage, app, v),
         Screen::Round(p) => {
-            match p.as_ref() {
+            match p.inner() {
                 Play::Summon(r) => play::round(f, stage, app, r),
                 Play::Golf(r) => modes::golf(f, stage, app, r),
                 Play::Spar(r) => modes::spar(f, stage, app, r),
                 Play::Maze(r) => modes::maze(f, stage, app, r),
                 Play::Mouse(r) => modes::mouse(f, stage, app, r),
                 Play::Ime(r) => modes::ime(f, stage, app, r),
+                Play::Quiz(r) => modes::quiz(f, stage, app, r),
+                Play::Mixed(_) => {}
+            }
+            if let Play::Mixed(g) = p.as_ref() {
+                modes::gauntlet(f, stage, app, g);
             }
             if let Some(sel) = app.pause {
                 play::pause(f, stage, sel);

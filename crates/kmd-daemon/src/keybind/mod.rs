@@ -578,6 +578,8 @@ pub struct KeybindConfig {
     pub tap_holds: Vec<TapHoldBinding>,
     /// Runtime toggle hotkey. When disabled, this and Launch combos still run.
     pub toggle_keymap: Option<ComboTrigger>,
+    /// 손버릇 통계를 센다 (`[launcher.keymap] stats`, docs/19) — 기본 꺼짐
+    pub stats: bool,
 }
 
 impl KeybindConfig {
@@ -589,6 +591,7 @@ impl KeybindConfig {
             double_taps: Vec::new(),
             tap_holds: Vec::new(),
             toggle_keymap: None,
+            stats: false,
         }
     }
 }
@@ -800,6 +803,7 @@ impl KeybindConfig {
             double_taps,
             tap_holds,
             toggle_keymap: None,
+            stats: cfg.stats,
         })
     }
 }
@@ -975,6 +979,22 @@ fn parse_combo_vkeys(s: &str) -> Option<(Vec<&str>, VKey)> {
 pub trait KeyboardBackend: Send {
     fn start(&mut self, config: KeybindConfig) -> Result<(), String>;
     fn stop(&mut self) -> Result<(), String>;
+}
+
+/// 쌓인 손버릇 통계를 꺼낸다 (docs/19). 훅이 없는 플랫폼(Linux 는 kanata)은 빈 목록.
+pub fn take_key_stats() -> Vec<(String, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::take_key_stats()
+    }
+    #[cfg(windows)]
+    {
+        windows::take_key_stats()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Vec::new()
+    }
 }
 
 /// 키보드 훅 생존 요약 — `kmd daemon status`로 노출한다.

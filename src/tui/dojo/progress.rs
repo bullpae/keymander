@@ -79,12 +79,16 @@ pub fn standing(
                 }
             }
         }
-        if let Some(boss) = &belt.boss {
-            st.boss_ready = boss.is_ready() && missing(boss, has).is_empty();
-            st.boss_cleared = stars_of(progress, &boss.id) > 0;
-        }
-        st.completed =
-            st.required > 0 && st.done == st.required && st.boss_ready && st.boss_cleared;
+        // 관문이 없는 띠(검은띠)는 과만 마치면 된다
+        let boss_ok = match &belt.boss {
+            Some(boss) => {
+                st.boss_ready = boss.is_ready() && missing(boss, has).is_empty();
+                st.boss_cleared = stars_of(progress, &boss.id) > 0;
+                st.boss_ready && st.boss_cleared
+            }
+            None => true,
+        };
+        st.completed = st.required > 0 && st.done == st.required && boss_ok;
         st.building = st.required == 0 && !st.boss_ready;
         stars += st.stars;
         // 전부 공사 중인 띠는 완료로 치지 않지만 길을 막지도 않는다 — 다음 띠가
@@ -244,7 +248,11 @@ mod tests {
     #[test]
     fn 공사_중인_띠는_건너뛰고_끝에서는_멈춘다() {
         let mut cur = with_building("green");
-        for b in cur.belt.iter_mut().filter(|b| b.id == "blue") {
+        for b in cur
+            .belt
+            .iter_mut()
+            .filter(|b| ["blue", "brown", "black", "dan"].contains(&b.id.as_str()))
+        {
             for l in b.lesson.iter_mut().chain(b.boss.iter_mut()) {
                 l.kind = "wip".into();
             }
@@ -278,5 +286,22 @@ mod tests {
             Access::Open,
             "끝낸 띠는 다시 할 수 있다"
         );
+    }
+
+    #[test]
+    fn 관문이_없는_검은띠는_과만_넘으면_된다() {
+        let c = content();
+        let mut entries = Vec::new();
+        for b in c.curriculum.belt.iter().take_while(|b| b.id != "black") {
+            for l in b.lesson.iter().chain(b.boss.iter()) {
+                entries.push((l.id.as_str(), 1));
+            }
+        }
+        let st = standing(&c.curriculum, &prog(&entries), ALL);
+        assert_eq!(c.curriculum.belt[st.current].id, "black");
+        entries.push(("black.1", 3));
+        let st = standing(&c.curriculum, &prog(&entries), ALL);
+        assert_eq!(c.curriculum.belt[st.current].id, "dan");
+        assert!(st.belts[st.current - 1].completed);
     }
 }

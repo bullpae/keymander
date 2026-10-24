@@ -609,8 +609,8 @@ impl GolfRound {
     ) -> Option<Self> {
         let course = content.golf_course(lesson.set.as_deref()?)?;
         let os = Os::current();
-        let holes: Vec<Hole> = course
-            .hole
+        let holes: Vec<Hole> = lesson
+            .window(&course.hole)
             .iter()
             .map(|h| Hole::parse(h, &course.moves, course.page.unwrap_or(8)))
             .collect::<Result<_, _>>()

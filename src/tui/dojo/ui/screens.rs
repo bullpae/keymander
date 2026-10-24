@@ -8,9 +8,10 @@ use ratatui::Frame;
 
 use super::*;
 use crate::tui::dojo::action::Action;
-use crate::tui::dojo::app::{App, MENU};
+use crate::tui::dojo::app::{os_name, App, SealView, MENU};
 use crate::tui::dojo::binding::Trust;
 use crate::tui::dojo::calib::{CalibRun, Step};
+use crate::tui::dojo::card::{self, Tone};
 use crate::tui::dojo::content::{Belt, Lesson};
 use crate::tui::dojo::diagnose::{Diagnosis, Level};
 use crate::tui::dojo::precheck::Backend;
@@ -51,11 +52,11 @@ fn stars_total(app: &App) -> Vec<Span<'static>> {
     )]
 }
 
-/// 지금 수련 중인 띠 (전부 마쳤으면 검은띠 후보)
+/// 지금 수련 중인 띠 (전부 마쳤으면 단)
 fn current_belt(app: &App) -> (String, Color) {
     match app.content.curriculum.belt.get(app.standing.current) {
         Some(b) => (b.name.clone(), belt_color(&b.id)),
-        None => ("검은띠 후보".into(), belt_color("black")),
+        None => ("삼국 통일".into(), belt_color("dan")),
     }
 }
 
@@ -337,7 +338,18 @@ pub fn lobby(f: &mut Frame, stage: Rect, app: &App) {
     );
 
     let mut menu = vec![Line::from("")];
-    for (i, (_, name, note)) in MENU.iter().enumerate() {
+    for (i, (item, name, note)) in MENU.iter().enumerate() {
+        let streak;
+        let note = if *item == crate::tui::dojo::app::MenuItem::Daily {
+            streak = if app.streak.today_done {
+                format!("✓ 연속 {}일", app.streak.days)
+            } else {
+                format!("● {note}")
+            };
+            streak.as_str()
+        } else {
+            note
+        };
         let text = format!(
             " {} {}{}",
             if i == app.lobby_sel { "▶" } else { " " },
@@ -362,10 +374,9 @@ pub fn lobby(f: &mut Frame, stage: Rect, app: &App) {
     let bar_w = 14usize;
     let filled = if req == 0 { 0 } else { bar_w * done / req };
     let remain = app.standing.remaining().unwrap_or(0);
-    let os = std::env::consts::OS;
     let seal = |name: &str, id: &str| {
-        if os == id {
-            span(format!("◇ {name}  "), fg(TEXT))
+        if app.seals.iter().any(|s| s.os == id) {
+            span(format!("◆ {name}  "), bold(GOLD))
         } else {
             span(format!("◇ {name}  "), fg(DIM))
         }
@@ -390,6 +401,12 @@ pub fn lobby(f: &mut Frame, stage: Rect, app: &App) {
             span(" nav · ", fg(SUB)),
             span(b.trigger("mouse").unwrap_or("—").to_string(), bold(HOLD)),
             span(" mouse", fg(SUB)),
+        ]),
+        Line::from(vec![
+            span(" 연속    ", fg(SUB)),
+            span("▮".repeat(app.streak.days.min(7) as usize), bold(GOLD)),
+            span("▯".repeat(7 - app.streak.days.min(7) as usize), fg(DIM)),
+            span(format!(" {}일 (검은띠 조건 3일)", app.streak.days), fg(SUB)),
         ]),
         Line::from(vec![
             span(" 인장    ", fg(SUB)),
@@ -430,16 +447,6 @@ pub fn map(f: &mut Frame, stage: Rect, app: &App) {
 
     // 왼쪽 — 띠 사다리 (위가 높은 띠)
     let mut ladder = Vec::new();
-    let virtual_rows = [("단 · 삼국 통일", "dan"), ("검은띠", "black")];
-    for (i, (name, id)) in virtual_rows.iter().enumerate() {
-        let idx = belts.len() + 1 - i;
-        let selected = app.map_belt == idx;
-        ladder.push(Line::from(vec![
-            span(if selected { "▶" } else { " " }, bold(ACCENT)),
-            span("■ ", fg(belt_color(id))),
-            span(fit(name, 15), if selected { sel() } else { fg(DIM) }),
-        ]));
-    }
     for (i, b) in belts.iter().enumerate().rev() {
         let selected = app.map_belt == i;
         let st = &app.standing.belts[i];
@@ -474,35 +481,6 @@ pub fn map(f: &mut Frame, stage: Rect, app: &App) {
     // 오른쪽 — 선택한 띠의 과
     let right = sub(body, 22, 1, 57, 15);
     let Some(belt) = belts.get(app.map_belt) else {
-        let (title, lines) = if app.map_belt == belts.len() {
-            (
-                "■ 검은띠 · 졸업",
-                vec![
-                    "오늘의 수련을 3일 연속 완주하면 검은띠다 (README 승급 규칙).",
-                    "",
-                    "오늘의 수련은 다음 판에서 열린다.",
-                ],
-            )
-        } else {
-            (
-                "■ 단 · 삼국 통일",
-                vec![
-                    "세 OS 에서 모두 검은띠를 따면 인장 셋이 모인다.",
-                    "One keymap, three OSes — 이 프로젝트가 존재하는 이유.",
-                    "",
-                    "인장 코드는 다음 판에서 열린다.",
-                ],
-            )
-        };
-        let lines: Vec<Line> = lines
-            .into_iter()
-            .map(|t| Line::from(span(format!(" {t}"), fg(TEXT))))
-            .collect();
-        f.render_widget(
-            Paragraph::new(lines)
-                .block(panel(Line::from(span(format!(" {title} "), bold(ACCENT))))),
-            right,
-        );
         return;
     };
 
@@ -552,10 +530,18 @@ pub fn map(f: &mut Frame, stage: Rect, app: &App) {
     }
     let st = &app.standing.belts[app.map_belt];
     lines.push(Line::from(""));
-    lines.push(Line::from(span(
-        format!(" 승급: 과 {}/{} ★1 이상 + 관문 격파", st.done, st.required),
-        fg(SUB),
-    )));
+    let rule = match belt.id.as_str() {
+        "black" => format!(
+            " 승급: 오늘의 수련 3일 연속 — 지금 연속 {}일 · 최고 {}일",
+            app.streak.days, app.streak.best
+        ),
+        "dan" => format!(
+            " 인장 {}/3 — 세 OS 의 인장을 모은 뒤 삼두마를 꺾어라",
+            app.seals.len()
+        ),
+        _ => format!(" 승급: 과 {}/{} ★1 이상 + 관문 격파", st.done, st.required),
+    };
+    lines.push(Line::from(span(rule, fg(SUB))));
     let title = Line::from(vec![
         span(" ■ ", fg(belt_color(&belt.id))),
         span(format!("{} · {} ", belt.name, belt.theme), bold(ACCENT)),
@@ -614,6 +600,8 @@ fn lesson_keys(app: &App, actions: &[Action]) -> (Vec<String>, Vec<String>) {
 /// 선택 코스면 Shift 도 쥐는 손으로 칠한다.
 fn lesson_actions(app: &App, belt: &Belt, lesson: &Lesson) -> (Vec<Action>, bool) {
     let mut v = lesson.needed_actions();
+    // 대련 카드의 수 묶음도 손에 칠한다
+    v.extend(lesson.moves.iter().filter_map(|m| Action::from_id(m)));
     if v.is_empty() && lesson.is_boss() {
         for l in &belt.lesson {
             v.extend(l.needed_actions());
@@ -651,6 +639,10 @@ pub fn intro(f: &mut Frame, stage: Rect, app: &App, id: &str) {
         .unwrap_or_default();
     let access = app.access(belt_idx, lesson);
     let hint = match access {
+        Access::Open if lesson.kind == "summon" => {
+            "Enter 수련 시작   R 도장 밖 실전 (내 인덱스)   Esc 지도로"
+        }
+        Access::Open if lesson.kind == "seal" => "Enter 인장 화면   Esc 지도로",
         Access::Open => "Enter 수련 시작   Esc 지도로",
         _ => "Esc 지도로",
     };
@@ -711,7 +703,14 @@ pub fn intro(f: &mut Frame, stage: Rect, app: &App, id: &str) {
     if selecting {
         hold.push("LShift".into());
     }
-    if lesson.kind == "summon" {
+    if let Some((title, lines)) = special_panel(app, lesson) {
+        let h = lines.len() as u16 + 2;
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(panel(Line::from(span(format!(" {title} "), bold(ACCENT))))),
+            sub(body, 1, y, 78, h),
+        );
+    } else if lesson.kind == "summon" {
         // 소환술 — 키보드 대신 루프를 보여 준다
         let lines = vec![
             Line::from(""),
@@ -785,6 +784,118 @@ pub fn intro(f: &mut Frame, stage: Rect, app: &App, id: &str) {
     }
 }
 
+/// 키보드 대신 보여 줄 판 — 이어 붙이기(단계)·시험·오늘의 수련·인장
+fn special_panel(app: &App, lesson: &Lesson) -> Option<(&'static str, Vec<Line<'static>>)> {
+    let stage_line = |i: usize, label: &str, kind: &str| {
+        Line::from(vec![
+            span(format!("   {}  ", i + 1), bold(GOLD)),
+            span(fit(label, 40), fg(TEXT)),
+            span(kind_name(kind), fg(SUB)),
+        ])
+    };
+    match lesson.kind.as_str() {
+        "mixed" => {
+            let lines = lesson
+                .stage
+                .iter()
+                .enumerate()
+                .map(|(i, st)| {
+                    let src = app.content.lesson(&st.from).map(|(_, _, l)| l);
+                    let label = st
+                        .label
+                        .clone()
+                        .or_else(|| src.map(|l| l.title.clone()))
+                        .unwrap_or_default();
+                    stage_line(i, &label, src.map_or("", |l| l.kind.as_str()))
+                })
+                .collect();
+            Some(("단계", lines))
+        }
+        "daily" => {
+            let st = app.streak;
+            let mut lines = vec![Line::from(vec![
+                span("   연속 ", fg(SUB)),
+                span(format!("{}일", st.days), bold(GOLD)),
+                span(
+                    format!("   최고 {}일   완주한 날 {}", st.best, st.total),
+                    fg(SUB),
+                ),
+                span(
+                    if st.today_done {
+                        "   오늘 ✓ 마침"
+                    } else {
+                        "   오늘 아직"
+                    },
+                    if st.today_done { fg(GREEN) } else { fg(YELLOW) },
+                ),
+            ])];
+            for (i, l) in app.daily_preview().iter().enumerate() {
+                lines.push(stage_line(i, &l.title, &l.kind));
+            }
+            Some(("오늘의 수련", lines))
+        }
+        "quiz" => Some((
+            "시험",
+            vec![
+                Line::from(span(
+                    format!(
+                        "   {}문 · 6문 이상 맞히면 통과 · 연 비급 {}권 중 숙련이 낮은 권부터",
+                        lesson.count.unwrap_or(10),
+                        app.scrolls.len()
+                    ),
+                    fg(TEXT),
+                )),
+                Line::from(span(
+                    "   ↑↓ 고르기 · 1~4 바로 답 · Enter 제출 · 권별 시험은 비급 도감에서",
+                    fg(SUB),
+                )),
+            ],
+        )),
+        "seal" => {
+            let mut lines = vec![];
+            for (id, name) in [
+                ("macos", "macOS"),
+                ("windows", "Windows"),
+                ("linux", "Linux"),
+            ] {
+                let got = app.seals.iter().find(|s| s.os == id);
+                lines.push(Line::from(vec![
+                    span(
+                        format!(
+                            "   {} {}",
+                            if got.is_some() { "◆" } else { "◇" },
+                            fit(name, 9)
+                        ),
+                        if got.is_some() { bold(GOLD) } else { fg(DIM) },
+                    ),
+                    span(
+                        match got {
+                            Some(s) if s.source == "imported" => "다른 기기에서 들임",
+                            Some(_) => "이 기기에서 땀",
+                            None => "아직",
+                        },
+                        fg(SUB),
+                    ),
+                ]));
+            }
+            Some(("인장", lines))
+        }
+        _ => None,
+    }
+}
+
+fn kind_name(kind: &str) -> &'static str {
+    match kind {
+        "summon" => "소환술",
+        "golf" => "키 골프",
+        "spar" => "대련",
+        "maze" => "미로",
+        "mouse" => "포인터",
+        "ime" => "한영 리듬",
+        _ => "",
+    }
+}
+
 /// 입문 화면 사부 한마디 — 수련 종류별 요령
 fn intro_tip(lesson: &Lesson) -> &'static str {
     match (
@@ -814,6 +925,13 @@ fn intro_tip(lesson: &Lesson) -> &'static str {
             "톡 톡을 너무 빨리 치면 두 번째는 무시된다(300ms). 한 번이면 충분하다."
         }
         ("ime", ..) => "^ 표시가 있는 글자 앞에서 톡. 틀린 언어로 쳤다면 사부가 되짚어 준다.",
+        ("mixed", ..) if lesson.is_boss() => {
+            "실수와 파 초과가 기를 깎는다. 단계를 넘길 때마다 마귀가 꺾인다."
+        }
+        ("mixed", ..) => "단계가 끝나면 바로 다음 단계다. 숨은 단계 사이에서 골라라.",
+        ("quiz", ..) => "보기 순서는 판마다 섞인다. 자리를 외우지 말고 이치를 떠올려라.",
+        ("daily", ..) => "하루 2분. 거르지 않는 것이 실력이다.",
+        ("seal", ..) => "인장은 코드로 옮긴다. 위조는 막지 않는다 — 정직 시스템이다.",
         _ => "아직 짓는 중이다. 안내만 먼저 읽어 두어라.",
     }
 }
@@ -826,7 +944,14 @@ pub fn codex(f: &mut Frame, stage: Rect, app: &App) {
         format!("{} / {total} 해금", app.scrolls.len()),
         fg(GOLD),
     )];
-    let body = chrome(f, stage, "비급 도감", right, "↑↓ 권 선택   Esc 문으로", app);
+    let body = chrome(
+        f,
+        stage,
+        "비급 도감",
+        right,
+        "↑↓ 권 선택   Enter 비급 시험   Esc 문으로",
+        app,
+    );
 
     let visible = 18usize;
     let start = app.codex_sel.saturating_sub(visible - 1);
@@ -1077,5 +1202,130 @@ pub fn diagnose(f: &mut Frame, stage: Rect, app: &App, d: &Diagnosis, scroll: us
             fg(SUB),
         ))),
         row(body, y + diag_h),
+    );
+}
+
+// ── S17 결과 카드 ─────────────────────────────────────────────────────────────
+
+pub fn card(f: &mut Frame, stage: Rect, app: &App) {
+    let body = chrome(
+        f,
+        stage,
+        "결과 카드",
+        Vec::new(),
+        "C 클립보드로 복사 (텍스트)   Esc 닫기",
+        app,
+    );
+    let (_, belt_id) = card::belt_name(app.content, &app.standing);
+    let lines: Vec<Line> = card::app_lines(app)
+        .into_iter()
+        .map(|(text, tone)| {
+            let style = match tone {
+                Tone::Title => bold(belt_color(&belt_id)),
+                Tone::Text => fg(TEXT),
+                Tone::Sub => fg(SUB),
+                Tone::Gold => fg(GOLD),
+                Tone::Bar => fg(ACT),
+            };
+            Line::from(span(format!(" {text}"), style))
+        })
+        .collect();
+    let h = (lines.len() as u16 + 2).min(body.height);
+    let w = card::WIDTH as u16 + 4;
+    f.render_widget(
+        Paragraph::new(lines).block(rounded(Line::from(span(" kmd dojo ", bold(PEACH))))),
+        sub(body, (80 - w) / 2, 1, w, h),
+    );
+}
+
+// ── 인장 (docs/10 §8-4) ───────────────────────────────────────────────────────
+
+pub fn seals(f: &mut Frame, stage: Rect, app: &App, v: &SealView) {
+    let hint = if v.input.is_some() {
+        "코드를 붙여 넣고 Enter   Esc 취소"
+    } else {
+        "E 내 인장 코드 복사   I 코드 붙여 넣기   Esc 지도로"
+    };
+    let right = vec![span(format!("인장 {} / 3", app.seals.len()), fg(GOLD))];
+    let body = chrome(f, stage, "인장", right, hint, app);
+
+    let mut lines = vec![Line::from("")];
+    for (id, name) in [
+        ("macos", "macOS"),
+        ("windows", "Windows"),
+        ("linux", "Linux"),
+    ] {
+        let got = app.seals.iter().find(|s| s.os == id);
+        let here = std::env::consts::OS == id;
+        lines.push(Line::from(vec![
+            span(
+                format!(
+                    "   {}  {}",
+                    if got.is_some() { "◆" } else { "◇" },
+                    fit(name, 9)
+                ),
+                if got.is_some() { bold(GOLD) } else { fg(DIM) },
+            ),
+            span(
+                match got {
+                    Some(s) if s.source == "imported" => "다른 기기에서 들임".to_string(),
+                    Some(_) => "이 기기에서 땀".to_string(),
+                    None if here => "이 기기 — 검은띠를 따면 찍힌다".to_string(),
+                    None => "그 기기에서 내보낸 코드를 붙여 넣어라".to_string(),
+                },
+                fg(SUB),
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(span(
+        format!(
+            "   이 기기는 {} — 코드는 kmd dojo seal export / import 로도 옮긴다",
+            os_name(std::env::consts::OS)
+        ),
+        fg(SUB),
+    )));
+    f.render_widget(
+        Paragraph::new(lines).block(rounded(Line::from(span(" 삼국의 인장 ", bold(GOLD))))),
+        sub(body, 1, 1, 78, 9),
+    );
+
+    let mut code = vec![Line::from("")];
+    match (&v.input, &v.code) {
+        (Some(input), _) => {
+            code.push(Line::from(vec![
+                span("   붙여 넣기 ▸ ", fg(SUB)),
+                span(fit(input, 58), bold(TEXT)),
+            ]));
+        }
+        (None, Some(c)) => {
+            code.push(Line::from(vec![
+                span("   내 코드  ", fg(SUB)),
+                span(fit(c, 62), bold(ACCENT)),
+            ]));
+        }
+        (None, None) => code.push(Line::from(span("   이 기기의 인장이 아직 없다.", fg(DIM)))),
+    }
+    if let Some((ok, msg)) = &v.msg {
+        code.push(Line::from(""));
+        code.push(Line::from(span(
+            format!("   {msg}"),
+            if *ok { fg(GREEN) } else { fg(RED) },
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(code)
+            .wrap(Wrap { trim: false })
+            .block(panel(Line::from(span(" 코드 ", bold(ACCENT))))),
+        sub(body, 1, 11, 78, 7),
+    );
+    let all = app.seals.len() >= 3;
+    f.render_widget(
+        Paragraph::new(sensei_line(if all {
+            "세 나라가 하나의 손버릇 아래 모였다. 삼두마가 기다린다."
+        } else {
+            "기기는 셋이어도 손은 하나다. 인장으로 그것을 증명하라."
+        })),
+        row(body, body.height - 1),
     );
 }

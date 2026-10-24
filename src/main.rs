@@ -137,6 +137,30 @@ enum Commands {
         /// Free practice — every lesson open regardless of belt (runs are still recorded)
         #[arg(long)]
         free: bool,
+        #[command(subcommand)]
+        action: Option<DojoAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DojoAction {
+    /// Print your result card (belt, streak, seals, most-used moves)
+    Card,
+    /// Carry OS seals between machines (one per OS where you earned the black belt)
+    Seal {
+        #[command(subcommand)]
+        action: SealAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SealAction {
+    /// Print this machine's seal code
+    Export,
+    /// Import a seal code from another machine
+    Import {
+        /// Code printed by `kmd dojo seal export` (KMD1-...)
+        code: String,
     },
 }
 
@@ -268,6 +292,14 @@ enum KeymapAction {
     Init { profile: Option<String> },
     /// Show available built-in presets
     ListPresets,
+    /// Key-habit stats — layer moves, bare arrows, trigger holds (counts only, never letters; off by default)
+    Stats {
+        /// on | off | clear — without it, print the report
+        toggle: Option<String>,
+        /// Report period in days (today included)
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+    },
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -451,11 +483,23 @@ fn main() -> color_eyre::Result<()> {
                 KeymapAction::Use { profile } => cmd::keymap::Action::Use { profile },
                 KeymapAction::Init { profile } => cmd::keymap::Action::Init { profile },
                 KeymapAction::ListPresets => cmd::keymap::Action::ListPresets,
+                KeymapAction::Stats { toggle, days } => cmd::keymap::Action::Stats { toggle, days },
             })?;
         }
-        Some(Commands::Dojo { lesson, free }) => {
-            cmd::dojo::run(lesson, free)?;
-        }
+        Some(Commands::Dojo {
+            lesson,
+            free,
+            action,
+        }) => match action {
+            None => cmd::dojo::run(lesson, free)?,
+            Some(DojoAction::Card) => cmd::dojo::card()?,
+            Some(DojoAction::Seal {
+                action: SealAction::Export,
+            }) => cmd::dojo::seal_export()?,
+            Some(DojoAction::Seal {
+                action: SealAction::Import { code },
+            }) => cmd::dojo::seal_import(&code)?,
+        },
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {
             #[cfg(windows)]

@@ -63,6 +63,14 @@ pub(super) fn update_search(
         QueryPrefix::Shell => handle_shell_query(&query, state),
         QueryPrefix::Keymap => handle_keymap_query(&query, state),
         QueryPrefix::Keys => handle_keys_query(state),
+        QueryPrefix::Dojo => {
+            state.results = items_to_results(
+                kmd_core::query_prefix::dojo_items(state.use_emoji),
+                SCORE_CALC,
+            );
+            state.search_mode = SearchMode::Contains;
+            state.selected_index = 0;
+        }
         QueryPrefix::FolderSearch => handle_folder_search(&query, state),
         QueryPrefix::Scope => super::scope::handle_scope_query(&query, state, engine),
         QueryPrefix::ContentSearch => handle_content_search(&query, state, db),

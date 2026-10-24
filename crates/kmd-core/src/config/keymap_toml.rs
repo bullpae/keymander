@@ -35,6 +35,10 @@ pub struct KeymapConfig {
     /// 짧게 탭 = tap 키, 홀드 중 다른 키 = hold 수정자 조합 (HHKB 스타일)
     #[serde(default)]
     pub tap_holds: BTreeMap<String, TapHoldToml>,
+    /// 손버릇 통계 (docs/19) — 데몬이 레이어 수 사용·맨 화살표·트리거 홀드 시간을
+    /// **횟수로만** 센다. 글자·순서·시각은 남기지 않는다. 기본 꺼짐.
+    #[serde(default)]
+    pub stats: bool,
 }
 
 impl Default for KeymapConfig {
@@ -49,6 +53,7 @@ impl Default for KeymapConfig {
             combos: Vec::new(),
             double_taps: Vec::new(),
             tap_holds: BTreeMap::new(),
+            stats: false,
         }
     }
 }

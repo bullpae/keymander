@@ -103,7 +103,7 @@ impl ImeRound {
         });
         Some(Self {
             lesson_id: lesson.id.clone(),
-            lines: set.lines.clone(),
+            lines: lesson.window(&set.lines),
             idx: 0,
             typed: Vec::new(),
             phase: Phase::Type,

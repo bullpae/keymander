@@ -5,10 +5,12 @@
 
 use std::time::{Duration, Instant};
 
+use super::gauntlet::Gauntlet;
 use super::golf::GolfRound;
 use super::ime::ImeRound;
 use super::maze::MazeRound;
 use super::mouse::MouseRound;
+use super::quiz::QuizRound;
 use super::score::HoleResult;
 use super::spar::Spar;
 use super::summon::Round;
@@ -162,6 +164,9 @@ pub enum Play {
     Maze(MazeRound),
     Mouse(MouseRound),
     Ime(ImeRound),
+    Quiz(QuizRound),
+    /// 이어 붙이기 — 안에 지금 단계의 라운드가 있다
+    Mixed(Box<Gauntlet>),
 }
 
 impl Play {
@@ -173,6 +178,8 @@ impl Play {
             Play::Maze(r) => &r.lesson_id,
             Play::Mouse(r) => &r.lesson_id,
             Play::Ime(r) => &r.lesson_id,
+            Play::Quiz(r) => &r.lesson_id,
+            Play::Mixed(g) => &g.lesson_id,
         }
     }
 
@@ -184,6 +191,8 @@ impl Play {
             Play::Maze(r) => r.started,
             Play::Mouse(r) => r.started,
             Play::Ime(r) => r.started,
+            Play::Quiz(r) => r.started,
+            Play::Mixed(g) => g.started,
         }
     }
 
@@ -195,6 +204,8 @@ impl Play {
             Play::Maze(r) => r.fail_streak,
             Play::Mouse(r) => r.fail_streak,
             Play::Ime(r) => r.fail_streak,
+            Play::Quiz(r) => r.fail_streak,
+            Play::Mixed(g) => g.inner.fail_streak(),
         }
     }
 
@@ -206,6 +217,8 @@ impl Play {
             Play::Maze(r) => r.total_mistakes,
             Play::Mouse(r) => r.total_mistakes,
             Play::Ime(r) => r.total_mistakes,
+            Play::Quiz(r) => r.total_mistakes,
+            Play::Mixed(g) => g.total_mistakes(),
         }
     }
 
@@ -218,6 +231,8 @@ impl Play {
             Play::Maze(r) => r.flash,
             Play::Mouse(r) => r.flash,
             Play::Ime(r) => r.flash,
+            Play::Quiz(r) => r.flash,
+            Play::Mixed(g) => g.inner.flash(),
         }
     }
 
@@ -229,6 +244,8 @@ impl Play {
             Play::Maze(r) => r.flash = None,
             Play::Mouse(r) => r.flash = None,
             Play::Ime(r) => r.flash = None,
+            Play::Quiz(r) => r.flash = None,
+            Play::Mixed(g) => g.inner.clear_flash(),
         }
     }
 
@@ -240,6 +257,23 @@ impl Play {
             Play::Maze(_) => None,
             Play::Mouse(r) => r.boss.as_ref(),
             Play::Ime(r) => r.boss.as_ref(),
+            Play::Quiz(_) => None,
+            Play::Mixed(g) => g.boss.as_ref(),
+        }
+    }
+
+    /// 판정을 받는 라운드 — 이어 붙이기면 지금 단계
+    pub fn inner(&self) -> &Play {
+        match self {
+            Play::Mixed(g) => g.inner.inner(),
+            p => p,
+        }
+    }
+
+    pub fn inner_mut(&mut self) -> &mut Play {
+        match self {
+            Play::Mixed(g) => g.inner.inner_mut(),
+            p => p,
         }
     }
 
@@ -248,6 +282,7 @@ impl Play {
         match self {
             Play::Mouse(_) => true,
             Play::Ime(r) => r.wants_mouse(),
+            Play::Mixed(g) => g.inner.wants_mouse(),
             _ => false,
         }
     }
@@ -261,6 +296,8 @@ impl Play {
             Play::Maze(r) => r.animating(),
             Play::Mouse(r) => r.animating(),
             Play::Ime(r) => r.animating(),
+            Play::Quiz(_) => false,
+            Play::Mixed(g) => g.animating(now),
         }
     }
 
@@ -272,6 +309,8 @@ impl Play {
             Play::Maze(r) => r.tick(now),
             Play::Mouse(r) => r.tick(now),
             Play::Ime(r) => r.tick(now),
+            Play::Quiz(_) => RoundEvent::None,
+            Play::Mixed(g) => g.tick(now),
         }
     }
 
@@ -283,6 +322,8 @@ impl Play {
             Play::Maze(r) => r.summary(cleared),
             Play::Mouse(r) => r.summary(cleared),
             Play::Ime(r) => r.summary(cleared),
+            Play::Quiz(r) => r.summary(cleared),
+            Play::Mixed(g) => g.summary(cleared),
         }
     }
 }

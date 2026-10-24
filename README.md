@@ -162,9 +162,19 @@ When it stops feeling like practice, you've graduated.
 > BFS-optimal "sage" line), green (Shift-selection surgery on real-looking
 > paragraphs), blue (Hangul/English switching rhythm, judged by the characters
 > that arrive) and purple (pointer aim, wheel, drag, rat boss via terminal
-> mouse capture). A layout diagnosis checks your remaps against the design
-> rationale. Instructions follow your own remapped keymap;
-> `kmd dojo --free` opens every lesson. See the [plan](docs/10_dojo_plan.md).
+> mouse capture), brown (mixed drills, a scroll exam and "a day without leaving
+> the home row" chained across lessons), black (today's 2-minute practice, three
+> days in a row) and dan (one seal per OS — carry them between machines with
+> `kmd dojo seal export|import`). A layout diagnosis checks your remaps against
+> the design rationale, `kmd dojo card` prints a shareable result card, and
+> summon lessons can run on your real index (R). Instructions follow your own
+> remapped keymap; `kmd dojo --free` opens every lesson. See the
+> [plan](docs/10_dojo_plan.md).
+>
+> **Key-habit stats (opt-in).** `kmd keymap stats on` lets the daemon count
+> layer moves, bare arrow presses and trigger hold times — counts only, never
+> letters, never order or timestamps, never leaves the machine. `kmd keymap
+> stats` reads them back with advice ([details](docs/19_key_stats.md)).
 
 ---
 
@@ -785,8 +795,8 @@ toggle_preview = "ctrl+p"
 ## Roadmap
 
 **Toward v1.0.0**
-- **`kmd dojo`** — keymap trainer: white through purple belts shipped (incl. selection
-  surgery and IME rhythm); brown/black belts and daily streaks next ([plan](docs/10_dojo_plan.md))
+- **`kmd dojo`** — keymap trainer: all belts through dan shipped; strict physical-key
+  judging ("hard mode") next ([plan](docs/10_dojo_plan.md))
 - Cloud-synced todo / memo (remote storage integration)
 - Clipboard history manager
 - Plugin marketplace & script-based plugins

@@ -18,7 +18,12 @@ const MAZE: &str = include_str!("../../../assets/dojo/maze.toml");
 const IME: &str = include_str!("../../../assets/dojo/ime.toml");
 
 /// 구현된 수련 종류. 나머지는 지도에 "공사 중"으로 보인다.
-pub const READY_KINDS: &[&str] = &["summon", "spar", "maze", "golf", "mouse", "ime"];
+pub const READY_KINDS: &[&str] = &[
+    "summon", "spar", "maze", "golf", "mouse", "ime", "mixed", "quiz", "daily", "seal",
+];
+
+/// 이어 붙이기(mixed)의 단계로 쓸 수 있는 종류 — 화면 하나로 끝나는 라운드
+pub const STAGE_KINDS: &[&str] = &["summon", "spar", "maze", "golf", "mouse", "ime"];
 
 #[derive(Debug, Deserialize)]
 pub struct Curriculum {
@@ -37,7 +42,7 @@ pub struct Belt {
 }
 
 /// 과 또는 관문(보스). 보스는 `title` 대신 `name`을 쓴다.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Lesson {
     pub id: String,
     #[serde(alias = "name")]
@@ -64,6 +69,31 @@ pub struct Lesson {
     pub fall_ms: Option<u32>,
     /// 마우스 과의 기준 시간
     pub par_time_s: Option<u32>,
+    /// 세트에서 앞의 몇 문항을 건너뛰고(`skip`) 몇 문항만(`take`) 쓴다 — 단계·오늘의 수련용
+    pub skip: Option<usize>,
+    pub take: Option<usize>,
+    /// 대련 카드의 수 묶음 (없으면 상하좌우)
+    #[serde(default)]
+    pub moves: Vec<String>,
+    /// 이어 붙이기(mixed)의 단계
+    #[serde(default)]
+    pub stage: Vec<Stage>,
+    /// 연속 수련일 조건 (검은띠)
+    pub days: Option<u32>,
+    /// 인장 수 조건 (단)
+    pub seals: Option<u32>,
+}
+
+/// 이어 붙이기의 한 단계 — 다른 과의 라운드를 줄여서 빌려 쓴다
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Stage {
+    /// 빌려 올 과 id
+    pub from: String,
+    /// 단계 이름 (없으면 빌려 온 과 제목)
+    pub label: Option<String>,
+    pub skip: Option<usize>,
+    pub take: Option<usize>,
+    pub count: Option<u32>,
 }
 
 impl Lesson {
@@ -82,6 +112,31 @@ impl Lesson {
             .filter_map(|n| Action::from_id(n))
             .collect()
     }
+
+    /// 세트에서 이 과가 쓰는 구간 — `skip`·`take`
+    pub fn window<T: Clone>(&self, items: &[T]) -> Vec<T> {
+        let skip = self.skip.unwrap_or(0).min(items.len().saturating_sub(1));
+        items
+            .iter()
+            .skip(skip)
+            .take(self.take.unwrap_or(usize::MAX).max(1))
+            .cloned()
+            .collect()
+    }
+
+    /// 단계로 빌려 쓸 과를 만든다 — 제한 시간은 떼고 구간만 남긴다. id 는 원래 과
+    /// 그대로라 화면이 제목·띠를 찾을 수 있다. 관문은 빌려 쓰지 않는다(콘텐츠 테스트).
+    pub fn staged(&self, st: &Stage) -> Lesson {
+        let mut l = self.clone();
+        l.time_limit_s = None;
+        l.skip = st.skip.or(self.skip);
+        l.take = st.take.or(self.take);
+        l.count = st.count.or(self.count);
+        if let Some(label) = &st.label {
+            l.title = label.clone();
+        }
+        l
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,13 +150,11 @@ pub struct Scroll {
     pub title: String,
     pub body: String,
     pub source: String,
-    /// 비급 시험 (M2) — 지금은 형식만 테스트로 검증한다
-    #[allow(dead_code)]
+    /// 비급 시험 (S16)
     pub quiz: Quiz,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Quiz {
     pub q: String,
     pub choices: Vec<String>,
@@ -213,7 +266,7 @@ pub struct MazeSet {
 }
 
 /// 미로 — `#` 벽, `S` 시작, `E` 문, `$` 엽전
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MazeDef {
     pub title: String,
     pub map: String,
@@ -248,6 +301,41 @@ pub struct Content {
 
 impl Content {
     fn parse() -> Result<Self, String> {
+        let mut c = Self::parse_raw()?;
+        // 이어 붙이기는 단계들이 요구하는 수를 모두 요구한다
+        let mut fill = Vec::new();
+        for (bi, b) in c.curriculum.belt.iter().enumerate() {
+            for (li, l) in b.lesson.iter().chain(b.boss.iter()).enumerate() {
+                if l.stage.is_empty() || !l.needs.is_empty() {
+                    continue;
+                }
+                let mut needs: Vec<String> = Vec::new();
+                for st in &l.stage {
+                    if let Some((_, _, src)) = c.lesson(&st.from) {
+                        for n in &src.needs {
+                            if !needs.contains(n) {
+                                needs.push(n.clone());
+                            }
+                        }
+                    }
+                }
+                fill.push((bi, li, needs));
+            }
+        }
+        for (bi, li, needs) in fill {
+            let b = &mut c.curriculum.belt[bi];
+            let n = b.lesson.len();
+            let l = if li < n {
+                &mut b.lesson[li]
+            } else {
+                b.boss.as_mut().expect("보스")
+            };
+            l.needs = needs;
+        }
+        Ok(c)
+    }
+
+    fn parse_raw() -> Result<Self, String> {
         Ok(Self {
             curriculum: toml::from_str(CURRICULUM).map_err(|e| format!("curriculum.toml: {e}"))?,
             scrolls: toml::from_str(SCROLLS).map_err(|e| format!("scrolls.toml: {e}"))?,
@@ -530,5 +618,57 @@ mod tests {
         assert_eq!(white.id, "white");
         assert!(white.lesson.iter().all(Lesson::is_ready));
         assert!(white.boss.as_ref().is_some_and(Lesson::is_ready));
+    }
+
+    /// 이어 붙이기의 단계는 화면 하나로 끝나는 과만, 관문은 빌리지 않는다
+    #[test]
+    fn 이어_붙이기의_단계는_있는_과를_빌린다() {
+        let mut n = 0;
+        for b in &c().curriculum.belt {
+            for l in b.lesson.iter().chain(b.boss.iter()) {
+                if l.kind != "mixed" {
+                    assert!(l.stage.is_empty(), "{}: mixed 가 아닌데 단계가 있다", l.id);
+                    continue;
+                }
+                assert!(l.stage.len() >= 2, "{}: 단계가 하나뿐", l.id);
+                assert!(!l.needs.is_empty(), "{}: 단계의 수를 물려받는다", l.id);
+                for st in &l.stage {
+                    let (_, _, src) = c()
+                        .lesson(&st.from)
+                        .unwrap_or_else(|| panic!("{}: 없는 과 {}", l.id, st.from));
+                    assert!(
+                        !src.is_boss(),
+                        "{}: 관문 {} 은 빌리지 않는다",
+                        l.id,
+                        st.from
+                    );
+                    assert!(
+                        STAGE_KINDS.contains(&src.kind.as_str()),
+                        "{}: {} 는 단계가 될 수 없다",
+                        l.id,
+                        st.from
+                    );
+                    n += 1;
+                }
+            }
+        }
+        assert!(n > 0);
+    }
+
+    #[test]
+    fn 구간은_세트를_넘지_않는다() {
+        let l = Lesson {
+            skip: Some(10),
+            take: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(l.window(&[1, 2, 3]), vec![3], "넘치는 skip 은 마지막 문항");
+        let l = Lesson {
+            skip: Some(1),
+            take: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(l.window(&[1, 2, 3]), vec![2]);
+        assert_eq!(Lesson::default().window(&[1, 2]), vec![1, 2]);
     }
 }

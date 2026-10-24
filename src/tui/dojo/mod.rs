@@ -7,8 +7,10 @@ pub mod action;
 mod app;
 pub mod binding;
 pub mod calib;
+pub mod card;
 pub mod content;
 pub mod diagnose;
+pub mod gauntlet;
 pub mod golf;
 pub mod hangul;
 pub mod ime;
@@ -17,6 +19,7 @@ pub mod mouse;
 pub mod play;
 mod precheck;
 pub mod progress;
+pub mod quiz;
 pub mod score;
 pub mod spar;
 pub mod summon;
@@ -92,6 +95,12 @@ pub fn run(
         dirty |= app.on_tick(Instant::now());
     }
     Ok(())
+}
+
+/// 결과 카드 텍스트 (`kmd dojo card`) — 화면을 열지 않고 같은 계산으로 만든다
+pub fn card_text(config: &kmd_core::Config, db: Option<kmd_core::Database>) -> String {
+    let app = app::App::new(config, db, None, false);
+    card::text(&app)
 }
 
 /// 터미널 복구 RAII 가드 — 런처의 `TerminalSession`과 같은 방식.

@@ -87,6 +87,8 @@ pub struct Spar {
     pub style: Style,
     // ── 카드
     pub prompts: Vec<Action>,
+    /// 카드에 나오는 수 묶음 — 이 밖의 수는 판정하지 않는다
+    pub pool: Vec<Action>,
     pub idx: usize,
     pub prompt_at: Instant,
     pub times: Vec<Duration>,
@@ -116,15 +118,27 @@ impl Spar {
         };
         let count = lesson.count.unwrap_or(16) as usize;
         let mut rng = Rng::seeded(&lesson.id);
+        // 카드는 과가 정한 수 묶음, 화살비는 늘 네 갈래
+        let mut pool: Vec<Action> = match style {
+            Style::Card => lesson
+                .moves
+                .iter()
+                .filter_map(|m| Action::from_id(m))
+                .collect(),
+            Style::Rain => Vec::new(),
+        };
+        if pool.is_empty() {
+            pool = LANES.to_vec();
+        }
         let mut prompts = Vec::new();
         let mut notes = Vec::new();
         match style {
             Style::Card => {
                 // 같은 방향이 세 번 연달아 나오지 않게
                 while prompts.len() < count {
-                    let a = LANES[rng.below(4) as usize];
+                    let a = pool[rng.below(pool.len() as u64) as usize];
                     let n = prompts.len();
-                    if n >= 2 && prompts[n - 1] == a && prompts[n - 2] == a {
+                    if pool.len() > 1 && n >= 2 && prompts[n - 1] == a && prompts[n - 2] == a {
                         continue;
                     }
                     prompts.push(a);
@@ -139,6 +153,7 @@ impl Spar {
             lesson_id: lesson.id.clone(),
             style,
             prompts,
+            pool,
             idx: 0,
             prompt_at: now,
             times: Vec::new(),
@@ -207,7 +222,7 @@ impl Spar {
         let Some(want) = self.prompt() else {
             return RoundEvent::None;
         };
-        if !LANES.contains(&a) {
+        if !self.pool.contains(&a) {
             return RoundEvent::None;
         }
         let t = now.duration_since(self.prompt_at);

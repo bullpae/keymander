@@ -30,6 +30,23 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 
+/// 쌓인 손버릇 통계를 꺼낸다 (docs/19) — 데몬의 저장 스레드가 몇 분마다 부른다.
+/// 엔진 락은 해시맵을 통째로 옮기는 동안만 쥔다.
+pub fn take_key_stats() -> Vec<(String, u32)> {
+    match HOOK_STATE.get() {
+        Some(state) => {
+            let (mut guard, recovered) = lock_engine(state);
+            let stats = guard.take_stats();
+            drop(guard);
+            if let Some(cleanup) = recovered {
+                apply_hook_loss_cleanup(cleanup);
+            }
+            stats
+        }
+        None => Vec::new(),
+    }
+}
+
 /// 훅 상실·엔진 poison 복구 정리 — 주입해 둔 트리거 해제 + 마우스 정지.
 fn apply_hook_loss_cleanup(cleanup: HookLossCleanup) {
     if let Some(trigger) = cleanup.release_trigger {

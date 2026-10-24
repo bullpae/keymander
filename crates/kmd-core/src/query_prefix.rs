@@ -35,6 +35,8 @@ pub enum QueryPrefix {
     Keymap,
     /// `:keys` / `:k` — 키 바인딩 치트시트
     Keys,
+    /// `:dojo` — 키맵 도장 (`kmd dojo` 를 터미널에서 연다, docs/10)
+    Dojo,
     /// `:f` — 특정 폴더 내 즉석 파일 검색
     FolderSearch,
     /// `:scope` / `:dirs` — 검색 범위(인덱싱 폴더) 관리 (docs/18)
@@ -144,6 +146,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":keys",
         icon_emoji: "\u{1F5FA}\u{FE0F}",
         icon_ascii: "[KEY]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Dojo,
+        aliases: &[":dojo"],
+        title: ":dojo  Keymap Dojo",
+        usage: "Type :dojo  (learn the layers — belts, key golf; opens kmd dojo in a terminal)",
+        seed: ":dojo",
+        icon_emoji: "\u{1F94B}",
+        icon_ascii: "[DOJ]",
     },
     CommandSpec {
         prefix: QueryPrefix::Keymap,
@@ -466,6 +477,27 @@ pub fn unknown_command_hint(query: &str, use_emoji: bool) -> Option<IndexItem> {
     })
 }
 
+/// `:dojo` 결과 — Enter 면 새 터미널에서 `kmd dojo` 를 연다 (런처 창 하나에 게임을
+/// 넣지 않는다, docs/10 §11). 런처 옆에 놓인 `kmd` 를 우선 쓰고, 없으면 PATH 의 `kmd`.
+pub fn dojo_items(use_emoji: bool) -> Vec<IndexItem> {
+    let kmd = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            let p = exe.with_file_name(format!("kmd{}", std::env::consts::EXE_SUFFIX));
+            p.is_file().then_some(p)
+        })
+        .map_or_else(|| "kmd".to_string(), |p| format!("\"{}\"", p.display()));
+    vec![IndexItem {
+        name: "kmd dojo — 도장 열기".to_string(),
+        path: format!("{kmd} dojo"),
+        icon: if use_emoji { "\u{1F94B}" } else { "[DOJ]" }.to_string(),
+        kind: ItemKind::Shell,
+        source: Source::Plugin,
+        keywords: String::new(),
+        icon_path: None,
+    }]
+}
+
 /// `:version` 결과 목록 — 앱 이름/버전만 프런트엔드별로 다르다.
 pub fn version_items(app_label: &str, app_version: &str, use_emoji: bool) -> Vec<IndexItem> {
     let emoji = use_emoji;
@@ -761,6 +793,13 @@ mod tests {
         assert_eq!(prefix_of(":settings theme"), QueryPrefix::Settings);
         assert_eq!(prefix_of(":h"), QueryPrefix::Help);
         assert_eq!(prefix_of(":version"), QueryPrefix::Version);
+        assert_eq!(prefix_of(":dojo"), QueryPrefix::Dojo);
+        let d = dojo_items(false);
+        assert!(d[0].path.ends_with(" dojo"), "{}", d[0].path);
+        assert_eq!(
+            crate::activation::classify(&d[0]),
+            crate::activation::Activation::ShellTerminal
+        );
         assert_eq!(prefix_of(":km on"), QueryPrefix::Keymap);
         assert_eq!(prefix_of(":k"), QueryPrefix::Keys);
         assert_eq!(prefix_of(":f /tmp report"), QueryPrefix::FolderSearch);
@@ -852,6 +891,7 @@ mod tests {
             QueryPrefix::Version,
             QueryPrefix::Keymap,
             QueryPrefix::Keys,
+            QueryPrefix::Dojo,
             QueryPrefix::FolderSearch,
         ] {
             assert!(covered.contains(&p), "레지스트리에 없는 명령: {p:?}");

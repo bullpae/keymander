@@ -227,6 +227,10 @@ fn kind_name(kind: &str) -> &'static str {
     match kind {
         "spar" => "대련",
         "mouse" => "보이지 않는 마우스",
+        "ime" => "한영 리듬",
+        "quiz" => "비급 시험",
+        "mixed" => "단계",
+        "daily" => "오늘의 수련",
         _ => "수련",
     }
 }
@@ -236,7 +240,7 @@ fn stats_panel(f: &mut Frame, body: Rect, app: &App, out: &Outcome) {
     let mut lines = vec![Line::from("")];
     for (name, value) in &out.stats {
         lines.push(Line::from(vec![
-            span(format!("   {}", fit(name, 18)), fg(SUB)),
+            span(format!("   {} ", fit(name, 26)), fg(SUB)),
             span(value.clone(), bold(TEXT)),
         ]));
     }
@@ -256,7 +260,7 @@ fn stats_panel(f: &mut Frame, body: Rect, app: &App, out: &Outcome) {
             format!(" {} 전적 ", kind_name(&out.kind)),
             bold(ACCENT),
         )))),
-        sub(body, 14, 3, 52, h),
+        sub(body, 9, 3, 62, h),
     );
     let mut y = 3 + h + 1;
     if let Some(name) = &out.promoted {

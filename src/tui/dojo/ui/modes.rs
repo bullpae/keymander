@@ -11,6 +11,7 @@ use ratatui::Frame;
 use super::*;
 use crate::tui::dojo::action::Action;
 use crate::tui::dojo::app::App;
+use crate::tui::dojo::gauntlet::Gauntlet;
 use crate::tui::dojo::golf::{self, GolfRound, Phase as GolfPhase};
 use crate::tui::dojo::ime::{ImeRound, Phase as ImePhase};
 use crate::tui::dojo::maze::{MazeRound, Phase as MazePhase, Tile};
@@ -18,6 +19,7 @@ use crate::tui::dojo::mouse::{
     Drill, LeakPhase, MouseRound, RatState, ARENA_H, ARENA_W, LIST_VIEW, RAT_W,
 };
 use crate::tui::dojo::play::BossState;
+use crate::tui::dojo::quiz::{Phase as QuizPhase, QuizRound};
 use crate::tui::dojo::score::Mark;
 use crate::tui::dojo::spar::{Judge, Spar, Style as SparStyle, CARD_REF, LANES};
 
@@ -477,6 +479,48 @@ pub fn mark_color(m: Mark) -> Color {
 
 fn big_arrow(a: Action) -> [&'static str; 5] {
     match a {
+        Action::WordLeft => [
+            "  ▄█  ▄█ ",
+            " ███ ███ ",
+            "◀██ ◀██  ",
+            " ███ ███ ",
+            "  ▀█  ▀█ ",
+        ],
+        Action::WordRight => [
+            " █▄  █▄  ",
+            " ███ ███ ",
+            "  ██▶ ██▶",
+            " ███ ███ ",
+            " █▀  █▀  ",
+        ],
+        Action::PageUp => [
+            "  ▲▲▲▲▲  ",
+            " ███████ ",
+            "  █████  ",
+            "   ███   ",
+            "  PgUp   ",
+        ],
+        Action::PageDown => [
+            "  PgDn   ",
+            "   ███   ",
+            "  █████  ",
+            " ███████ ",
+            "  ▼▼▼▼▼  ",
+        ],
+        Action::Backspace => [
+            "   ▄████ ",
+            " ▄█ ╲╱ █ ",
+            "◀██ ╱╲ █ ",
+            " ▀█▄▄▄▄█ ",
+            "   ⌫     ",
+        ],
+        Action::Delete => [
+            " ████▄   ",
+            " █ ╲╱ █▄ ",
+            " █ ╱╲ ██▶",
+            " █▄▄▄▄█▀ ",
+            "     ⌦   ",
+        ],
         Action::Up => [
             "    ▲    ",
             "   ███   ",
@@ -513,6 +557,9 @@ fn lane_color(a: Action) -> Color {
         Action::Left => PEACH,
         Action::Down => ACCENT,
         Action::Up => GREEN,
+        Action::WordLeft | Action::WordRight => YELLOW,
+        Action::PageUp | Action::PageDown => Color::Rgb(183, 125, 255),
+        Action::Backspace | Action::Delete => RED,
         _ => Color::Rgb(255, 121, 198),
     }
 }
@@ -1493,4 +1540,163 @@ pub fn ime(f: &mut Frame, stage: Rect, app: &App, r: &ImeRound) {
 
     feedback(f, row(body, body.height - 2), &r.feedback, YELLOW);
     sensei_row(f, body, app);
+}
+
+// ── S16 비급 시험 ─────────────────────────────────────────────────────────────
+
+pub fn quiz(f: &mut Frame, stage: Rect, app: &App, q: &QuizRound) {
+    let question = q.question();
+    let scroll = app.content.scroll(&question.scroll);
+    let mastery = app.scrolls.get(&question.scroll).map_or(0, |s| s.mastery);
+    let right = vec![span(
+        format!("문항 {} / {}", q.idx + 1, q.questions.len()),
+        fg(SUB),
+    )];
+    let hint = match q.phase {
+        QuizPhase::Ask => "↑↓ 고르기   1~4 바로 답   Enter 제출   Esc 일시정지",
+        QuizPhase::Reveal(_) => "Enter 다음   Esc 일시정지",
+    };
+    let body = chrome(f, stage, "비급 시험", right, hint, app);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(span(format!("  {}", question.q), bold(TEXT))),
+        Line::from(""),
+    ];
+    for (i, c) in question.choices.iter().enumerate() {
+        let (mark, style) = match q.phase {
+            QuizPhase::Ask if i == q.sel => ("▶", sel()),
+            QuizPhase::Ask => (" ", fg(TEXT)),
+            QuizPhase::Reveal(_) if i == question.answer => ("✓", bold(GREEN)),
+            QuizPhase::Reveal(p) if p == i => ("✗", bold(RED)),
+            QuizPhase::Reveal(_) => (" ", fg(DIM)),
+        };
+        lines.push(Line::from(vec![
+            span(format!("  {mark} {}   ", i + 1), style),
+            span(fit(c, 66), style),
+        ]));
+    }
+    let title = Line::from(vec![
+        span(format!(" 卷{} 비급 시험  ", question.scroll), bold(GOLD)),
+        span("숙련 ", fg(SUB)),
+    ])
+    .spans
+    .into_iter()
+    .chain(stars(mastery))
+    .chain([span(" ", Style::new())])
+    .collect::<Vec<_>>();
+    let h = lines.len() as u16 + 2;
+    f.render_widget(
+        Paragraph::new(lines).block(rounded(Line::from(title))),
+        sub(body, 1, 1, 78, h),
+    );
+
+    // 답을 냈으면 — 틀렸을 때는 그 권을 바로 펼친다
+    if let QuizPhase::Reveal(p) = q.phase {
+        let y = 1 + h + 1;
+        let ok = p == question.answer;
+        let mut text = vec![Line::from(span(
+            if ok {
+                "  ◆ 납득했다. 숙련 별이 하나 오른다."
+            } else {
+                "  ✗ 아직이다. 그 권을 다시 펼쳐 보아라."
+            },
+            if ok { bold(GREEN) } else { bold(RED) },
+        ))];
+        if let (false, Some(s)) = (ok, scroll) {
+            text.push(Line::from(""));
+            text.push(Line::from(span(
+                format!("  {}", app.bindings.render(s.body.trim())),
+                fg(TEXT),
+            )));
+        }
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .block(panel(Line::from(span(
+                    scroll.map_or(String::new(), |s| format!(" 卷{} {} ", s.id, s.title)),
+                    fg(GOLD),
+                )))),
+            sub(body, 1, y, 78, body.height.saturating_sub(y + 1)),
+        );
+    }
+    sensei_row(f, body, app);
+}
+
+// ── 이어 붙이기 머리 — 단계·보스 게이지 ──────────────────────────────────────
+
+const STAGE_NUM: [&str; 9] = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
+
+pub fn gauntlet(f: &mut Frame, stage: Rect, app: &App, g: &Gauntlet) {
+    let now = Instant::now();
+    let hd = Style::new().bg(MANTLE);
+    let name = app
+        .content
+        .lesson(&g.lesson_id)
+        .map_or(String::new(), |(_, _, l)| l.title.clone());
+    let mut spans = vec![
+        span(" 道場 ", hd.fg(PEACH).add_modifier(Modifier::BOLD)),
+        span(
+            if width(&name) > 20 {
+                fit(&name, 20)
+            } else {
+                name.clone()
+            },
+            hd.fg(TEXT).add_modifier(Modifier::BOLD),
+        ),
+        span(" ", hd),
+    ];
+    for i in 0..g.stages.len() {
+        let (mark, c) = if i < g.done.len() {
+            ("◆", GOLD)
+        } else if i == g.idx {
+            ("◈", ACCENT)
+        } else {
+            ("◇", DIM)
+        };
+        spans.push(span(mark, hd.fg(c)));
+    }
+    spans.push(span(format!(" {} ", fit(&g.stage().title, 18)), hd.fg(SUB)));
+    if let Some(b) = &g.boss {
+        let bar = |pct: i32, c: Color| {
+            let n = (pct.clamp(0, 100) as usize * 8).div_ceil(100);
+            vec![
+                span("█".repeat(n), hd.fg(c)),
+                span("░".repeat(8 - n), hd.fg(DIM)),
+            ]
+        };
+        spans.push(span(" 마", hd.fg(RED)));
+        spans.extend(bar(b.hp, RED));
+        spans.push(span(" 기", hd.fg(GREEN)));
+        spans.extend(bar(b.ki, GREEN));
+    }
+    if let Some(left) = g.remaining_time(now) {
+        let s = left.as_secs();
+        spans.push(span(
+            format!(" {}:{:02}", s / 60, s % 60),
+            hd.fg(if s < 30 { RED } else { TEXT })
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let head = row(stage, 0);
+    f.render_widget(Clear, head);
+    f.render_widget(Paragraph::new(Line::from(spans)).style(hd), head);
+
+    // 단계가 바뀐 직후 — 표지
+    if g.banner(now) {
+        let n = STAGE_NUM.get(g.idx).copied().unwrap_or("");
+        let text = Line::from(vec![
+            span(format!("第{n}關  "), bold(GOLD)),
+            span(g.stage().title.clone(), bold(TEXT)),
+        ]);
+        let w = (width(&format!("第{n}關  {}", g.stage().title)) as u16 + 6).min(78);
+        let area = sub(stage, (80 - w) / 2, 9, w, 3);
+        f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new(text)
+                .alignment(Alignment::Center)
+                .block(rounded(Line::from("")).border_style(fg(GOLD))),
+            area,
+        );
+    }
 }

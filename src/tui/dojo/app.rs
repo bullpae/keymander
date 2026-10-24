@@ -4,21 +4,23 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
-use kmd_core::dojo::{DojoProgress, DojoRun, DojoScroll};
+use kmd_core::dojo::{self as store, DojoProgress, DojoRun, DojoScroll, DojoSeal, DojoStreak};
 use kmd_core::Database;
 
 use super::action::{Action, Os};
 use super::binding::Bindings;
 use super::calib::{Calib, CalibEvent, CalibRun, KEY_ACTIONS};
-use super::content::{content, Content, Lesson, SenseiLines};
+use super::content::{content, Content, Lesson, Request, SenseiLines, STAGE_KINDS};
 use super::diagnose::{self, Diagnosis};
+use super::gauntlet::{self, Gauntlet};
 use super::golf::{Edge, GolfRound};
 use super::ime::ImeRound;
 use super::maze::MazeRound;
 use super::mouse::{MouseRound, ARENA_ORIGIN};
-use super::play::{OutcomeRow, Play, RoundEvent};
+use super::play::{OutcomeRow, Play, Rng, RoundEvent};
 use super::precheck::{self, Report};
 use super::progress::{self, Access, Standing};
+use super::quiz::QuizRound;
 use super::score::Mark;
 use super::spar::Spar;
 use super::summon::{Fixture, Round};
@@ -29,6 +31,11 @@ const KV_INITIATED: &str = "dojo.initiated";
 const KV_KEYMAP_FP: &str = "dojo.keymap_fp";
 /// kv_store 키 접두 — 터미널별 키 감응 보정 (docs/10 §6-2)
 const KV_CALIB: &str = "dojo.calib.";
+
+/// 도장 밖 실전을 열려면 필요한 실행 기록 수 (docs/10 §4-4)
+const REAL_MIN: usize = 10;
+/// 비급 도감에서 연 권별 시험의 과 id — 커리큘럼에 없다
+const CODEX_QUIZ: &str = "codex";
 
 /// 실수 직후 화면이 흔들리는 시간
 pub const SHAKE: Duration = Duration::from_millis(140);
@@ -49,6 +56,21 @@ pub enum Screen {
     Records,
     /// S19 배치 진단 — (진단, 스크롤)
     Diagnose(Box<Diagnosis>, usize),
+    /// S17 결과 카드
+    Card,
+    /// 인장 — 코드 내보내기·가져오기 (docs/10 §8-4)
+    Seals(Box<SealView>),
+}
+
+/// 인장 화면 상태
+#[derive(Debug, Default)]
+pub struct SealView {
+    /// 가져오기 — 붙여 넣는 중인 코드
+    pub input: Option<String>,
+    /// 이 OS 인장의 내보내기 코드
+    pub code: Option<String>,
+    /// 마지막 결과 한 줄 (성공?, 내용)
+    pub msg: Option<(bool, String)>,
 }
 
 /// 로비 메뉴
@@ -64,7 +86,7 @@ pub enum MenuItem {
 
 pub const MENU: &[(MenuItem, &str, &str)] = &[
     (MenuItem::Train, "수련", "띠 지도"),
-    (MenuItem::Daily, "오늘의 수련", "다음 판"),
+    (MenuItem::Daily, "오늘의 수련", "2분"),
     (MenuItem::Codex, "비급 도감", ""),
     (MenuItem::Records, "수련 기록", ""),
     (MenuItem::Precheck, "입문 의식", "점검·감응"),
@@ -88,6 +110,8 @@ pub struct Outcome {
     pub new_scroll: Option<String>,
     /// 승급했으면 새 띠 이름
     pub promoted: Option<String>,
+    /// 도장 밖 실전 판이었다 (R 로 다시 하면 실전으로)
+    pub real: bool,
     pub ki: Option<i32>,
     /// 결과 화면이 열린 순간 (별이 하나씩 켜지는 연출)
     pub shown_at: Instant,
@@ -125,7 +149,13 @@ pub struct App {
     pub progress: BTreeMap<String, DojoProgress>,
     pub scrolls: BTreeMap<String, DojoScroll>,
     pub standing: Standing,
+    pub streak: DojoStreak,
+    pub seals: Vec<DojoSeal>,
+    /// 라운드에서 도착한 수 — 판이 끝나면 `dojo_keys` 에 더한다 (결과 카드의 많이 쓴 수)
+    key_counts: BTreeMap<String, u32>,
     fixture: Option<Fixture>,
+    /// 도장 밖 실전 — 내 실제 인덱스 (처음 쓸 때 읽는다)
+    real_fixture: Option<Fixture>,
     pub lobby_sel: usize,
     pub map_belt: usize,
     pub map_sel: usize,
@@ -204,7 +234,11 @@ impl App {
             progress,
             scrolls,
             standing,
+            streak: DojoStreak::default(),
+            seals: Vec::new(),
+            key_counts: BTreeMap::new(),
             fixture: None,
+            real_fixture: None,
             lobby_sel: 0,
             map_belt: 0,
             map_sel: 0,
@@ -220,6 +254,7 @@ impl App {
             shake: None,
             quit: false,
         };
+        app.reload_progress();
         app.sensei_line = app.say("lobby", |s| &s.lobby);
         if keymap_changed && initiated {
             // S19 — 배치 지문이 바뀐 뒤 첫 입장
@@ -261,18 +296,102 @@ impl App {
         if let Some(db) = &self.db {
             self.progress = db.dojo_progress();
             self.scrolls = db.dojo_scrolls();
+            self.streak = db.dojo_streak();
+            self.seals = db.dojo_seals();
+        }
+        self.apply_conditions();
+        if self.earn_seal() {
+            self.apply_conditions();
+        }
+    }
+
+    /// 기록이 아니라 조건으로 끝나는 과 — 연속일(검은띠)·인장 수(단). 저장하지 않고
+    /// 매번 계산해 최고 기록 자리에 끼워 넣는다(진실 소스 하나).
+    fn apply_conditions(&mut self) {
+        for b in &self.content.curriculum.belt {
+            for l in &b.lesson {
+                let met = match (l.days, l.seals) {
+                    (Some(d), _) => self.streak.best >= d,
+                    (_, Some(n)) => self.seals.len() as u32 >= n,
+                    _ => continue,
+                };
+                if met {
+                    let p = self.progress.entry(l.id.clone()).or_default();
+                    p.best_stars = 3;
+                } else {
+                    self.progress.remove(&l.id);
+                }
+            }
         }
         let has = |a: Action| self.bindings.has(a) && self.calib.observable(a);
         self.standing = progress::standing(&self.content.curriculum, &self.progress, &has);
+    }
+
+    /// 검은띠를 땄으면 이 OS 의 인장을 찍는다. 새로 찍었으면 `true`.
+    fn earn_seal(&mut self) -> bool {
+        let os = std::env::consts::OS;
+        let Some(black) = self
+            .content
+            .curriculum
+            .belt
+            .iter()
+            .position(|b| b.id == "black")
+        else {
+            return false;
+        };
+        if !self.standing.belts[black].completed || self.seals.iter().any(|s| s.os == os) {
+            return false;
+        }
+        let Some(db) = &self.db else {
+            return false;
+        };
+        if db.dojo_add_seal(os, now_secs(), "local").unwrap_or(false) {
+            self.seals = db.dojo_seals();
+            self.notify(&format!(
+                "◆ {} 인장이 찍혔다 — 단(段)의 인장 화면에서 코드로 다른 기기에 옮긴다",
+                os_name(os)
+            ));
+            return true;
+        }
+        false
+    }
+
+    /// 로컬 날짜 — 오늘의 수련 씨앗
+    pub fn today(&self) -> String {
+        self.db
+            .as_ref()
+            .map_or_else(|| "today".into(), Database::dojo_today)
+    }
+
+    /// 도장 밖 손버릇 (docs/19) — 최근 7일 레이어 수 횟수와 맨 화살표 비율.
+    /// 통계를 켜지 않았거나 모인 것이 없으면 `None`.
+    pub fn real_usage(&self) -> Option<(u64, Option<u64>)> {
+        let (rows, active) = self.db.as_ref()?.key_stats_since(7);
+        let km = kmd_core::keymap::effective_keymap(&self.config.launcher.keymap);
+        let r = kmd_core::keystats::KeyReport::build(&rows, active, 7, &km);
+        (!r.is_empty()).then(|| (r.total_moves(), r.raw_pct()))
+    }
+
+    /// 오늘의 수련 단계 미리보기 (입문 화면)
+    pub fn daily_preview(&self) -> Vec<Lesson> {
+        gauntlet::daily_stages(self.content, &|l| self.lesson_open(l), &self.today())
+    }
+
+    /// 지도에서 들어갈 수 있는 과인가 (자유 수련이 아니어도) — 오늘의 수련 재료
+    fn lesson_open(&self, l: &Lesson) -> bool {
+        let Some((belt, _, _)) = self.content.lesson(&l.id) else {
+            return false;
+        };
+        !l.is_boss() && self.standing.access(belt, l, &self.has()) == Access::Open
     }
 
     pub fn stars(&self, lesson_id: &str) -> u8 {
         self.progress.get(lesson_id).map_or(0, |p| p.best_stars)
     }
 
-    /// 지도에서 보이는 띠 행 수 (커리큘럼 + 검은띠 + 단)
+    /// 지도에서 보이는 띠 행 수
     pub fn map_rows(&self) -> usize {
-        self.content.curriculum.belt.len() + 2
+        self.content.curriculum.belt.len()
     }
 
     /// 지도 오른쪽 목록 — 과들 + 보스
@@ -359,11 +478,17 @@ impl App {
     }
 
     fn start_round(&mut self, lesson_id: &str) {
+        self.start_round_with(lesson_id, false);
+    }
+
+    /// `unlocked`: 띠 잠금을 건너뛴다 (입구의 오늘의 수련)
+    fn start_round_with(&mut self, lesson_id: &str, unlocked: bool) {
         let Some((belt, _, lesson)) = self.content.lesson(lesson_id) else {
             return;
         };
         match self.access(belt, lesson) {
             Access::Open => {}
+            Access::LockedBelt | Access::LockedBoss if unlocked => {}
             Access::Building => {
                 self.sensei_line = self.say("building", |s| &s.building);
                 return;
@@ -381,9 +506,40 @@ impl App {
                 return;
             }
         }
-        let content = self.content;
+        if lesson.kind == "seal" {
+            self.open_seals();
+            return;
+        }
         let now = Instant::now();
-        let play = match lesson.kind.as_str() {
+        match self.build_play(lesson, now) {
+            Some(p) => {
+                self.pause = None;
+                self.shake = None;
+                self.sensei_line = self.bindings.render(&lesson.why);
+                match p.inner() {
+                    Play::Ime(_) => self.notify(
+                        "OS 한글 입력기(두벌식)를 켜 두어라 — 판정은 도착한 글자로 한다",
+                    ),
+                    Play::Golf(_) if !self.calib.done => self.notify(
+                        "키 감응 시험 전이다 — 수가 안 먹으면 입문 의식에서 C 로 이 터미널을 보정하라",
+                    ),
+                    _ => {}
+                }
+                if lesson.kind == "daily" && self.streak.today_done {
+                    self.notify(
+                        "오늘은 이미 마쳤다 — 이 판은 연습이다. 연속일은 내일 다시 이어라.",
+                    );
+                }
+                self.screen = Screen::Round(Box::new(p));
+            }
+            None => self.notify("이 과의 수련 자료를 찾지 못했다"),
+        }
+    }
+
+    /// 과 하나의 라운드를 만든다 — 이어 붙이기의 단계도 같은 길로 만든다
+    fn build_play(&mut self, lesson: &Lesson, now: Instant) -> Option<Play> {
+        let content = self.content;
+        match lesson.kind.as_str() {
             "summon" => Round::new(content, lesson, self.fixture()).map(Play::Summon),
             "golf" => {
                 let unobservable: Vec<Action> = KEY_ACTIONS
@@ -394,25 +550,254 @@ impl App {
                 GolfRound::new(content, lesson, &|a| self.edge_for(a), unobservable, now)
                     .map(Play::Golf)
             }
-            "spar" => Some(Play::Spar(Spar::new(lesson, now))),
+            "spar" => {
+                // 카드에는 이 배치·터미널에서 이벤트 하나로 도착하는 수만 — 2탭(줄 처음)은
+                // 첫 탭이 다른 수로 먼저 도착해 오답이 된다
+                let mut l = lesson.clone();
+                l.moves.retain(|m| {
+                    Action::from_id(m)
+                        .and_then(|a| self.edge_for(a))
+                        .is_some_and(|e| e.seq.len() == 1)
+                });
+                Some(Play::Spar(Spar::new(&l, now)))
+            }
             "maze" => MazeRound::new(content, lesson, now).map(Play::Maze),
             "mouse" => MouseRound::new(lesson, now).map(Play::Mouse),
             "ime" => ImeRound::new(content, lesson, now).map(Play::Ime),
-            _ => None,
-        };
-        match play {
-            Some(p) => {
-                self.pause = None;
-                self.shake = None;
-                self.sensei_line = self.bindings.render(&lesson.why);
-                if lesson.kind == "ime" {
-                    self.notify("OS 한글 입력기(두벌식)를 켜 두어라 — 판정은 도착한 글자로 한다");
-                } else if lesson.kind == "golf" && !self.calib.done {
-                    self.notify("키 감응 시험 전이다 — 수가 안 먹으면 입문 의식에서 C 로 이 터미널을 보정하라");
-                }
-                self.screen = Screen::Round(Box::new(p));
+            "quiz" => {
+                let ids = self.quiz_scrolls(lesson.count.unwrap_or(10) as usize);
+                let seed = format!("{}.{}", lesson.id, now_secs());
+                QuizRound::new(content, &lesson.id, &ids, &seed, false, now).map(Play::Quiz)
             }
-            None => self.notify("이 과의 수련 자료를 찾지 못했다"),
+            "mixed" => {
+                let stages = lesson
+                    .stage
+                    .iter()
+                    .filter_map(|st| {
+                        let (_, _, src) = content.lesson(&st.from)?;
+                        STAGE_KINDS
+                            .contains(&src.kind.as_str())
+                            .then(|| src.staged(st))
+                    })
+                    .collect();
+                self.gauntlet(lesson, stages, now)
+            }
+            "daily" => {
+                let day = self.today();
+                let stages = gauntlet::daily_stages(content, &|l| self.lesson_open(l), &day);
+                self.gauntlet(lesson, stages, now)
+            }
+            _ => None,
+        }
+    }
+
+    /// 이어 붙이기 — 첫 단계를 만들 수 있을 때까지 앞에서부터 시도한다
+    fn gauntlet(&mut self, lesson: &Lesson, mut stages: Vec<Lesson>, now: Instant) -> Option<Play> {
+        while !stages.is_empty() {
+            if let Some(first) = self.build_play(&stages[0].clone(), now) {
+                let g = Gauntlet::new(lesson, stages, first, now);
+                return Some(Play::Mixed(Box::new(g)));
+            }
+            stages.remove(0);
+        }
+        None
+    }
+
+    /// 다음 단계를 넣는다 — 만들 수 없는 단계는 건너뛴다
+    fn advance_gauntlet(&mut self) {
+        loop {
+            let next = match &self.screen {
+                Screen::Round(p) => match p.as_ref() {
+                    Play::Mixed(g) if g.pending_next => g.next_stage().cloned(),
+                    _ => return,
+                },
+                _ => return,
+            };
+            let Some(lesson) = next else {
+                return;
+            };
+            let now = Instant::now();
+            let built = self.build_play(&lesson, now);
+            let line = format!("{} — {}", lesson.title, self.bindings.render(&lesson.why));
+            let Screen::Round(p) = &mut self.screen else {
+                return;
+            };
+            let Play::Mixed(g) = p.as_mut() else {
+                return;
+            };
+            match built {
+                Some(play) => {
+                    g.push(play, now);
+                    self.sensei_line = line;
+                    return;
+                }
+                None => {
+                    if g.skip() == RoundEvent::Finished {
+                        self.finish_round(true);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 종합 시험 문항 — 연 비급 중 숙련이 낮은 것부터, 모자라면 아직 못 연 권으로 채운다
+    fn quiz_scrolls(&self, n: usize) -> Vec<String> {
+        let mut rng = Rng::seeded(&format!("quiz.{}", now_secs()));
+        let mut open: Vec<(u8, u64, String)> = self
+            .content
+            .scrolls
+            .scroll
+            .iter()
+            .filter_map(|s| {
+                self.scrolls
+                    .get(&s.id)
+                    .map(|st| (st.mastery, rng.next(), s.id.clone()))
+            })
+            .collect();
+        open.sort();
+        let mut ids: Vec<String> = open.into_iter().map(|(_, _, id)| id).collect();
+        for s in &self.content.scrolls.scroll {
+            if ids.len() >= n {
+                break;
+            }
+            if !ids.contains(&s.id) {
+                ids.push(s.id.clone());
+            }
+        }
+        ids.truncate(n);
+        ids
+    }
+
+    /// 비급 도감에서 그 권의 시험 (S16)
+    fn start_codex_quiz(&mut self, scroll: &str) {
+        if !self.scrolls.contains_key(scroll) {
+            self.notify("아직 열지 않은 비급이다 — 과를 넘어 먼저 열어라");
+            return;
+        }
+        let seed = format!("codex.{scroll}.{}", now_secs());
+        let now = Instant::now();
+        if let Some(q) = QuizRound::new(
+            self.content,
+            CODEX_QUIZ,
+            &[scroll.to_string()],
+            &seed,
+            true,
+            now,
+        ) {
+            self.pause = None;
+            self.sensei_line = "외운 자는 잊고, 납득한 자는 쓴다.".into();
+            self.screen = Screen::Round(Box::new(Play::Quiz(q)));
+        }
+    }
+
+    /// 도장 밖 실전 — 내 인덱스 위에서, 내 실행 기록으로 의뢰를 낸다 (docs/10 §4-4)
+    fn start_real(&mut self, lesson_id: &str) {
+        let Some((_, _, lesson)) = self.content.lesson(lesson_id) else {
+            return;
+        };
+        let history: Vec<_> = self
+            .db
+            .as_ref()
+            .map(|d| d.query_history(80))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|h| matches!(h.item_type.as_str(), "app" | "file" | "dir"))
+            .collect();
+        if history.len() < REAL_MIN {
+            self.notify(&format!(
+                "실행 기록이 {}건이다 — {REAL_MIN}건이 쌓이면 도장 밖 실전이 열린다",
+                history.len()
+            ));
+            return;
+        }
+        let config = self.config.clone();
+        let fixture = self
+            .real_fixture
+            .get_or_insert_with(|| Fixture::from_engine(crate::cmd::create_search_engine(&config)));
+        let mut rng = Rng::seeded(&format!("real.{}", now_secs()));
+        let mut picks: Vec<Request> = Vec::new();
+        for h in history {
+            // 기록의 표시 이름이 인덱스에 그대로 있어야 의뢰가 된다
+            let name = h
+                .display
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&h.display)
+                .to_string();
+            if name.is_empty() || fixture.rank_of(&name, &name).is_none() {
+                continue;
+            }
+            let kind = match h.item_type.as_str() {
+                "app" => "앱",
+                "dir" => "폴더",
+                _ => "파일",
+            };
+            picks.push(Request {
+                ask: format!(
+                    "자주 여는 {kind} 「{name}」 를 불러라 (실행 {}회)",
+                    h.frequency
+                ),
+                target: Some(name),
+                accept: Vec::new(),
+            });
+            if picks.len() >= 15 {
+                break;
+            }
+        }
+        // 자주 쓰는 15개 중 다섯을 섞어서
+        for i in (1..picks.len()).rev() {
+            picks.swap(i, rng.below(i as u64 + 1) as usize);
+        }
+        picks.truncate(5);
+        match Round::real(lesson, picks, fixture) {
+            Some(r) => {
+                self.pause = None;
+                self.sensei_line = "도장 밖이다. 연습 목록이 아니라 네 컴퓨터의 수만 개 항목 위에서 불러라.".into();
+                self.screen = Screen::Round(Box::new(Play::Summon(r)));
+            }
+            None => self.notify("인덱스에서 실행 기록의 항목을 찾지 못했다 — kmd index 로 인덱스를 새로 만들어 보라"),
+        }
+    }
+
+    fn open_seals(&mut self) {
+        let os = std::env::consts::OS;
+        let code = self.seals.iter().find(|s| s.os == os).map(|s| {
+            store::seal_encode(&store::SealCode {
+                os: s.os.clone(),
+                belt: "black".into(),
+                at: s.earned_at,
+            })
+        });
+        self.screen = Screen::Seals(Box::new(SealView {
+            code,
+            ..Default::default()
+        }));
+    }
+
+    /// 인장 코드를 가져온다
+    fn import_seal(&mut self, code: &str) -> (bool, String) {
+        let seal = match store::seal_decode(code) {
+            Ok(s) => s,
+            Err(e) => return (false, e),
+        };
+        let Some(db) = &self.db else {
+            return (false, "기록 DB 를 열 수 없어 인장을 남기지 못한다".into());
+        };
+        match db.dojo_add_seal(&seal.os, seal.at, "imported") {
+            Ok(true) => {
+                self.reload_progress();
+                (
+                    true,
+                    format!(
+                        "◆ {} 인장을 들였다 — 인장 {}/3",
+                        os_name(&seal.os),
+                        self.seals.len()
+                    ),
+                )
+            }
+            Ok(false) => (true, format!("{} 인장은 이미 있다", os_name(&seal.os))),
+            Err(e) => (false, format!("저장 실패: {e}")),
         }
     }
 
@@ -509,24 +894,32 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) {
+        if let Screen::Seals(v) = &mut self.screen {
+            if let Some(input) = &mut v.input {
+                input.push_str(text.trim());
+            }
+            return;
+        }
         if self.pause.is_some() {
             return;
         }
-        if let Screen::Round(play) = &self.screen {
-            if !matches!(**play, Play::Summon(_)) {
-                return;
-            }
-            let mut fixture = self
-                .fixture
-                .take()
-                .unwrap_or_else(|| Fixture::new(self.content));
-            if let Screen::Round(play) = &mut self.screen {
-                if let Play::Summon(round) = play.as_mut() {
-                    round.on_paste(text, &mut fixture);
+        let mut fixture = self.fixture.take();
+        let mut real = self.real_fixture.take();
+        let content = self.content;
+        if let Screen::Round(play) = &mut self.screen {
+            if let Play::Summon(round) = play.inner_mut() {
+                let fx = if round.real {
+                    real.as_mut()
+                } else {
+                    Some(fixture.get_or_insert_with(|| Fixture::new(content)))
+                };
+                if let Some(fx) = fx {
+                    round.on_paste(text, fx);
                 }
             }
-            self.fixture = Some(fixture);
         }
+        self.fixture = fixture;
+        self.real_fixture = real;
     }
 
     pub fn on_resize(&mut self, w: u16, h: u16) {
@@ -545,11 +938,17 @@ impl App {
         let y = i32::from(ev.row) - i32::from(sy + ARENA_ORIGIN.1);
         let now = Instant::now();
         let out = match &mut self.screen {
-            Screen::Round(play) => match play.as_mut() {
-                Play::Mouse(r) => r.on_mouse(ev.kind, x, y, now),
-                Play::Ime(r) => r.on_mouse(ev.kind, x, y, now),
-                _ => return false,
-            },
+            Screen::Round(play) => {
+                let ev = match play.inner_mut() {
+                    Play::Mouse(r) => r.on_mouse(ev.kind, x, y, now),
+                    Play::Ime(r) => r.on_mouse(ev.kind, x, y, now),
+                    _ => return false,
+                };
+                match play.as_mut() {
+                    Play::Mixed(g) => g.absorb(ev, now),
+                    _ => ev,
+                }
+            }
             _ => return false,
         };
         self.after_round_event(out);
@@ -584,16 +983,23 @@ impl App {
             Screen::Map => self.map_key(key),
             Screen::Intro(ref id) => {
                 let id = id.clone();
+                let summon = self
+                    .content
+                    .lesson(&id)
+                    .is_some_and(|(_, _, l)| l.kind == "summon");
                 match key.code {
                     KeyCode::Enter | KeyCode::Char(' ') => self.start_round(&id),
+                    KeyCode::Char('r') | KeyCode::Char('R') if summon => self.start_real(&id),
                     KeyCode::Esc => self.open_map_at(&id),
                     _ => {}
                 }
             }
             Screen::Result(ref out) => {
-                let id = out.lesson_id.clone();
+                let (id, real) = (out.lesson_id.clone(), out.real);
                 match key.code {
+                    KeyCode::Char('r') | KeyCode::Char('R') if real => self.start_real(&id),
                     KeyCode::Char('r') | KeyCode::Char('R') => self.start_round(&id),
+                    KeyCode::Char('c') | KeyCode::Char('C') => self.screen = Screen::Card,
                     KeyCode::Enter | KeyCode::Esc | KeyCode::Char(' ') => {
                         self.open_map();
                         self.sensei_line = self.say("clear", |s| &s.clear);
@@ -606,14 +1012,34 @@ impl App {
                 Nav::Down => {
                     self.codex_sel = (self.codex_sel + 1).min(self.content.scrolls.scroll.len() - 1)
                 }
+                Nav::Enter => {
+                    let id = self.content.scrolls.scroll[self.codex_sel].id.clone();
+                    self.start_codex_quiz(&id);
+                }
                 Nav::Back => self.screen = Screen::Lobby,
                 _ => {}
             },
             Screen::Records => {
-                if matches!(self.nav(key), Nav::Back | Nav::Enter) {
+                if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                    self.screen = Screen::Card;
+                } else if matches!(self.nav(key), Nav::Back | Nav::Enter) {
                     self.screen = Screen::Lobby;
                 }
             }
+            Screen::Card => match key.code {
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    let text = super::card::text(self);
+                    match kmd_core::clipboard::set_text(&text) {
+                        Ok(()) => self.notify("결과 카드를 클립보드에 담았다 — 붙여 넣어 자랑하라"),
+                        Err(e) => self.notify(&format!("클립보드에 담지 못했다: {e}")),
+                    }
+                }
+                KeyCode::Enter | KeyCode::Esc | KeyCode::Char(' ') | KeyCode::Char('q') => {
+                    self.screen = Screen::Lobby;
+                }
+                _ => {}
+            },
+            Screen::Seals(_) => self.seals_key(key),
             Screen::Diagnose(ref d, scroll) => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     let s = scroll.saturating_sub(1);
@@ -629,6 +1055,59 @@ impl App {
                 _ => {}
             },
             Screen::Round(_) | Screen::Calib(_) => unreachable!(),
+        }
+    }
+
+    fn seals_key(&mut self, key: KeyEvent) {
+        let Screen::Seals(v) = &mut self.screen else {
+            return;
+        };
+        if let Some(input) = &mut v.input {
+            match key.code {
+                KeyCode::Esc => v.input = None,
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                KeyCode::Enter => {
+                    let code = input.clone();
+                    let msg = self.import_seal(&code);
+                    let ok = msg.0;
+                    if let Screen::Seals(v) = &mut self.screen {
+                        v.msg = Some(msg);
+                        if ok {
+                            v.input = None;
+                        }
+                    }
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    input.push(c);
+                }
+                _ => {}
+            }
+            return;
+        }
+        match key.code {
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                v.input = Some(String::new());
+                v.msg = None;
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                let msg = match &v.code {
+                    Some(code) => match kmd_core::clipboard::set_text(code) {
+                        Ok(()) => (true, "인장 코드를 클립보드에 담았다".to_string()),
+                        Err(e) => (false, format!("클립보드에 담지 못했다: {e}")),
+                    },
+                    None => (
+                        false,
+                        "이 OS 의 인장이 아직 없다 — 검은띠를 먼저 따라".to_string(),
+                    ),
+                };
+                v.msg = Some(msg);
+            }
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('q') => {
+                self.open_map_at("dan.1");
+            }
+            _ => {}
         }
     }
 
@@ -698,7 +1177,7 @@ impl App {
             Nav::Back => self.quit = true,
             Nav::Enter => match MENU[self.lobby_sel].0 {
                 MenuItem::Train => self.open_map(),
-                MenuItem::Daily => self.notify("오늘의 수련은 다음 판에서 열린다 (검은띠 조건)."),
+                MenuItem::Daily => self.start_round_with("black.1", true),
                 MenuItem::Codex => self.screen = Screen::Codex,
                 MenuItem::Records => self.screen = Screen::Records,
                 MenuItem::Precheck => {
@@ -759,16 +1238,27 @@ impl App {
         }
         let now = Instant::now();
         let action = self.calib.translate(&key, Os::current());
+        if let Some(a) = action {
+            *self.key_counts.entry(a.id().to_string()).or_default() += 1;
+        }
         // 선택을 모르는 모드에서 Shift 는 그냥 이동이다
         let bare = action.map(|a| a.unshifted().unwrap_or(a));
         let mut fixture = self.fixture.take();
+        let mut real = self.real_fixture.take();
+        let content = self.content;
         let Screen::Round(play) = &mut self.screen else {
+            self.fixture = fixture;
+            self.real_fixture = real;
             return;
         };
-        let ev = match play.as_mut() {
+        let ev = match play.inner_mut() {
             Play::Summon(r) => {
-                let fx = fixture.get_or_insert_with(|| Fixture::new(self.content));
-                r.on_key(key, fx)
+                let fx = if r.real {
+                    real.as_mut()
+                } else {
+                    Some(fixture.get_or_insert_with(|| Fixture::new(content)))
+                };
+                fx.map_or(RoundEvent::None, |fx| r.on_key(key, fx))
             }
             Play::Golf(r) => match key.code {
                 KeyCode::Tab => {
@@ -796,8 +1286,15 @@ impl App {
             },
             Play::Mouse(r) => r.on_key(&key, now),
             Play::Ime(r) => r.on_key(&key, now),
+            Play::Quiz(r) => r.on_key(&key, now),
+            Play::Mixed(_) => RoundEvent::None,
+        };
+        let ev = match play.as_mut() {
+            Play::Mixed(g) => g.absorb(ev, now),
+            _ => ev,
         };
         self.fixture = fixture;
+        self.real_fixture = real;
         self.after_round_event(ev);
     }
 
@@ -807,7 +1304,7 @@ impl App {
         };
         let streak = play.fail_streak();
         let mistakes = play.total_mistakes();
-        let combo = match play.as_ref() {
+        let combo = match play.inner() {
             Play::Spar(s) => s.combo,
             _ => 0,
         };
@@ -848,26 +1345,47 @@ impl App {
             _ => {}
         }
         if let Screen::Round(play) = &self.screen {
-            if let Play::Summon(round) = play.as_ref() {
+            if let Play::Summon(round) = play.inner() {
                 if round.hangul_warn {
                     self.sensei_line = self.say("hangul", |s| &s.hangul);
                 }
             }
         }
+        self.advance_gauntlet();
     }
 
     fn restart_round(&mut self) {
         if let Screen::Round(play) = &self.screen {
             let id = play.lesson_id().to_string();
-            self.start_round(&id);
+            match play.inner() {
+                Play::Summon(r) if r.real => self.start_real(&id),
+                Play::Quiz(q) if q.codex => {
+                    let scroll = q.question().scroll.clone();
+                    self.start_codex_quiz(&scroll);
+                }
+                _ => self.start_round_with(&id, id == "black.1"),
+            }
         }
     }
 
     fn abandon_round(&mut self) {
         self.pause = None;
+        self.flush_keys();
         if let Screen::Round(play) = &self.screen {
             let id = play.lesson_id().to_string();
-            self.open_map_at(&id);
+            if id == CODEX_QUIZ {
+                self.screen = Screen::Codex;
+            } else {
+                self.open_map_at(&id);
+            }
+        }
+    }
+
+    /// 판에서 쓴 수를 더한다 (결과 카드)
+    fn flush_keys(&mut self) {
+        let counts = std::mem::take(&mut self.key_counts);
+        if let (Some(db), false) = (&self.db, counts.is_empty()) {
+            let _ = db.dojo_add_keys(&counts);
         }
     }
 
@@ -876,19 +1394,50 @@ impl App {
         let Screen::Round(play) = std::mem::replace(&mut self.screen, Screen::Lobby) else {
             return;
         };
+        self.flush_keys();
+        // 비급 도감의 권별 시험 — 기록 없이 숙련만
+        if let Play::Quiz(q) = play.as_ref() {
+            if q.codex {
+                let q = q.question();
+                let ok = matches!(play.as_ref(), Play::Quiz(r) if !r.correct.is_empty());
+                let mastery = match (&self.db, ok) {
+                    (Some(db), true) => db.dojo_master_scroll(&q.scroll).ok().flatten(),
+                    _ => None,
+                };
+                self.reload_progress();
+                self.notify(&match mastery {
+                    Some(m) => format!("卷{} 숙련 {}", q.scroll, "★".repeat(m as usize)),
+                    None if ok => format!("卷{} 정답", q.scroll),
+                    None => format!("卷{} 오답 — 본문을 다시 읽어라", q.scroll),
+                });
+                self.screen = Screen::Codex;
+                return;
+            }
+        }
         let Some((_, _, lesson)) = self.content.lesson(play.lesson_id()) else {
             return;
         };
-        let sum = play.summary(cleared);
+        let mut sum = play.summary(cleared);
         let duration = play.started().elapsed();
+        let real = matches!(play.inner(), Play::Summon(r) if r.real);
+        let mut streak = None;
 
         let before = self.standing.reach;
         let mut new_best = false;
         let mut new_scroll = None;
         if let Some(db) = &self.db {
             let run = DojoRun {
-                lesson: lesson.id.clone(),
-                kind: lesson.kind.clone(),
+                // 도장 밖 실전은 인덱스가 사람마다 달라 과의 최고 기록에 섞지 않는다
+                lesson: if real {
+                    "real.summon".into()
+                } else {
+                    lesson.id.clone()
+                },
+                kind: if real {
+                    "real".into()
+                } else {
+                    lesson.kind.clone()
+                },
                 strokes: sum.strokes,
                 par: sum.par,
                 score: sum.score,
@@ -901,13 +1450,22 @@ impl App {
                 terminal: self.report.terminal.clone(),
                 keymap_fp: Some(self.bindings.fingerprint.clone()),
             };
-            new_best = db.dojo_record_run(&run).unwrap_or(false);
-            if sum.stars > 0 {
+            new_best = db.dojo_record_run(&run).unwrap_or(false) && !real;
+            if sum.stars > 0 && !real {
                 if let Some(s) = &lesson.scroll {
                     if db.dojo_unlock_scroll(s).unwrap_or(false) {
                         new_scroll = Some(s.clone());
                     }
                 }
+            }
+            if let (Play::Quiz(q), true) = (play.as_ref(), cleared) {
+                for s in &q.correct {
+                    let _ = db.dojo_master_scroll(s);
+                }
+            }
+            if lesson.kind == "daily" && cleared && sum.stars > 0 {
+                let _ = db.dojo_complete_daily(sum.score);
+                streak = Some(db.dojo_streak().days);
             }
         }
         self.reload_progress();
@@ -916,10 +1474,7 @@ impl App {
                 .curriculum
                 .belt
                 .get(self.standing.reach)
-                .map_or_else(
-                    || "모든 수련장 — 다음 띠는 공사 중".into(),
-                    |b| b.name.clone(),
-                )
+                .map_or_else(|| "모든 띠를 넘었다 — 삼국 통일".into(), |b| b.name.clone())
         });
 
         self.sensei_line = match (cleared, promoted.is_some()) {
@@ -931,9 +1486,18 @@ impl App {
                 .clone()
                 .unwrap_or_else(|| "다시 하라. 몸이 기억할 때까지.".into()),
         };
+        if let Some(n) = streak {
+            sum.stats
+                .push(("연속 수련".into(), format!("{n}일 (검은띠 조건 3일)")));
+            self.sensei_line = format!("연속 {n}일. 띠는 매는 것이 아니라 매일 다시 매는 것이다.");
+        }
         self.screen = Screen::Result(Box::new(Outcome {
             lesson_id: lesson.id.clone(),
-            title: lesson.title.clone(),
+            title: if real {
+                "도장 밖 실전".into()
+            } else {
+                lesson.title.clone()
+            },
             kind: lesson.kind.clone(),
             is_boss: lesson.is_boss(),
             cleared,
@@ -947,9 +1511,27 @@ impl App {
             new_best,
             new_scroll,
             promoted,
+            real,
             ki: sum.ki,
             shown_at: Instant::now(),
         }));
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// OS id → 표시 이름
+pub fn os_name(os: &str) -> &'static str {
+    match os {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        _ => "?",
     }
 }
 
@@ -986,6 +1568,7 @@ pub fn row_mark(row: &OutcomeRow) -> Option<Mark> {
 mod tests {
     use super::*;
     use crate::tui::dojo::binding::Trust;
+    use crate::tui::dojo::card;
     use crate::tui::dojo::precheck::Backend;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
@@ -1073,7 +1656,7 @@ mod tests {
     /// 사부의 수대로 현재 의뢰를 푼다
     fn solve_current(app: &mut App) {
         let (query, downs) = match &app.screen {
-            Screen::Round(p) => match p.as_ref() {
+            Screen::Round(p) => match p.inner() {
                 Play::Summon(r) => (r.sage().query.clone(), r.sage().downs),
                 _ => panic!("소환술이 아니다"),
             },
@@ -1223,6 +1806,12 @@ mod tests {
             {
                 a.screen = Screen::Intro(l.id.clone());
                 press(&mut a, KeyCode::Enter);
+                if l.kind == "seal" {
+                    assert!(matches!(a.screen, Screen::Seals(_)), "{}: 인장 화면", l.id);
+                    draw(&a, 80, 24);
+                    press(&mut a, KeyCode::Esc);
+                    continue;
+                }
                 assert!(matches!(a.screen, Screen::Round(_)), "{}: 시작 안 됨", l.id);
                 draw(&a, 80, 24);
                 draw(&a, 132, 40);
@@ -1233,6 +1822,360 @@ mod tests {
         }
         a.start_calib();
         draw(&a, 80, 24);
+        for s in [Screen::Card, Screen::Seals(Box::default())] {
+            a.screen = s;
+            draw(&a, 80, 24);
+            draw(&a, 132, 40);
+        }
+    }
+
+    /// 지금 라운드(이어 붙이기면 지금 단계)를 한 걸음 푼다
+    fn solve_step(a: &mut App, now: &mut Instant) {
+        use crate::tui::dojo::ime::Phase as P;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let (sx, sy) = (10u16, 3u16);
+        let mouse = |a: &mut App, kind, x: u16, y: u16| {
+            a.on_mouse(MouseEvent {
+                kind,
+                column: sx + ARENA_ORIGIN.0 + x,
+                row: sy + ARENA_ORIGIN.1 + y,
+                modifiers: KeyModifiers::NONE,
+            });
+        };
+        let Screen::Round(p) = &a.screen else { return };
+        match p.inner() {
+            Play::Summon(_) => solve_current(a),
+            Play::Golf(r) => {
+                let (path, edges) = (r.sage().moves.clone(), r.allowed[r.idx].clone());
+                for m in path {
+                    let e = edges.iter().find(|e| e.action == m).unwrap();
+                    for s in &e.seq {
+                        send(a, *s);
+                    }
+                }
+                press(a, KeyCode::Enter);
+            }
+            Play::Spar(s) => {
+                let want = s.prompt().unwrap();
+                send(a, want);
+            }
+            Play::Quiz(q) => {
+                let ans = q.question().answer;
+                press(a, KeyCode::Char(char::from(b'1' + ans as u8)));
+                press(a, KeyCode::Enter);
+            }
+            Play::Ime(r) => match r.phase {
+                P::Type => {
+                    let line = r.line().to_string();
+                    type_str(a, &line);
+                }
+                P::Click => {
+                    let t = r.target.unwrap();
+                    mouse(a, MouseEventKind::Down(MouseButton::Left), t.x + 1, t.y);
+                }
+                P::LineDone(_) => {
+                    *now += Duration::from_secs(1);
+                    a.on_tick(*now);
+                }
+            },
+            Play::Mouse(r) => {
+                let t = r.target().unwrap();
+                let (rect, button) = (t.rect, t.button);
+                let (x, y) = (rect.x + rect.w / 2, rect.y + rect.h / 2);
+                mouse(a, MouseEventKind::Moved, x, y);
+                if let Some(b) = button {
+                    mouse(a, MouseEventKind::Down(b), x, y);
+                    mouse(a, MouseEventKind::Up(b), x, y);
+                }
+            }
+            Play::Maze(r) => {
+                for m in r.sages[r.idx].clone() {
+                    press(a, arrow(m));
+                }
+                *now += Duration::from_secs(2);
+                a.on_tick(*now);
+            }
+            Play::Mixed(_) => unreachable!(),
+        }
+    }
+
+    fn play_out(a: &mut App, id: &str) {
+        a.on_resize(100, 30);
+        a.screen = Screen::Intro(id.into());
+        press(a, KeyCode::Enter);
+        let mut now = Instant::now();
+        let mut guard = 0;
+        while matches!(a.screen, Screen::Round(_)) {
+            solve_step(a, &mut now);
+            guard += 1;
+            assert!(guard < 500, "{id}: 끝나지 않는다");
+        }
+    }
+
+    #[test]
+    fn 하루치_실전은_다섯_단계를_이어_완주한다() {
+        let mut a = app();
+        a.free = true;
+        a.on_resize(100, 30);
+        a.screen = Screen::Intro("brown.3".into());
+        assert!(
+            draw(&a, 80, 24).contains("아침 — 의뢰 소환"),
+            "입문에 단계 목록"
+        );
+        press(&mut a, KeyCode::Enter);
+        let text = draw(&a, 100, 30);
+        assert!(text.contains("◈"), "머리줄에 단계 표지\n{text}");
+        let mut now = Instant::now();
+        let mut kinds = Vec::new();
+        let mut guard = 0;
+        while let Screen::Round(p) = &a.screen {
+            let k = std::mem::discriminant(p.inner());
+            if kinds.last() != Some(&k) {
+                kinds.push(k);
+            }
+            solve_step(&mut a, &mut now);
+            guard += 1;
+            assert!(guard < 300, "끝나지 않는다\n{}", draw(&a, 100, 30));
+        }
+        assert!(kinds.len() >= 4, "단계마다 다른 라운드");
+        let Screen::Result(out) = &a.screen else {
+            panic!("결과가 아니다")
+        };
+        assert!(out.cleared);
+        assert!(out.stars >= 2, "{}", out.stars);
+        assert_eq!(out.stats.len(), 5, "{:?}", out.stats);
+        assert!(draw(&a, 80, 24).contains("저녁 — 문단 손질"));
+    }
+
+    #[test]
+    fn 혼합_대련과_종합_시험을_넘는다() {
+        let mut a = app();
+        a.free = true;
+        play_out(&mut a, "brown.1");
+        let Screen::Result(out) = &a.screen else {
+            panic!()
+        };
+        assert!(out.cleared && out.stars >= 2);
+
+        // 비급 둘을 열어 둔다 — 시험은 연 권부터 낸다
+        for s in ["七", "九"] {
+            a.db.as_ref().unwrap().dojo_unlock_scroll(s).unwrap();
+        }
+        a.reload_progress();
+        a.screen = Screen::Intro("brown.2".into());
+        press(&mut a, KeyCode::Enter);
+        let Screen::Round(p) = &a.screen else {
+            panic!()
+        };
+        let Play::Quiz(q) = p.as_ref() else { panic!() };
+        assert_eq!(q.questions.len(), 10);
+        let first: Vec<_> = q.questions[..2].iter().map(|q| q.scroll.clone()).collect();
+        assert!(first.contains(&"七".to_string()) && first.contains(&"九".to_string()));
+        assert!(draw(&a, 80, 24).contains("비급 시험"));
+        play_out(&mut a, "brown.2");
+        let Screen::Result(out) = &a.screen else {
+            panic!()
+        };
+        assert_eq!(out.stars, 3);
+        assert_eq!(a.scrolls["七"].mastery, 1, "맞힌 권은 숙련이 오른다");
+    }
+
+    #[test]
+    fn 관문_이탈마는_게이지를_달고_시작한다() {
+        let mut a = app();
+        a.free = true;
+        a.screen = Screen::Intro("brown.boss".into());
+        press(&mut a, KeyCode::Enter);
+        let Screen::Round(p) = &a.screen else {
+            panic!()
+        };
+        assert!(p.boss().is_some());
+        let text = draw(&a, 80, 24);
+        assert!(text.contains("마") && text.contains("기"), "{text}");
+        assert!(text.contains("第一關"), "첫 단계 표지\n{text}");
+    }
+
+    #[test]
+    fn 오늘의_수련은_입구에서_바로_들어가_연속일을_남긴다() {
+        let mut a = app();
+        a.screen = Screen::Lobby;
+        a.lobby_sel = MENU.iter().position(|m| m.0 == MenuItem::Daily).unwrap();
+        press(&mut a, KeyCode::Enter);
+        assert!(
+            matches!(&a.screen, Screen::Round(p) if matches!(p.as_ref(), Play::Mixed(_))),
+            "흰띠여도 오늘의 수련은 열린다"
+        );
+        let mut now = Instant::now();
+        let mut guard = 0;
+        while matches!(a.screen, Screen::Round(_)) {
+            solve_step(&mut a, &mut now);
+            guard += 1;
+            assert!(guard < 300, "끝나지 않는다\n{}", draw(&a, 100, 30));
+        }
+        let Screen::Result(out) = &a.screen else {
+            panic!()
+        };
+        assert!(out.cleared);
+        assert!(
+            out.stats.iter().any(|(k, _)| k == "연속 수련"),
+            "{:?}",
+            out.stats
+        );
+        assert_eq!(a.streak.days, 1);
+        assert!(a.streak.today_done);
+        assert!(draw(&a, 80, 24).contains("연속 수련"));
+        a.screen = Screen::Lobby;
+        assert!(draw(&a, 80, 24).contains("✓ 연속 1일"));
+    }
+
+    #[test]
+    fn 사흘을_이으면_검은띠와_인장이다() {
+        let mut a = app();
+        a.free = true;
+        // 갈색띠까지 마친 기록 — 조건 과(검은띠·단)는 빼고
+        let db = a.db.take().unwrap();
+        for b in &a.content.curriculum.belt {
+            for l in b.lesson.iter().chain(b.boss.iter()) {
+                if l.days.is_some() || l.seals.is_some() || b.id == "dan" {
+                    continue;
+                }
+                db.dojo_record_run(&DojoRun {
+                    lesson: l.id.clone(),
+                    kind: l.kind.clone(),
+                    stars: 1,
+                    os: "macos".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+        }
+        a.db = Some(db);
+        a.reload_progress();
+        let black = a
+            .content
+            .curriculum
+            .belt
+            .iter()
+            .position(|b| b.id == "black")
+            .unwrap();
+        assert_eq!(a.standing.current, black, "연속일 전에는 검은띠 수련 중");
+        assert!(a.seals.is_empty());
+
+        a.streak = DojoStreak {
+            days: 3,
+            today_done: true,
+            best: 3,
+            total: 3,
+        };
+        a.apply_conditions();
+        assert!(a.earn_seal());
+        assert!(a.standing.belts[black].completed);
+        assert_eq!(a.seals.len(), 1);
+        assert_eq!(a.seals[0].os, std::env::consts::OS);
+        assert!(!a.earn_seal(), "인장은 한 번만");
+
+        // 다른 기기의 인장 코드를 붙여 넣는다
+        let other = if std::env::consts::OS == "linux" {
+            "windows"
+        } else {
+            "linux"
+        };
+        let code = store::seal_encode(&store::SealCode {
+            os: other.into(),
+            belt: "black".into(),
+            at: 1,
+        });
+        a.screen = Screen::Intro("dan.1".into());
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.screen, Screen::Seals(_)));
+        press(&mut a, KeyCode::Char('i'));
+        a.on_paste(&code);
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.seals.len(), 2);
+        let text = draw(&a, 80, 24);
+        assert!(text.contains("인장을 들였다"), "{text}");
+        // 들이면서 DB 의 연속일(0)로 다시 계산됐다 — 시험용 연속일을 되살린다
+        a.streak.best = 3;
+        a.apply_conditions();
+        a.screen = Screen::Card;
+        let text = draw(&a, 80, 24);
+        assert!(text.contains("검은띠") && text.contains("◆"), "{text}");
+    }
+
+    #[test]
+    fn 비급_도감에서_권별_시험을_본다() {
+        let mut a = app();
+        a.db.as_ref().unwrap().dojo_unlock_scroll("一").unwrap();
+        a.reload_progress();
+        a.screen = Screen::Codex;
+        a.codex_sel = 0;
+        press(&mut a, KeyCode::Enter);
+        let Screen::Round(p) = &a.screen else {
+            panic!("시험이 열려야")
+        };
+        let Play::Quiz(q) = p.as_ref() else { panic!() };
+        let wrong = (q.question().answer + 1) % q.question().choices.len();
+        press(&mut a, KeyCode::Char(char::from(b'1' + wrong as u8)));
+        let text = draw(&a, 80, 24);
+        assert!(
+            text.contains("다시 펼쳐"),
+            "오답이면 그 권을 펼친다\n{text}"
+        );
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.screen, Screen::Codex));
+        assert_eq!(a.scrolls["一"].mastery, 0);
+        press(&mut a, KeyCode::Enter);
+        let mut now = Instant::now();
+        solve_step(&mut a, &mut now);
+        assert!(matches!(a.screen, Screen::Codex));
+        assert_eq!(a.scrolls["一"].mastery, 1);
+        assert!(
+            a.db.as_ref().unwrap().dojo_recent_runs(5).is_empty(),
+            "권별 시험은 기록하지 않는다"
+        );
+        // 잠긴 권은 시험을 열지 않는다
+        a.codex_sel = 5;
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.screen, Screen::Codex));
+    }
+
+    #[test]
+    fn 쓴_수는_결과_카드에_쌓인다() {
+        let mut a = app();
+        a.free = true;
+        play_out(&mut a, "orange.1");
+        let keys = a.db.as_ref().unwrap().dojo_keys();
+        assert!(!keys.is_empty());
+        assert!(keys.iter().any(|(k, _)| k == "WordRight"), "{keys:?}");
+        let text = card::text(&a);
+        assert!(text.contains("많이 쓴 수") && text.contains("█"), "{text}");
+        assert!(!text.contains("실전 7일"), "손버릇 통계가 없으면 줄도 없다");
+        a.db.as_ref()
+            .unwrap()
+            .key_stats_add(&[("move:nav:H".into(), 30), ("raw:Left".into(), 10)])
+            .unwrap();
+        let text = card::text(&a);
+        assert!(
+            text.contains("실전 7일  레이어 수 30번 · 맨 화살표 25%"),
+            "{text}"
+        );
+        for l in text.lines() {
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(l),
+                card::WIDTH + 4,
+                "카드 줄 폭이 고르다: {l}"
+            );
+        }
+    }
+
+    #[test]
+    fn 실행_기록이_적으면_도장_밖_실전은_닫혀_있다() {
+        let mut a = app();
+        a.screen = Screen::Intro("white.1".into());
+        assert!(draw(&a, 80, 24).contains("R 도장 밖 실전"));
+        press(&mut a, KeyCode::Char('r'));
+        assert!(matches!(a.screen, Screen::Intro(_)));
+        assert!(a.notice.as_ref().unwrap().0.contains("실행 기록"));
     }
 
     #[test]
@@ -1507,6 +2450,48 @@ mod tests {
         a.start_calib();
         println!("{}", draw(&a, 80, 24));
         a.screen = Screen::Codex;
+        println!("{}", draw(&a, 80, 24));
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_m5() {
+        let mut a = app();
+        a.free = true;
+        a.screen = Screen::Lobby;
+        println!("{}", draw(&a, 80, 24));
+        for b in 6..9 {
+            a.map_belt = b;
+            a.map_sel = 0;
+            a.screen = Screen::Map;
+            println!("{}", draw(&a, 80, 24));
+        }
+        for id in [
+            "brown.1",
+            "brown.2",
+            "brown.3",
+            "brown.boss",
+            "black.1",
+            "dan.1",
+            "dan.boss",
+        ] {
+            a.screen = Screen::Intro(id.into());
+            println!("{}", draw(&a, 80, 24));
+            press(&mut a, KeyCode::Enter);
+            println!("{}", draw(&a, 80, 24));
+            if matches!(a.screen, Screen::Round(_)) {
+                let later = Instant::now() + Duration::from_millis(2000);
+                a.on_tick(later);
+                println!("{}", draw(&a, 80, 24));
+                press(&mut a, KeyCode::Esc);
+                press(&mut a, KeyCode::Esc);
+            } else {
+                press(&mut a, KeyCode::Esc);
+            }
+        }
+        play_out(&mut a, "brown.3");
+        println!("{}", draw(&a, 80, 24));
+        a.screen = Screen::Card;
         println!("{}", draw(&a, 80, 24));
     }
 

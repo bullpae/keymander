@@ -23,6 +23,11 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    /// 내 실제 인덱스 위의 엔진 (도장 밖 실전)
+    pub fn from_engine(engine: SearchEngine) -> Self {
+        Self { engine }
+    }
+
     pub fn new(content: &Content) -> Self {
         let items = content
             .summon
@@ -55,7 +60,7 @@ impl Fixture {
         results.into_iter().map(|r| r.item).collect()
     }
 
-    fn rank_of(&mut self, query: &str, target: &str) -> Option<usize> {
+    pub fn rank_of(&mut self, query: &str, target: &str) -> Option<usize> {
         self.search(query).iter().position(|i| i.name == target)
     }
 }
@@ -215,12 +220,32 @@ pub struct Round {
     pub boss: Option<BossState>,
     /// 마지막 판정 순간 (화면 플래시용)
     pub flash: Option<(bool, Instant)>,
+    /// 도장 밖 실전 (내 인덱스) — 기록은 과의 최고 기록에 섞지 않는다
+    pub real: bool,
 }
 
 impl Round {
     pub fn new(content: &Content, lesson: &Lesson, fixture: &mut Fixture) -> Option<Self> {
         let set = content.summon_set(lesson.set.as_deref()?)?;
-        let requests = set.requests.clone();
+        let requests = lesson.window(&set.requests);
+        Self::with_requests(lesson, requests, fixture)
+    }
+
+    /// 도장 밖 실전 — 내 인덱스 위에서 내 실행 기록으로 만든 의뢰 (docs/10 §4-4)
+    pub fn real(lesson: &Lesson, requests: Vec<Request>, fixture: &mut Fixture) -> Option<Self> {
+        let mut r = Self::with_requests(lesson, requests, fixture)?;
+        r.real = true;
+        Some(r)
+    }
+
+    fn with_requests(
+        lesson: &Lesson,
+        requests: Vec<Request>,
+        fixture: &mut Fixture,
+    ) -> Option<Self> {
+        if requests.is_empty() {
+            return None;
+        }
         let sages: Vec<Sage> = requests.iter().map(|r| sage_for(fixture, r)).collect();
         let pars = sages
             .iter()
@@ -251,6 +276,7 @@ impl Round {
             started: Instant::now(),
             boss,
             flash: None,
+            real: false,
         })
     }
 

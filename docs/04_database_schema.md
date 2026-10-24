@@ -137,8 +137,11 @@ flowchart TD
 | 1 | history, bookmarks, kv_store 테이블 생성 | v0.1 |
 | 2 | `idx_history_executed_at` — frecency 쿼리 성능 | — |
 | 3 | `content_files` + `content_fts`(FTS5) — 문서 본문 검색([15](15_content_search_plan.md)) | v0.15.0 |
+| 4 | history `item_type` 표기 정규화 — UI마다 갈린 행을 합친다 | v0.16.x |
+| 5 | kmd dojo 수련 기록 — `dojo_runs`·`dojo_progress`·`dojo_scrolls`·`dojo_daily`·`dojo_seals`·`dojo_keys` ([10](10_dojo_plan.md) §10) | dojo M1 |
+| 6 | `key_stats(day, metric, count)` — 손버릇 통계, 횟수만 ([19](19_key_stats.md)) | dojo M5 |
 
-**현재 `user_version`은 3이다** (`crates/kmd-core/src/db.rs`). 이 표를 고칠 때는
+**현재 `user_version`은 6이다** (`crates/kmd-core/src/db.rs`). 이 표를 고칠 때는
 `db.rs`의 `migrate()`와 함께 고친다.
 
 ### 4.3 다음 마이그레이션 작성법 (예시)

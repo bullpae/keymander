@@ -301,6 +301,37 @@ fn sync_content_index(config: &Config) {
     }
 }
 
+/// 손버릇 통계 (docs/19) 를 몇 분마다 DB 에 더한다. 엔진은 `[launcher.keymap] stats`
+/// 가 켜졌을 때만 세므로, 꺼져 있으면 꺼낼 것이 없어 DB 를 열지도 않는다.
+fn spawn_key_stats_saver(shutdown: Arc<AtomicBool>) {
+    const INTERVAL: Duration = Duration::from_secs(300);
+    std::thread::spawn(move || {
+        let mut last = Instant::now();
+        while !shutdown.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(1));
+            if last.elapsed() >= INTERVAL {
+                last = Instant::now();
+                save_key_stats();
+            }
+        }
+    });
+}
+
+fn save_key_stats() {
+    let stats = keybind::take_key_stats();
+    if stats.is_empty() {
+        return;
+    }
+    match kmd_core::Database::open_default(kmd_core::DbRole::Shared) {
+        Ok(db) => {
+            if let Err(e) = db.key_stats_add(&stats) {
+                tracing::warn!("손버릇 통계 저장 실패: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("손버릇 통계 DB 열기 실패: {e}"),
+    }
+}
+
 /// 파일 변경 감시 스레드 — 본문 인덱스 실시간 증분 sync (docs/15 P2).
 ///
 /// search_paths를 재귀 감시하고, 이벤트가 500ms 잠잠해지면 증분 sync를
@@ -535,6 +566,7 @@ pub fn run() -> color_eyre::Result<()> {
     // 주기 리프레시 전까지 아무 스캔도 하지 않는다.
     spawn_index_refresher(engine.clone(), shutdown.clone(), rebuild_immediately);
     spawn_content_watcher(shutdown.clone());
+    spawn_key_stats_saver(shutdown.clone());
 
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
     // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.
@@ -589,7 +621,8 @@ pub fn run() -> color_eyre::Result<()> {
 
     let _ = accept_handle.join();
 
-    // 키 바인딩 종료
+    // 남은 손버릇 통계를 저장하고 키 바인딩 종료
+    save_key_stats();
     if let Err(e) = kb_backend.stop() {
         tracing::warn!("키 바인딩 종료 실패: {e}");
     }
