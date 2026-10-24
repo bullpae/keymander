@@ -1647,10 +1647,13 @@ pub fn gauntlet(f: &mut Frame, stage: Rect, app: &App, g: &Gauntlet) {
         span(" ", hd),
     ];
     for i in 0..g.stages.len() {
-        let (mark, c) = if i < g.done.len() {
+        // 건너뛴 단계(만들 수 없던 단계)는 빈 자리로 남긴다
+        let (mark, c) = if g.done.iter().any(|d| d.no == i + 1) {
             ("◆", GOLD)
         } else if i == g.idx {
             ("◈", ACCENT)
+        } else if i < g.idx {
+            ("·", DIM)
         } else {
             ("◇", DIM)
         };

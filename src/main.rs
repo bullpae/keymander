@@ -296,8 +296,8 @@ enum KeymapAction {
     Stats {
         /// on | off | clear | sync <DIR|off> | export [PATH] | compare [PATH...] — without it, print the report
         args: Vec<String>,
-        /// Report period in days (today included)
-        #[arg(long, default_value_t = 7)]
+        /// Report period in days (today included, max 3650)
+        #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u32).range(1..=3650))]
         days: u32,
     },
 }

@@ -17,6 +17,8 @@ const KI_OVER_PAR: i32 = 10;
 
 /// 끝난 단계 하나의 성적
 pub struct StageResult {
+    /// 단계 번호 (1부터) — 건너뛴 단계가 있어도 원래 자리
+    pub no: usize,
     pub label: String,
     pub summary: Summary,
 }
@@ -33,6 +35,8 @@ pub struct Gauntlet {
     pub stage_at: Instant,
     /// 지금 단계가 끝났고 앱이 다음 라운드를 넣어 줘야 한다
     pub pending_next: bool,
+    /// 지금 단계에서 이미 기로 값을 치른 실수 수 — 한 틱에 여럿 놓쳐도 하나씩 치른다
+    charged: u32,
 }
 
 impl Gauntlet {
@@ -55,6 +59,7 @@ impl Gauntlet {
             started: now,
             stage_at: now,
             pending_next: false,
+            charged: 0,
         }
     }
 
@@ -73,6 +78,7 @@ impl Gauntlet {
         *self.inner = play;
         self.stage_at = now;
         self.pending_next = false;
+        self.charged = 0;
     }
 
     /// 다음 단계를 만들 수 없을 때 — 건너뛰고, 마지막이었으면 끝낸다
@@ -81,6 +87,10 @@ impl Gauntlet {
         self.pending_next = false;
         if self.idx + 1 >= self.stages.len() {
             self.idx = self.stages.len().saturating_sub(1);
+            // 남은 단계가 없다 — 보스는 쓰러진 채로 끝난다
+            if let Some(b) = &mut self.boss {
+                b.hit(b.hp);
+            }
             RoundEvent::Finished
         } else {
             self.pending_next = true;
@@ -90,6 +100,16 @@ impl Gauntlet {
 
     pub fn total_mistakes(&self) -> u32 {
         self.done.iter().map(|d| d.summary.mistakes).sum::<u32>() + self.inner.total_mistakes()
+    }
+
+    /// 일시정지한 만큼 시계를 민다 — 안쪽 라운드까지
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        self.stage_at += d;
+        if let Some(b) = &mut self.boss {
+            b.shift(d);
+        }
+        self.inner.shift(d);
     }
 
     pub fn remaining_time(&self, now: Instant) -> Option<Duration> {
@@ -111,27 +131,49 @@ impl Gauntlet {
             return RoundEvent::Failed;
         }
         let ev = self.inner.tick(now);
-        self.absorb(ev, now)
+        self.absorb(ev)
+    }
+
+    /// 안쪽 라운드가 새로 낸 실수만큼 기를 깎는다. `at_least` 면 실수 사건이 왔으니
+    /// 하나는 치른다. 기가 다하면 `true`.
+    fn charge(&mut self, at_least: bool) -> bool {
+        let total = self.inner.total_mistakes();
+        let mut fresh = total.saturating_sub(self.charged);
+        if at_least {
+            fresh = fresh.max(1);
+        }
+        self.charged = self.charged.max(total);
+        if fresh == 0 {
+            return false;
+        }
+        self.boss
+            .as_mut()
+            .is_some_and(|b| b.hurt_me(KI_MISTAKE * fresh as i32))
     }
 
     /// 빌려 온 라운드의 사건을 이어 붙이기의 사건으로 바꾼다
-    pub fn absorb(&mut self, ev: RoundEvent, now: Instant) -> RoundEvent {
+    pub fn absorb(&mut self, ev: RoundEvent) -> RoundEvent {
         match ev {
             RoundEvent::Finished => {
+                // 마지막 틱에 함께 놓친 것도 치른다
+                if self.charge(false) {
+                    return RoundEvent::Failed;
+                }
                 let summary = self.inner.summary(true);
                 self.done.push(StageResult {
+                    no: self.idx + 1,
                     label: self.stage().title.clone(),
                     summary,
                 });
+                // 건너뛴 단계도 지나온 자리로 친다 — 마지막 단계를 넘기면 HP 0
                 let n = self.stages.len() as i32;
-                let left = n - self.done.len() as i32;
+                let left = n - (self.idx as i32 + 1);
                 if let Some(b) = &mut self.boss {
-                    let hp = 100 * left / n;
+                    let hp = (100 * left / n).max(0);
                     b.hit(b.hp - hp);
                 }
                 if self.next_stage().is_some() {
                     self.pending_next = true;
-                    let _ = now;
                     RoundEvent::Cleared {
                         over_par: false,
                         sage_equal: false,
@@ -141,7 +183,7 @@ impl Gauntlet {
                 }
             }
             RoundEvent::Mistake => {
-                if self.boss.as_mut().is_some_and(|b| b.hurt_me(KI_MISTAKE)) {
+                if self.charge(true) {
                     RoundEvent::Failed
                 } else {
                     RoundEvent::Mistake
@@ -181,11 +223,10 @@ impl Gauntlet {
         let mut stats: Vec<(String, String)> = self
             .done
             .iter()
-            .enumerate()
-            .map(|(i, d)| {
+            .map(|d| {
                 let s = d.summary.stars.min(3) as usize;
                 (
-                    format!("{} {}", i + 1, d.label),
+                    format!("{} {}", d.no, d.label),
                     format!(
                         "{}{}  {}점",
                         "★".repeat(s),
@@ -197,7 +238,7 @@ impl Gauntlet {
             .collect();
         if !cleared {
             stats.push((
-                format!("{} {}", self.done.len() + 1, self.stage().title),
+                format!("{} {}", self.idx + 1, self.stage().title),
                 "— 여기서 멈췄다".into(),
             ));
         }
@@ -319,12 +360,116 @@ mod tests {
         let now = Instant::now();
         let first = Play::Spar(Spar::new(&stages[0], now));
         let mut g = Gauntlet::new(boss, stages, first, now);
-        assert_eq!(g.absorb(RoundEvent::Mistake, now), RoundEvent::Mistake);
+        assert_eq!(g.absorb(RoundEvent::Mistake), RoundEvent::Mistake);
         assert_eq!(g.boss.as_ref().unwrap().ki, 100 - KI_MISTAKE);
-        let ev = g.absorb(RoundEvent::Finished, now);
+        let ev = g.absorb(RoundEvent::Finished);
         assert!(matches!(ev, RoundEvent::Cleared { .. }));
         assert!(g.pending_next);
         let hp = g.boss.as_ref().unwrap().hp;
         assert!(hp < 100 && hp > 0, "{hp}");
+    }
+
+    fn brown_boss(now: Instant) -> Gauntlet {
+        let c = content();
+        let (_, _, boss) = c.lesson("brown.boss").unwrap();
+        let stages: Vec<Lesson> = boss
+            .stage
+            .iter()
+            .map(|st| c.lesson(&st.from).unwrap().2.staged(st))
+            .collect();
+        let first = Play::Spar(Spar::new(&stages[0], now));
+        Gauntlet::new(boss, stages, first, now)
+    }
+
+    #[test]
+    fn 건너뛴_단계가_있어도_마지막을_넘기면_보스는_쓰러진다() {
+        let now = Instant::now();
+        let mut g = brown_boss(now);
+        let n = g.stages.len();
+        assert!(n >= 3, "{n}");
+        // 1단계를 넘기고, 2단계는 만들 수 없어 건너뛴다
+        assert!(matches!(
+            g.absorb(RoundEvent::Finished),
+            RoundEvent::Cleared { .. }
+        ));
+        assert_eq!(g.skip(), RoundEvent::None);
+        // 나머지 단계를 하나씩 넣고 넘긴다
+        let mut last = RoundEvent::None;
+        while g.next_stage().is_some() && g.pending_next {
+            let l = g.next_stage().unwrap().clone();
+            g.push(Play::Spar(Spar::new(&l, now)), now);
+            last = g.absorb(RoundEvent::Finished);
+        }
+        assert_eq!(last, RoundEvent::Finished);
+        assert_eq!(
+            g.boss.as_ref().unwrap().hp,
+            0,
+            "건너뛴 단계 때문에 보스가 살아남지 않는다"
+        );
+        let nos: Vec<usize> = g.done.iter().map(|d| d.no).collect();
+        assert_eq!(nos[0], 1);
+        assert_eq!(nos[1], 3, "건너뛴 2단계 자리를 비우고 번호를 매긴다");
+        assert_eq!(nos.len(), n - 1);
+    }
+
+    #[test]
+    fn 마지막_단계를_건너뛰어도_보스는_쓰러진다() {
+        let now = Instant::now();
+        let mut g = brown_boss(now);
+        // 마지막 바로 앞 단계까지 넘긴다
+        while g.idx + 2 < g.stages.len() {
+            g.absorb(RoundEvent::Finished);
+            let l = g.next_stage().unwrap().clone();
+            g.push(Play::Spar(Spar::new(&l, now)), now);
+        }
+        assert!(matches!(
+            g.absorb(RoundEvent::Finished),
+            RoundEvent::Cleared { .. }
+        ));
+        assert_eq!(g.skip(), RoundEvent::Finished);
+        assert_eq!(g.boss.as_ref().unwrap().hp, 0);
+    }
+
+    #[test]
+    fn 화살비에서_한_틱에_여럿_놓치면_하나씩_기를_치른다() {
+        use crate::tui::dojo::spar::COUNTDOWN;
+        let c = content();
+        let rain = c
+            .curriculum
+            .belt
+            .iter()
+            .flat_map(|b| b.lesson.iter())
+            .find(|l| l.kind == "spar" && l.style.as_deref() == Some("rain"))
+            .expect("화살비 과");
+        let now = Instant::now();
+        let mut g = brown_boss(now);
+        let spar = Spar::new(rain, now);
+        let mut ats: Vec<Duration> = spar.notes.iter().map(|n| n.at).collect();
+        ats.sort();
+        assert!(ats.len() >= 4);
+        g.push(Play::Spar(spar), now);
+        // 아무것도 안 치고 셋째 화살의 판정 창이 지난 뒤 한 틱 — 앞 화살들을 한꺼번에 놓친다
+        let later = now + COUNTDOWN + ats[2] + Duration::from_millis(350);
+        let ev = g.tick(later);
+        let missed = g.inner.total_mistakes() as i32;
+        assert!(missed >= 3, "여럿 놓쳐야 한다: {missed}");
+        assert_eq!(ev, RoundEvent::Mistake);
+        assert_eq!(g.boss.as_ref().unwrap().ki, 100 - KI_MISTAKE * missed);
+        // 이미 치른 실수는 다시 치르지 않는다
+        assert_eq!(g.tick(later), RoundEvent::None);
+        assert_eq!(g.boss.as_ref().unwrap().ki, 100 - KI_MISTAKE * missed);
+    }
+
+    #[test]
+    fn 쉬는_동안은_제한시간이_흐르지_않는다() {
+        let now = Instant::now();
+        let mut g = brown_boss(now);
+        let limit = g.remaining_time(now).expect("관문은 제한시간이 있다");
+        // 제한시간보다 길게 쉬었다가 그만큼 민다
+        let pause = limit + Duration::from_secs(10);
+        g.shift(pause);
+        let back = now + pause;
+        assert_eq!(g.remaining_time(back), Some(limit));
+        assert_ne!(g.tick(back), RoundEvent::Failed);
     }
 }

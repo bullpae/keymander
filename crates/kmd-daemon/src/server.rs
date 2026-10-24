@@ -301,36 +301,64 @@ fn sync_content_index(config: &Config) {
     }
 }
 
-/// 손버릇 통계 (docs/19) 를 몇 분마다 DB 에 더한다. 엔진은 `[launcher.keymap] stats`
+/// 손버릇 통계 (docs/19) 를 1분마다 DB 에 더한다. 엔진은 `[launcher.keymap] stats`
 /// 가 켜졌을 때만 세므로, 꺼져 있으면 꺼낼 것이 없어 DB 를 열지도 않는다.
 fn spawn_key_stats_saver(shutdown: Arc<AtomicBool>) {
-    const INTERVAL: Duration = Duration::from_secs(300);
+    // DB 는 1분마다(데몬이 신호로 끝나도 잃는 것이 1분 안), 공유 폴더는 5분마다
+    // (동기화 도구를 자주 깨우지 않게)
+    const SAVE: Duration = Duration::from_secs(60);
+    const SYNC: Duration = Duration::from_secs(300);
     std::thread::spawn(move || {
-        let mut last = Instant::now();
+        let mut last_save = Instant::now();
+        let mut last_sync = Instant::now();
         while !shutdown.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_secs(1));
-            if last.elapsed() >= INTERVAL {
-                last = Instant::now();
-                save_key_stats();
+            if last_save.elapsed() >= SAVE {
+                last_save = Instant::now();
+                let sync = last_sync.elapsed() >= SYNC;
+                if sync {
+                    last_sync = Instant::now();
+                }
+                save_key_stats(sync);
             }
         }
     });
 }
 
-fn save_key_stats() {
-    let stats = keybind::take_key_stats();
+/// DB 쓰기에 실패한 통계 — 다음 저장 때 다시 더한다 (엔진에서 이미 꺼냈으므로)
+static UNSAVED_KEY_STATS: std::sync::Mutex<Vec<(String, u32)>> = std::sync::Mutex::new(Vec::new());
+
+fn save_key_stats(sync: bool) {
+    let mut stats = keybind::take_key_stats();
+    let mut unsaved = UNSAVED_KEY_STATS.lock().unwrap_or_else(|e| e.into_inner());
+    stats.append(&mut unsaved);
     if stats.is_empty() {
         return;
     }
     match kmd_core::Database::open_default(kmd_core::DbRole::Shared) {
         Ok(db) => {
             if let Err(e) = db.key_stats_add(&stats) {
-                tracing::warn!("손버릇 통계 저장 실패: {e}");
+                tracing::warn!("손버릇 통계 저장 실패 — 다음에 다시: {e}");
+                keep_unsaved(&mut unsaved, stats);
+                return;
             }
-            sync_key_stats(&db);
+            drop(unsaved);
+            if sync {
+                sync_key_stats(&db);
+            }
         }
-        Err(e) => tracing::warn!("손버릇 통계 DB 열기 실패: {e}"),
+        Err(e) => {
+            tracing::warn!("손버릇 통계 DB 열기 실패 — 다음에 다시: {e}");
+            keep_unsaved(&mut unsaved, stats);
+        }
     }
+}
+
+/// 못 쓴 통계를 남긴다 — DB 가 오래 막혀도 메모리가 끝없이 늘지 않게 상한을 둔다
+fn keep_unsaved(unsaved: &mut Vec<(String, u32)>, mut stats: Vec<(String, u32)>) {
+    const MAX: usize = 20_000;
+    stats.truncate(MAX);
+    *unsaved = stats;
 }
 
 /// `stats_sync` 공유 폴더가 정해져 있으면 이 기기 스냅숏을 거기 쓴다 (docs/19 §6)
@@ -640,7 +668,7 @@ pub fn run() -> color_eyre::Result<()> {
     let _ = accept_handle.join();
 
     // 남은 손버릇 통계를 저장하고 키 바인딩 종료
-    save_key_stats();
+    save_key_stats(true);
     if let Err(e) = kb_backend.stop() {
         tracing::warn!("키 바인딩 종료 실패: {e}");
     }

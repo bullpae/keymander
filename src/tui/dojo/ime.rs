@@ -14,7 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventK
 use super::content::{Content, Lesson};
 use super::hangul::{is_hangul, to_hangul, to_keys};
 use super::mouse::{Rect, ARENA_W};
-use super::play::{BossState, Rng, RoundEvent, Summary};
+use super::play::{later_opt, later_tag, BossState, Rng, RoundEvent, Summary};
 
 /// 줄을 마친 뒤 다음 줄로 넘어가기까지
 pub const LINE_PAUSE: Duration = Duration::from_millis(700);
@@ -317,6 +317,20 @@ impl ImeRound {
         } else {
             self.feedback = Some(("빗나갔다 — 과녁 안을 눌러라".into(), now));
             RoundEvent::None
+        }
+    }
+
+    /// 일시정지한 만큼 시계를 민다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        later_opt(&mut self.finished_at, d);
+        later_tag(&mut self.flash, d);
+        later_tag(&mut self.feedback, d);
+        if let Phase::LineDone(t) = &mut self.phase {
+            *t += d;
+        }
+        if let Some(b) = &mut self.boss {
+            b.shift(d);
         }
     }
 

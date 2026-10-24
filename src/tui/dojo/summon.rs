@@ -11,7 +11,7 @@ use kmd_core::query_prefix::{prefix_of, QueryPrefix};
 use kmd_core::{IndexItem, ItemKind, SearchEngine, Source};
 
 use super::content::{Content, Lesson, Request};
-use super::play::{BossState, OutcomeRow, RoundEvent, Summary};
+use super::play::{later_tag, BossState, OutcomeRow, RoundEvent, Summary};
 use super::score::{self, HoleResult};
 
 /// 결과 목록에 보이는 줄 수 — 사부의 수도 이 안에서만 ↓ 를 쓴다
@@ -420,6 +420,15 @@ impl Round {
     }
 
     /// 보스 제한 시간 확인
+    /// 일시정지한 만큼 시계를 민다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        later_tag(&mut self.flash, d);
+        if let Some(b) = &mut self.boss {
+            b.shift(d);
+        }
+    }
+
     pub fn tick(&mut self, now: Instant) -> RoundEvent {
         match self.remaining_time(now) {
             Some(left) if left.is_zero() => RoundEvent::Failed,

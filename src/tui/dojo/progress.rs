@@ -50,7 +50,7 @@ fn stars_of(progress: &BTreeMap<String, DojoProgress>, id: &str) -> u8 {
     progress.get(id).map_or(0, |p| p.best_stars)
 }
 
-fn missing(lesson: &Lesson, has: &dyn Fn(Action) -> bool) -> Vec<Action> {
+pub fn missing(lesson: &Lesson, has: &dyn Fn(Action) -> bool) -> Vec<Action> {
     lesson
         .needed_actions()
         .into_iter()

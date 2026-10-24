@@ -132,6 +132,44 @@ enum Metric {
     Hold(u8),
     /// 트리거를 쥐었다가 아무 수도 안 쓰고 놓았다 (스침)
     IdleTap(usize),
+    /// 트리거를 짧게 쳐서 탭 동작(`tap_action`, 예: 한영)을 냈다 — 스침과 따로 센다
+    TapAction(usize),
+    /// Launch 키를 누른 뒤 실제 실행까지 기다린 시간 — 지연 칸 (`keystats::perf_bucket`)
+    LaunchWait(u8),
+}
+
+/// 엔진에서 꺼낸 통계 — 이름 붙이기(문자열 만들기)는 엔진 락을 놓은 뒤에 한다
+pub struct StatsBatch {
+    counts: HashMap<Metric, u32>,
+    layer_names: Vec<String>,
+}
+
+impl StatsBatch {
+    /// (지표 이름, 횟수). 이름은 DB 의 `key_stats.metric`:
+    /// `move:<레이어>:<키>` · `raw:<키>` · `hold:<100ms 칸>` · `idle:<레이어>` ·
+    /// `tap:<레이어>` · `perf:wait:<지연 칸>`
+    pub fn named(self) -> Vec<(String, u32)> {
+        let layer_name = |i: usize| {
+            self.layer_names
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| i.to_string())
+        };
+        self.counts
+            .iter()
+            .map(|(m, n)| {
+                let name = match *m {
+                    Metric::Move(l, k) => format!("move:{}:{k:?}", layer_name(l)),
+                    Metric::Raw(k) => format!("raw:{k:?}"),
+                    Metric::Hold(b) => format!("hold:{b}"),
+                    Metric::IdleTap(l) => format!("idle:{}", layer_name(l)),
+                    Metric::TapAction(l) => format!("tap:{}", layer_name(l)),
+                    Metric::LaunchWait(b) => format!("perf:wait:{b}"),
+                };
+                (name, *n)
+            })
+            .collect()
+    }
 }
 
 /// 손버릇 통계 — 엔진 Mutex 안에서 세고, 데몬이 주기적으로 꺼내 DB 에 더한다
@@ -140,6 +178,8 @@ pub struct KeyStats {
     counts: HashMap<Metric, u32>,
     /// 오토리피트를 한 번으로 세려고 — 지금 눌려 있는 키
     held: Option<VKey>,
+    /// 트리거 해제까지 미뤄 둔 Launch 키를 누른 시각
+    launch_down: Option<u32>,
 }
 
 /// 맨 이동 키 — 레이어를 두고도 손이 화살표로 갔는지 본다
@@ -167,9 +207,10 @@ pub struct EngineState {
     trigger_down_tick: u32,
     /// 레이어 활성 중 다른 키가 눌렸는지 (tap vs hold 판정)
     layer_key_used: bool,
-    /// 레이어 매핑의 Launch 액션은 트리거 키를 뗄 때까지 지연 실행한다.
-    /// 트리거 수정자(Alt 등)가 눌린 채 실행하면 새 프로세스의 초기
-    /// 포커스/IME 조합에 간섭한다 (0.5.0 "Layer Launch deferral").
+    /// 레이어 매핑의 Launch 액션은 트리거가 수정자(Alt 등)면 트리거 키를 뗄 때까지
+    /// 지연 실행한다. 수정자가 눌린 채 실행하면 새 프로세스의 초기 포커스/IME 조합에
+    /// 간섭한다 (0.5.0 "Layer Launch deferral"). CapsLock 같은 비수정자 트리거는
+    /// 억제돼 OS 에 보이지 않으므로 바로 실행한다 — 트리거를 떼는 시간만큼 빨리 뜬다.
     pending_layer_launch: Option<BindAction>,
     /// 현재 물리적으로 눌린 수정자 키 추적
     modifiers_held: HashSet<VKey>,
@@ -427,6 +468,27 @@ impl EngineState {
         if !self.keymap_enabled {
             return;
         }
+        let launched = match decision {
+            KeyDecision::Execute { action, .. } => matches!(action, BindAction::Launch(_)),
+            KeyDecision::ReleaseChord {
+                deferred_action, ..
+            } => matches!(deferred_action, Some(BindAction::Launch(_))),
+            _ => false,
+        };
+        if launched {
+            let wait = self
+                .stats
+                .launch_down
+                .take()
+                .map_or(0, |t| tick.wrapping_sub(t));
+            *self
+                .stats
+                .counts
+                .entry(Metric::LaunchWait(
+                    kmd_core::keystats::perf_bucket(u64::from(wait)) as u8,
+                ))
+                .or_default() += 1;
+        }
         let metric = if is_down {
             // 오토리피트는 한 번으로
             if self.stats.held == Some(vkey) {
@@ -442,6 +504,16 @@ impl EngineState {
                     let Some(layer) = self.active_layer.or(layer_before) else {
                         return;
                     };
+                    Metric::Move(layer, vkey)
+                }
+                // 트리거 해제까지 미룬 Launch — 수는 지금 쓴 것이다
+                KeyDecision::Suppress if self.pending_layer_launch.is_some() => {
+                    let Some(layer) = self.active_layer else {
+                        return;
+                    };
+                    if self.stats.launch_down.is_none() {
+                        self.stats.launch_down = Some(tick);
+                    }
                     Metric::Move(layer, vkey)
                 }
                 KeyDecision::PassThrough
@@ -460,13 +532,22 @@ impl EngineState {
             let Some(layer) = layer_before else {
                 return;
             };
-            let released = self.active_layer.is_none()
-                && self
-                    .config
-                    .layers
-                    .get(layer)
-                    .is_some_and(|l| l.trigger == vkey || l.trigger_aliases.contains(&vkey));
-            if !released {
+            let Some(binding) = self.config.layers.get(layer) else {
+                return;
+            };
+            if self.active_layer.is_some() || !binding.matches_trigger(vkey) {
+                return;
+            }
+            // 탭 동작을 낸 탭은 홀드도 스침도 아니다 (RAlt 탭 = 한영 등)
+            if !used_before
+                && binding.tap_action.is_some()
+                && matches!(decision, KeyDecision::Execute { .. })
+            {
+                *self
+                    .stats
+                    .counts
+                    .entry(Metric::TapAction(layer))
+                    .or_default() += 1;
                 return;
             }
             let ms = tick.wrapping_sub(down_tick);
@@ -483,28 +564,14 @@ impl EngineState {
         *self.stats.counts.entry(metric).or_default() += 1;
     }
 
-    /// 쌓인 손버릇 통계를 꺼낸다 — (지표 이름, 횟수). 이름은 DB 의 `key_stats.metric`:
-    /// `move:<레이어>:<키>` · `raw:<키>` · `hold:<100ms 칸>` · `idle:<레이어>`
-    pub fn take_stats(&mut self) -> Vec<(String, u32)> {
-        let counts = std::mem::take(&mut self.stats.counts);
-        let layer_name = |i: usize| {
-            self.config
-                .layers
-                .get(i)
-                .map_or_else(|| i.to_string(), |l| l.name.clone())
-        };
-        counts
-            .into_iter()
-            .map(|(m, n)| {
-                let name = match m {
-                    Metric::Move(l, k) => format!("move:{}:{k:?}", layer_name(l)),
-                    Metric::Raw(k) => format!("raw:{k:?}"),
-                    Metric::Hold(b) => format!("hold:{b}"),
-                    Metric::IdleTap(l) => format!("idle:{}", layer_name(l)),
-                };
-                (name, n)
-            })
-            .collect()
+    /// 쌓인 손버릇 통계를 꺼낸다 — 락 안에서는 맵을 바꿔 끼우기만 한다
+    /// (이름은 [`StatsBatch::named`] 가 락 밖에서 만든다)
+    pub fn take_stats(&mut self) -> StatsBatch {
+        let cap = self.stats.counts.len();
+        StatsBatch {
+            counts: std::mem::replace(&mut self.stats.counts, HashMap::with_capacity(cap)),
+            layer_names: self.config.layers.iter().map(|l| l.name.clone()).collect(),
+        }
     }
 
     fn decide(&mut self, vkey: VKey, is_down: bool, tick: u32) -> KeyDecision {
@@ -951,9 +1018,9 @@ impl EngineState {
                     self.layer_key_used = true;
                     self.layer_dt_last_key = None;
                     self.layer_keys_down.insert(vkey);
-                    // Launch는 트리거 키를 뗄 때까지 지연 — 트리거 수정자가
+                    // 수정자 트리거의 Launch는 트리거 키를 뗄 때까지 지연 — 수정자가
                     // 눌린 채 실행하면 새 프로세스 포커스/IME에 간섭한다
-                    if matches!(action, BindAction::Launch(_)) {
+                    if matches!(action, BindAction::Launch(_)) && is_modifier_key(&trigger) {
                         self.pending_layer_launch = Some(action);
                         return Some(KeyDecision::Suppress);
                     }
@@ -1329,24 +1396,77 @@ mod tests {
         e.process_key(VKey::H, true, 220);
         e.process_key(VKey::H, false, 240);
         e.process_key(VKey::LAlt, false, 450);
-        // 쥐었다가 그냥 놓음
+        // 짧게 쳐서 탭 동작(Escape) — 스침이 아니라 탭으로 센다
         e.process_key(VKey::LAlt, true, 1000);
         e.process_key(VKey::LAlt, false, 1050);
+        // 쥐었다가 아무 수도 안 쓰고 놓음 (판정 시간을 넘겨 탭 동작 없음)
+        e.process_key(VKey::LAlt, true, 2000);
+        e.process_key(VKey::LAlt, false, 2300);
 
-        let mut got = e.take_stats();
+        let mut got = e.take_stats().named();
         got.sort();
         let want: Vec<(String, u32)> = [
-            ("hold:0", 1),
-            ("hold:3", 1),
+            ("hold:3", 2),
             ("idle:nav", 1),
             ("move:nav:H", 2),
             ("raw:Left", 1),
+            ("tap:nav", 1),
         ]
         .iter()
         .map(|(k, n)| (k.to_string(), *n))
         .collect();
         assert_eq!(got, want);
-        assert!(e.take_stats().is_empty(), "꺼내면 비워진다");
+        assert!(e.take_stats().named().is_empty(), "꺼내면 비워진다");
+    }
+
+    #[test]
+    fn 비수정자_트리거의_launch는_바로_뜨고_대기를_잰다() {
+        // CapsLock 트리거 — OS 에 보이지 않으므로 트리거 해제를 기다리지 않는다
+        let mut cfg = layer_config();
+        cfg.stats = true;
+        cfg.layers[0].trigger = VKey::CapsLock;
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::Space, true, 1100),
+            KeyDecision::Execute {
+                action: BindAction::Launch(_),
+                ..
+            }
+        ));
+        e.process_key(VKey::Space, false, 1150);
+        assert!(matches!(
+            e.process_key(VKey::CapsLock, false, 1300),
+            KeyDecision::Suppress
+        ));
+        let got = e.take_stats().named();
+        assert!(got.contains(&("perf:wait:0".into(), 1)), "{got:?}");
+        assert!(got.contains(&("move:nav:Space".into(), 1)), "{got:?}");
+    }
+
+    #[test]
+    fn 수정자_트리거의_launch_대기는_해제까지_잰다() {
+        let mut cfg = layer_config();
+        cfg.stats = true;
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Space, true, 1100);
+        e.process_key(VKey::Space, false, 1150);
+        e.process_key(VKey::LAlt, false, 1300);
+        let got = e.take_stats().named();
+        // 200ms → 200~300 칸
+        let b = kmd_core::keystats::perf_bucket(200);
+        assert!(got.contains(&(format!("perf:wait:{b}"), 1)), "{got:?}");
+        assert!(
+            got.contains(&("move:nav:Space".into(), 1)),
+            "미뤄도 수는 센다: {got:?}"
+        );
     }
 
     #[test]
@@ -1357,7 +1477,7 @@ mod tests {
         e.process_key(VKey::H, true, 20);
         e.process_key(VKey::H, false, 30);
         e.process_key(VKey::LAlt, false, 400);
-        assert!(e.take_stats().is_empty());
+        assert!(e.take_stats().named().is_empty());
     }
 
     #[test]

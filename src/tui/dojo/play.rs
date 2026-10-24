@@ -72,6 +72,12 @@ impl BossState {
         self.ki <= 0
     }
 
+    /// 일시정지한 만큼 시계를 민다
+    pub fn shift(&mut self, d: Duration) {
+        later_opt(&mut self.hurt_at, d);
+        later_opt(&mut self.struck_at, d);
+    }
+
     pub fn recently_hurt(&self, now: Instant) -> bool {
         self.hurt_at
             .is_some_and(|t| now.duration_since(t) < Duration::from_millis(220))
@@ -80,6 +86,20 @@ impl BossState {
     pub fn recently_struck(&self, now: Instant) -> bool {
         self.struck_at
             .is_some_and(|t| now.duration_since(t) < Duration::from_millis(1500))
+    }
+}
+
+/// 일시정지한 만큼 시각 하나를 민다
+pub fn later_opt(t: &mut Option<Instant>, d: Duration) {
+    if let Some(t) = t {
+        *t += d;
+    }
+}
+
+/// (값, 시각) 짝의 시각을 민다 — 플래시·피드백
+pub fn later_tag<T>(t: &mut Option<(T, Instant)>, d: Duration) {
+    if let Some((_, t)) = t {
+        *t += d;
     }
 }
 
@@ -259,6 +279,29 @@ impl Play {
             Play::Ime(r) => r.boss.as_ref(),
             Play::Quiz(_) => None,
             Play::Mixed(g) => g.boss.as_ref(),
+        }
+    }
+
+    /// 일시정지한 동안의 시간을 판에서 뺀다 — 모든 시계(시작·제한시간·박자·연출)를 민다.
+    /// 안 밀면 쉬는 동안 보스 제한시간이 흐르고, 화살비는 지나간 화살을 한꺼번에 놓친다.
+    pub fn shift(&mut self, d: Duration) {
+        match self {
+            Play::Summon(r) => r.shift(d),
+            Play::Golf(r) => r.shift(d),
+            Play::Spar(r) => r.shift(d),
+            Play::Maze(r) => r.shift(d),
+            Play::Mouse(r) => r.shift(d),
+            Play::Ime(r) => r.shift(d),
+            Play::Quiz(r) => r.shift(d),
+            Play::Mixed(g) => g.shift(d),
+        }
+    }
+
+    /// 안쪽 라운드의 사건을 바깥 판의 사건으로 — 이어 붙이기만 바꾼다
+    pub fn absorb(&mut self, ev: RoundEvent) -> RoundEvent {
+        match self {
+            Play::Mixed(g) => g.absorb(ev),
+            _ => ev,
         }
     }
 

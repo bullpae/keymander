@@ -6,6 +6,9 @@
 //! - `raw:<키>` — 레이어 밖에서 누른 맨 화살표·Home·End·PgUp·PgDn ("화살귀")
 //! - `hold:<0~10>` — 트리거를 쥔 시간, 100ms 칸 (10 = 1초 이상)
 //! - `idle:<레이어>` — 트리거를 쥐었다가 아무 수도 안 쓰고 놓은 횟수
+//! - `tap:<레이어>` — 트리거를 짧게 쳐서 탭 동작(`tap_action`, 예: 한영)을 낸 횟수
+//! - `perf:<단계>:<칸>` — 단축키로 런처를 띄울 때 단계별 지연 (§7). `perf:hookslow` 는
+//!   20ms 넘게 걸린 키 훅 콜백 수 (Windows)
 //!
 //! 순서도 시각도 없다. 날짜(로컬) 단위로 더할 뿐이다. 켜는 스위치는
 //! `[launcher.keymap] stats = true` 이고 기본은 꺼져 있다.
@@ -24,6 +27,38 @@ use crate::db::{Database, DbError};
 
 /// 홀드 시간 칸 수 (100ms × 10 + "1초 이상")
 pub const HOLD_BUCKETS: usize = 11;
+
+/// 데몬이 Launch 로 띄운 자식에게 실행 시각(유닉스 ms)을 넘기는 환경 변수 (§7)
+pub const LAUNCH_AT_ENV: &str = "KMD_LAUNCH_AT_MS";
+
+/// 지연 칸의 위 경계 (ms) — 마지막 칸은 그 이상
+pub const PERF_EDGES: [u64; 10] = [25, 50, 100, 150, 200, 300, 500, 800, 1200, 2000];
+pub const PERF_BUCKETS: usize = PERF_EDGES.len() + 1;
+
+/// 실행 지연 단계 — (지표 이름, 보고서 이름)
+pub const PERF_PHASES: [(&str, &str); 5] = [
+    ("wait", "트리거 대기"),
+    ("spawn", "프로세스 생성"),
+    ("window", "창 준비"),
+    ("engine", "검색 준비"),
+    ("total", "단축키 → 사용 가능"),
+];
+
+/// 지연(ms)이 드는 칸
+pub fn perf_bucket(ms: u64) -> usize {
+    PERF_EDGES
+        .iter()
+        .position(|&e| ms < e)
+        .unwrap_or(PERF_EDGES.len())
+}
+
+/// 칸 이름 — `<100ms`, `2초+`
+pub fn perf_label(bucket: usize) -> String {
+    match PERF_EDGES.get(bucket) {
+        Some(e) => format!("<{e}ms"),
+        None => "2초+".into(),
+    }
+}
 
 impl Database {
     /// 오늘(로컬) 칸에 횟수를 더한다
@@ -121,6 +156,12 @@ pub struct KeyReport {
     pub raw: Vec<(String, u64)>,
     pub holds: [u64; HOLD_BUCKETS],
     pub idle: Vec<(String, u64)>,
+    /// 탭 동작을 낸 트리거 탭 (레이어별)
+    pub taps: Vec<(String, u64)>,
+    /// 실행 지연 — 단계 → 칸별 횟수
+    pub perf: BTreeMap<String, [u64; PERF_BUCKETS]>,
+    /// 20ms 넘게 걸린 키 훅 콜백 (Windows)
+    pub hook_slow: u64,
     /// 배치에 있지만 이 기간에 한 번도 안 쓴 수
     pub unused: Vec<MoveCount>,
 }
@@ -202,6 +243,14 @@ impl KeyReport {
                     }
                 }
                 (Some("idle"), Some(layer), None) => r.idle.push((layer.into(), *n)),
+                (Some("tap"), Some(layer), None) => r.taps.push((layer.into(), *n)),
+                (Some("perf"), Some("hookslow"), None) => r.hook_slow += n,
+                (Some("perf"), Some(phase), Some(b)) => {
+                    if let Ok(i) = b.parse::<usize>() {
+                        r.perf.entry(phase.to_string()).or_insert([0; PERF_BUCKETS])
+                            [i.min(PERF_BUCKETS - 1)] += n;
+                    }
+                }
                 _ => {}
             }
         }
@@ -234,12 +283,47 @@ impl KeyReport {
         self.holds.iter().sum()
     }
 
+    pub fn total_taps(&self) -> u64 {
+        self.taps.iter().map(|r| r.1).sum()
+    }
+
     pub fn total_idle(&self) -> u64 {
         self.idle.iter().map(|r| r.1).sum()
     }
 
     pub fn is_empty(&self) -> bool {
         self.total_moves() + self.total_raw() + self.total_holds() == 0
+            && self.taps.is_empty()
+            && self.perf.is_empty()
+            && self.hook_slow == 0
+    }
+
+    /// 그 단계의 측정 횟수
+    pub fn perf_count(&self, phase: &str) -> u64 {
+        self.perf.get(phase).map_or(0, |b| b.iter().sum())
+    }
+
+    /// 그 단계 지연의 `pct` 백분위가 드는 칸 (예: 50 = 중앙값)
+    pub fn perf_pct(&self, phase: &str, pct: u64) -> Option<usize> {
+        let b = self.perf.get(phase)?;
+        let all: u64 = b.iter().sum();
+        if all == 0 {
+            return None;
+        }
+        let need = (all * pct).div_ceil(100).max(1);
+        let mut acc = 0;
+        b.iter().position(|n| {
+            acc += n;
+            acc >= need
+        })
+    }
+
+    /// 프로세스 생성·창·검색 중 중앙값이 가장 늦은 단계 — (지표 이름, 칸)
+    pub fn slowest_phase(&self) -> Option<(&'static str, usize)> {
+        ["wait", "spawn", "window", "engine"]
+            .into_iter()
+            .filter_map(|p| self.perf_pct(p, 50).map(|b| (p, b)))
+            .max_by_key(|x| x.1)
     }
 
     /// 200ms 안에 끝난 홀드 비율 (0~100)
@@ -278,7 +362,7 @@ impl KeyReport {
     /// 사부의 해석 — 숫자를 읽어 줄 한두 마디
     pub fn insights(&self) -> Vec<String> {
         if self.is_empty() {
-            return vec!["아직 모인 것이 없다 — 데몬이 몇 분마다 저장한다.".into()];
+            return vec!["아직 모인 것이 없다 — 데몬이 1분마다 저장한다.".into()];
         }
         let mut out = Vec::new();
         if let Some(pct) = self.raw_pct() {
@@ -297,13 +381,22 @@ impl KeyReport {
         let idle = self.total_idle();
         if holds >= 20 && idle * 100 / holds >= 15 {
             out.push(format!(
-                "트리거를 쥐었다 그냥 놓은 일이 {idle}번 ({}%) — 스치기만 했거나 마음을 바꿨다. 탭에 동작이 없는 지금 배치라 사고는 없다.",
+                "트리거를 쥐었다 그냥 놓은 일이 {idle}번 ({}%) — 스치기만 했거나 마음을 바꿨다 (탭 동작을 낸 탭은 빼고 셌다).",
                 idle * 100 / holds
             ));
         }
         if let Some(quick) = self.quick_pct().filter(|_| holds >= 20) {
             out.push(format!(
                 "홀드의 {quick}% 가 200ms 안에 끝났다 — 레이어는 짧게 쥐고 바로 놓는 손이다."
+            ));
+        }
+        if let Some(say) = self.perf_insight() {
+            out.push(say);
+        }
+        if self.hook_slow > 0 {
+            out.push(format!(
+                "키 훅 콜백이 20ms 넘게 걸린 일 {}번 — 많으면 키 입력 자체가 끈적인다. 데몬 CPU·백신 간섭을 보라.",
+                self.hook_slow
             ));
         }
         if let Some(top) = self.moves.first() {
@@ -328,6 +421,45 @@ impl KeyReport {
             ));
         }
         out
+    }
+}
+
+impl KeyReport {
+    /// 실행 지연 한 줄 해석 — 단축키 실행이 5번 넘게 모였을 때
+    pub fn perf_insight(&self) -> Option<String> {
+        if self.perf_count("total") < 5 {
+            return None;
+        }
+        let p50 = perf_label(self.perf_pct("total", 50)?);
+        let p90 = perf_label(self.perf_pct("total", 90)?);
+        let mut say = format!("단축키 → 런처 사용 가능: 중앙값 {p50}, 90% {p90}.");
+        if let Some((phase, b)) = self.slowest_phase() {
+            say.push_str(&format!(
+                " 가장 늦은 단계는 {} ({}) — {}",
+                phase_name(phase),
+                perf_label(b),
+                phase_advice(phase)
+            ));
+        }
+        Some(say)
+    }
+}
+
+fn phase_name(phase: &str) -> &'static str {
+    PERF_PHASES
+        .iter()
+        .find(|p| p.0 == phase)
+        .map_or("?", |p| p.1)
+}
+
+/// 단계별 처방 — 어느 단계가 늦은지가 곧 원인의 자리다
+fn phase_advice(phase: &str) -> &'static str {
+    match phase {
+        "wait" => "트리거 키를 뗄 때까지 실행을 미룬다. 수정자(Alt 등) 트리거라서다 — CapsLock 트리거는 바로 뜬다.",
+        "spawn" => "런처 프로세스를 새로 띄우는 비용이다. 백신 실시간 검사·느린 디스크·절전 모드가 흔한 원인이고, 상주 모드가 근본 처방이다.",
+        "window" => "창과 GPU 초기화다. 노트북의 절전 GPU 전환이 흔한 원인 — general.renderer = \"software\" 와 비교해 보라.",
+        "engine" => "검색 인덱스를 읽는 시간이다. 색인 범위(search_paths)가 크면 늘어난다.",
+        _ => "",
     }
 }
 
@@ -371,32 +503,60 @@ const SNAPSHOT_PREFIX: &str = "kmd-keystats-";
 pub struct Snapshot {
     pub version: u32,
     pub device: String,
+    /// 설치마다 한 번 만드는 임의 id — 호스트 이름이 같은 두 기기를 가른다
+    #[serde(default)]
+    pub id: String,
     pub os: String,
     /// 내보낸 날 (그 기기의 로컬 날짜)
     pub exported: String,
-    /// 그 기기의 배치 — (레이어, 키, 대상)
+    /// 그 기기의 배치 — (레이어, 키, 대상). `launch:` 대상은 가린다 (경로·명령이 담길 수 있다)
     pub mapped: Vec<(String, String, String)>,
     /// (날짜, 지표, 횟수)
     pub rows: Vec<(String, String, u64)>,
 }
 
 impl Snapshot {
-    pub fn from_db(db: &Database, device: &str, keymap: &KeymapConfig) -> Self {
+    pub fn from_db(db: &Database, device: &str, id: &str, keymap: &KeymapConfig) -> Self {
         Self {
             version: SNAPSHOT_VERSION,
             device: device.to_string(),
+            id: id.to_string(),
             os: std::env::consts::OS.to_string(),
             exported: db.local_date(0),
             mapped: mapped_of(keymap)
                 .into_iter()
-                .map(|((l, k), t)| (l, k, t))
+                .map(|((l, k), t)| {
+                    let t = if t.starts_with("launch:") {
+                        "launch".to_string()
+                    } else {
+                        t
+                    };
+                    (l, k, t)
+                })
                 .collect(),
             rows: db.key_stats_rows(SNAPSHOT_DAYS),
         }
     }
 
     pub fn file_name(&self) -> String {
-        format!("{SNAPSHOT_PREFIX}{}.json", safe_name(&self.device))
+        if self.id.is_empty() {
+            format!("{SNAPSHOT_PREFIX}{}.json", safe_name(&self.device))
+        } else {
+            format!(
+                "{SNAPSHOT_PREFIX}{}-{}.json",
+                safe_name(&self.device),
+                safe_name(&self.id)
+            )
+        }
+    }
+
+    /// 같은 기기(설치)의 스냅숏인가 — id 가 없던 옛 파일은 이름으로
+    pub fn same_device(&self, device: &str, id: &str) -> bool {
+        if self.id.is_empty() || id.is_empty() {
+            self.device == device
+        } else {
+            self.id == id
+        }
     }
 
     fn mapped_map(&self) -> BTreeMap<(String, String), String> {
@@ -479,14 +639,28 @@ impl Snapshot {
 /// `[launcher.keymap] stats_sync` 폴더 (`~` 를 풀어서)
 pub fn sync_dir(keymap: &KeymapConfig) -> Option<PathBuf> {
     let p = keymap.stats_sync.as_ref()?;
-    let s = p.to_string_lossy();
-    if s.trim().is_empty() {
-        return None;
+    expand_sync_path(&p.to_string_lossy()).ok()
+}
+
+/// 공유 폴더 경로를 데몬도 같은 곳을 보도록 절대 경로로 푼다 — `~` 를 풀고,
+/// 상대 경로는 지금 폴더 기준으로 붙인다(데몬의 작업 폴더는 다르다). 풀리지 않은
+/// 환경 변수(`%USERPROFILE%`·`$HOME`)는 거절한다.
+pub fn expand_sync_path(raw: &str) -> Result<PathBuf, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("빈 경로".into());
     }
-    match s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
-        Some(rest) => dirs::home_dir().map(|h| h.join(rest)),
-        None => Some(p.clone()),
+    if s.contains('%') || s.contains('$') {
+        return Err(format!(
+            "환경 변수가 풀리지 않았다: {s} — 셸이 푸는 형태로(PowerShell: \"$env:USERPROFILE\\OneDrive\\kmd\") 쓰거나 전체 경로를 적어라"
+        ));
     }
+    let p = match s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
+        Some(rest) => dirs::home_dir().ok_or("홈 폴더를 찾지 못했다")?.join(rest),
+        None if s == "~" => dirs::home_dir().ok_or("홈 폴더를 찾지 못했다")?,
+        None => PathBuf::from(s),
+    };
+    std::path::absolute(&p).map_err(|e| e.to_string())
 }
 
 /// 이 기기의 통계를 공유 폴더에 내보낸다 — 데몬이 저장할 때마다 부른다.
@@ -500,9 +674,29 @@ pub fn sync_export(
         return Ok(None);
     };
     std::fs::create_dir_all(&dir)?;
-    Snapshot::from_db(db, &device_name(), effective)
+    let id = device_id(&crate::Config::default_data_dir());
+    Snapshot::from_db(db, &device_name(), &id, effective)
         .write_to(&dir)
         .map(Some)
+}
+
+/// 이 설치의 임의 id — `<데이터 폴더>/device-id` 에 한 번 만들어 둔다 (8자리 hex)
+pub fn device_id(data_dir: &Path) -> String {
+    let path = data_dir.join("device-id");
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        let s = s.trim();
+        if !s.is_empty() {
+            return s.to_string();
+        }
+    }
+    let mut buf = [0u8; 4];
+    if getrandom::fill(&mut buf).is_err() {
+        return String::new();
+    }
+    let id: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+    let _ = std::fs::create_dir_all(data_dir);
+    let _ = std::fs::write(&path, &id);
+    id
 }
 
 /// 이 기기의 이름 — 스냅숏 파일 이름과 비교 표의 열 머리
@@ -798,6 +992,55 @@ impl Compare {
             }
         }
 
+        // 7. 실행 지연 — 엔진은 같아도 프로세스·GPU·디스크는 기기마다 다르다
+        let lat: Vec<(&Device, usize)> = self
+            .devices
+            .iter()
+            .filter(|d| d.report.perf_count("total") >= 5)
+            .filter_map(|d| d.report.perf_pct("total", 50).map(|b| (d, b)))
+            .collect();
+        if let (Some(hi), Some(lo)) = (
+            lat.iter().max_by_key(|x| x.1),
+            lat.iter().min_by_key(|x| x.1),
+        ) {
+            if hi.1 >= lo.1 + 2 {
+                // 두 기기 사이 중앙값 차이가 가장 큰 단계가 원인의 자리
+                let edge = |b: usize| PERF_EDGES.get(b).copied().unwrap_or(4000);
+                let gap = ["wait", "spawn", "window", "engine"]
+                    .into_iter()
+                    .filter_map(|p| {
+                        let a = hi.0.report.perf_pct(p, 50)?;
+                        let b = lo.0.report.perf_pct(p, 50)?;
+                        Some((p, edge(a).saturating_sub(edge(b))))
+                    })
+                    .max_by_key(|x| x.1);
+                let mut say = format!(
+                    "런처가 {} 에서 늦게 뜬다 (중앙값 {} vs {} {}).",
+                    hi.0.name,
+                    perf_label(hi.1),
+                    lo.0.name,
+                    perf_label(lo.1)
+                );
+                if let Some((phase, _)) = gap {
+                    say.push_str(&format!(
+                        " 차이가 가장 큰 단계: {} — {}",
+                        phase_name(phase),
+                        phase_advice(phase)
+                    ));
+                }
+                out.push(say);
+            }
+        }
+        for d in &self.devices {
+            let n = d.report.perf_count("total");
+            if (1..5).contains(&n) {
+                out.push(format!(
+                    "{}: 실행 지연 표본이 적다 ({n}번) — 5번은 모여야 읽는다.",
+                    d.name
+                ));
+            }
+        }
+
         // 6. 기기마다 대상이 다른 수 (대개 ⌥/Ctrl 관례)
         if self.devices.len() >= 2 {
             let differ = self.differing_targets();
@@ -882,6 +1125,15 @@ impl Compare {
             &|r| pct(r.idle_pct()),
             pct(self.total.idle_pct()),
         );
+        let lat =
+            |r: &KeyReport, q: u64| r.perf_pct("total", q).map_or("—".to_string(), perf_label);
+        row("실행 지연 중앙값", &|r| lat(r, 50), lat(&self.total, 50));
+        row("실행 지연 90%", &|r| lat(r, 90), lat(&self.total, 90));
+        row(
+            "느린 키 훅 (20ms+)",
+            &|r| r.hook_slow.to_string(),
+            self.total.hook_slow.to_string(),
+        );
         let exported: Vec<String> = devs.iter().map(|d| d.exported.clone()).collect();
         let _ = writeln!(o, "| 내보낸 날 | {} | |", exported.join(" | "));
 
@@ -956,6 +1208,34 @@ impl Compare {
                     })
                     .collect();
                 let _ = writeln!(o, "| {label} | {} |", cells.join(" | "));
+            }
+        }
+
+        if !self.total.perf.is_empty() {
+            let names: Vec<&str> = devs.iter().map(|d| d.name.as_str()).collect();
+            let _ = writeln!(o, "\n## 단축키 실행 지연 (중앙값 / 90% · 횟수)\n");
+            let _ = writeln!(o, "| 단계 | {} |", names.join(" | "));
+            let _ = writeln!(o, "|---|{}", "---:|".repeat(devs.len()));
+            for (phase, name) in PERF_PHASES {
+                if self.total.perf_count(phase) == 0 {
+                    continue;
+                }
+                let cells: Vec<String> = devs
+                    .iter()
+                    .map(|d| {
+                        let r = &d.report;
+                        match (r.perf_pct(phase, 50), r.perf_pct(phase, 90)) {
+                            (Some(a), Some(b)) => format!(
+                                "{} / {} · {}",
+                                perf_label(a),
+                                perf_label(b),
+                                r.perf_count(phase)
+                            ),
+                            _ => "—".into(),
+                        }
+                    })
+                    .collect();
+                let _ = writeln!(o, "| {name} | {} |", cells.join(" | "));
             }
         }
 
@@ -1086,6 +1366,7 @@ mod tests {
         Snapshot {
             version: 1,
             device: device.into(),
+            id: String::new(),
             os: os.into(),
             exported: "2026-10-24".into(),
             mapped: mapped_of(km)
@@ -1097,6 +1378,17 @@ mod tests {
                 .map(|(d, m, n)| (d.to_string(), m.to_string(), *n))
                 .collect(),
         }
+    }
+
+    fn snap_days(
+        device: &str,
+        os: &str,
+        rows: &[(&str, String, u64)],
+        km: &KeymapConfig,
+    ) -> Snapshot {
+        let rows: Vec<(&str, &str, u64)> =
+            rows.iter().map(|(d, m, n)| (*d, m.as_str(), *n)).collect();
+        snap(device, os, &rows, km)
     }
 
     fn days(rows: &[(&str, u64)]) -> Vec<(&'static str, String, u64)> {
@@ -1162,24 +1454,8 @@ mod tests {
             ("hold:4", 30),
             ("idle:nav", 9),
         ]);
-        let mac = snap(
-            "mac",
-            "macos",
-            &mac_rows
-                .iter()
-                .map(|(d, m, n)| (*d, m.as_str(), *n))
-                .collect::<Vec<_>>(),
-            &mac_km,
-        );
-        let win = snap(
-            "WIN",
-            "windows",
-            &win_rows
-                .iter()
-                .map(|(d, m, n)| (*d, m.as_str(), *n))
-                .collect::<Vec<_>>(),
-            &win_km,
-        );
+        let mac = snap_days("mac", "macos", &mac_rows, &mac_km);
+        let win = snap_days("WIN", "windows", &win_rows, &win_km);
         let c = Compare::new(&[mac, win], "2026-10-18", 7);
         assert_eq!(c.total.count_of("nav", "H"), 270);
         assert_eq!(c.total.active_days, 3);
@@ -1224,5 +1500,110 @@ mod tests {
     fn 기기_이름은_파일에_쓸_수_있게() {
         assert!(!device_name().is_empty());
         assert_eq!(safe_name("내 맥.local"), "----local");
+    }
+
+    #[test]
+    fn 실행_지연은_단계별_백분위로_읽는다() {
+        assert_eq!(perf_bucket(0), 0);
+        assert_eq!(perf_bucket(99), 2);
+        assert_eq!(perf_bucket(100), 3);
+        assert_eq!(perf_bucket(9999), PERF_BUCKETS - 1);
+        assert_eq!(perf_label(2), "<100ms");
+        assert_eq!(perf_label(PERF_BUCKETS - 1), "2초+");
+        let rows = vec![
+            ("perf:total:3".to_string(), 6),
+            ("perf:total:7".to_string(), 4),
+            ("perf:spawn:2".to_string(), 10),
+            ("perf:window:6".to_string(), 10),
+            ("perf:hookslow".to_string(), 3),
+            ("tap:mouse".to_string(), 40),
+        ];
+        let r = KeyReport::build(&rows, 1, 7, &keymap());
+        assert_eq!(r.perf_count("total"), 10);
+        assert_eq!(r.perf_pct("total", 50), Some(3));
+        assert_eq!(r.perf_pct("total", 90), Some(7));
+        assert_eq!(r.slowest_phase(), Some(("window", 6)));
+        assert_eq!(r.hook_slow, 3);
+        assert_eq!(r.taps, vec![("mouse".to_string(), 40)]);
+        assert_eq!(r.total_idle(), 0, "탭 동작은 스침이 아니다");
+        let say = r.insights().join("\n");
+        assert!(say.contains("중앙값 <150ms, 90% <800ms"), "{say}");
+        assert!(say.contains("가장 늦은 단계는 창 준비"), "{say}");
+        assert!(say.contains("20ms 넘게 걸린 일 3번"), "{say}");
+    }
+
+    #[test]
+    fn 런처가_늦은_기기와_단계를_짚는다() {
+        let km = keymap();
+        let fast = days(&[
+            ("move:nav:H", 50),
+            ("perf:total:3", 2),
+            ("perf:spawn:1", 2),
+            ("perf:window:3", 2),
+        ]);
+        let slow = days(&[
+            ("move:nav:H", 50),
+            ("perf:total:7", 2),
+            ("perf:spawn:3", 2),
+            ("perf:window:7", 2),
+        ]);
+        let c = Compare::new(
+            &[
+                snap_days("mac", "macos", &fast, &km),
+                snap_days("WIN", "windows", &slow, &km),
+            ],
+            "2026-10-18",
+            7,
+        );
+        let say = c.insights().join("\n");
+        assert!(
+            say.contains("런처가 WIN 에서 늦게 뜬다 (중앙값 <800ms vs mac <150ms)"),
+            "{say}"
+        );
+        assert!(say.contains("차이가 가장 큰 단계: 창 준비"), "{say}");
+        let md = c.markdown();
+        assert!(
+            md.contains("| 실행 지연 중앙값 | <150ms | <800ms |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| 창 준비 | <150ms / <150ms · 6 | <800ms / <800ms · 6 |"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn 스냅숏은_launch_대상을_가리고_설치_id로_가른다() {
+        let db = Database::open_in_memory().unwrap();
+        let mut km = keymap();
+        km.layers
+            .get_mut("nav")
+            .unwrap()
+            .mappings
+            .insert("Space".into(), "launch:/Users/me/secret.sh".into());
+        let s = Snapshot::from_db(&db, "mac", "ab12", &km);
+        assert!(s.mapped.iter().any(|m| m.1 == "Space" && m.2 == "launch"));
+        assert!(!serde_json::to_string(&s).unwrap().contains("secret"));
+        assert_eq!(s.file_name(), "kmd-keystats-mac-ab12.json");
+        assert!(s.same_device("mac", "ab12"));
+        assert!(
+            !s.same_device("mac", "ffff"),
+            "이름이 같아도 설치가 다르면 다른 기기"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let id = device_id(dir.path());
+        assert_eq!(id.len(), 8);
+        assert_eq!(device_id(dir.path()), id, "한 번 만든 id 를 계속 쓴다");
+    }
+
+    #[test]
+    fn 공유_폴더_경로는_절대_경로로_풀고_환경_변수는_거절한다() {
+        assert!(expand_sync_path("%USERPROFILE%\\OneDrive").is_err());
+        assert!(expand_sync_path("$HOME/x").is_err());
+        assert!(expand_sync_path("  ").is_err());
+        assert!(expand_sync_path("rel/dir").unwrap().is_absolute());
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_sync_path("~/kmd").unwrap(), home.join("kmd"));
     }
 }

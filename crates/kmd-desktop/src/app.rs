@@ -458,6 +458,7 @@ impl App {
 
     fn handle_got_window_id(&mut self, id: Option<window::Id>) -> Task<Message> {
         self.window_id = id;
+        crate::launch_perf::mark_window();
         tracing::info!(
             "Window id acquired {} ms after boot",
             self.app_started_at.elapsed().as_millis()

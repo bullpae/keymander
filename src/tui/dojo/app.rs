@@ -36,6 +36,8 @@ const KV_CALIB: &str = "dojo.calib.";
 const REAL_MIN: usize = 10;
 /// 비급 도감에서 연 권별 시험의 과 id — 커리큘럼에 없다
 const CODEX_QUIZ: &str = "codex";
+/// 입구 메뉴의 오늘의 수련 과
+const DAILY: &str = "black.1";
 
 /// 실수 직후 화면이 흔들리는 시간
 pub const SHAKE: Duration = Duration::from_millis(140);
@@ -162,6 +164,8 @@ pub struct App {
     pub codex_sel: usize,
     /// 라운드 일시정지 중이면 선택 항목
     pub pause: Option<usize>,
+    /// 일시정지한 순간 — 이어 할 때 그만큼 판의 시계를 민다
+    paused_at: Option<Instant>,
     pub sensei: Sensei,
     pub sensei_line: String,
     /// 화면 하단에 잠시 띄우는 알림
@@ -244,6 +248,7 @@ impl App {
             map_sel: 0,
             codex_sel: 0,
             pause: None,
+            paused_at: None,
             sensei: Sensei::default(),
             sensei_line: String::new(),
             notice: None,
@@ -477,8 +482,13 @@ impl App {
         })
     }
 
+    /// 과를 시작한다 — 오늘의 수련은 띠 잠금 없이 (입구 메뉴·다시 하기 모두)
     fn start_round(&mut self, lesson_id: &str) {
-        self.start_round_with(lesson_id, false);
+        let daily = self
+            .content
+            .lesson(lesson_id)
+            .is_some_and(|(_, _, l)| l.kind == "daily");
+        self.start_round_with(lesson_id, daily);
     }
 
     /// `unlocked`: 띠 잠금을 건너뛴다 (입구의 오늘의 수련)
@@ -554,11 +564,16 @@ impl App {
                 // 카드에는 이 배치·터미널에서 이벤트 하나로 도착하는 수만 — 2탭(줄 처음)은
                 // 첫 탭이 다른 수로 먼저 도착해 오답이 된다
                 let mut l = lesson.clone();
+                let listed = !l.moves.is_empty();
                 l.moves.retain(|m| {
                     Action::from_id(m)
                         .and_then(|a| self.edge_for(a))
                         .is_some_and(|e| e.seq.len() == 1)
                 });
+                // 과가 정한 수가 하나도 안 남으면 화살표 기본 카드로 바뀌지 않게 만들지 않는다
+                if listed && l.moves.is_empty() {
+                    return None;
+                }
                 Some(Play::Spar(Spar::new(&l, now)))
             }
             "maze" => MazeRound::new(content, lesson, now).map(Play::Maze),
@@ -570,16 +585,20 @@ impl App {
                 QuizRound::new(content, &lesson.id, &ids, &seed, false, now).map(Play::Quiz)
             }
             "mixed" => {
-                let stages = lesson
-                    .stage
-                    .iter()
-                    .filter_map(|st| {
-                        let (_, _, src) = content.lesson(&st.from)?;
-                        STAGE_KINDS
-                            .contains(&src.kind.as_str())
+                // 이 배치·터미널에 없는 수가 필요한 단계는 뺀다 — 이길 수 없는 단계다
+                let stages: Vec<Lesson> = {
+                    let has = self.has();
+                    lesson
+                        .stage
+                        .iter()
+                        .filter_map(|st| {
+                            let (_, _, src) = content.lesson(&st.from)?;
+                            (STAGE_KINDS.contains(&src.kind.as_str())
+                                && progress::missing(src, &has).is_empty())
                             .then(|| src.staged(st))
-                    })
-                    .collect();
+                        })
+                        .collect()
+                };
                 self.gauntlet(lesson, stages, now)
             }
             "daily" => {
@@ -903,23 +922,7 @@ impl App {
         if self.pause.is_some() {
             return;
         }
-        let mut fixture = self.fixture.take();
-        let mut real = self.real_fixture.take();
-        let content = self.content;
-        if let Screen::Round(play) = &mut self.screen {
-            if let Play::Summon(round) = play.inner_mut() {
-                let fx = if round.real {
-                    real.as_mut()
-                } else {
-                    Some(fixture.get_or_insert_with(|| Fixture::new(content)))
-                };
-                if let Some(fx) = fx {
-                    round.on_paste(text, fx);
-                }
-            }
-        }
-        self.fixture = fixture;
-        self.real_fixture = real;
+        self.with_summon(|r, fx| r.on_paste(text, fx));
     }
 
     pub fn on_resize(&mut self, w: u16, h: u16) {
@@ -944,10 +947,7 @@ impl App {
                     Play::Ime(r) => r.on_mouse(ev.kind, x, y, now),
                     _ => return false,
                 };
-                match play.as_mut() {
-                    Play::Mixed(g) => g.absorb(ev, now),
-                    _ => ev,
-                }
+                play.absorb(ev)
             }
             _ => return false,
         };
@@ -958,13 +958,17 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) {
         let ctrl_c =
             key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        // Ctrl+C 는 어느 화면에서나 하산이다 — 판 중이면 그 판에서 쓴 수만 남긴다
+        if ctrl_c {
+            if matches!(self.screen, Screen::Round(_)) {
+                self.flush_keys();
+            }
+            self.quit = true;
+            return;
+        }
         match &self.screen {
             Screen::Round(_) => return self.round_key(key),
             Screen::Calib(_) => return self.calib_key(key),
-            _ if ctrl_c => {
-                self.quit = true;
-                return;
-            }
             _ => {}
         }
         match self.screen {
@@ -1010,11 +1014,14 @@ impl App {
             Screen::Codex => match self.nav(key) {
                 Nav::Up => self.codex_sel = self.codex_sel.saturating_sub(1),
                 Nav::Down => {
-                    self.codex_sel = (self.codex_sel + 1).min(self.content.scrolls.scroll.len() - 1)
+                    self.codex_sel = (self.codex_sel + 1)
+                        .min(self.content.scrolls.scroll.len().saturating_sub(1))
                 }
                 Nav::Enter => {
-                    let id = self.content.scrolls.scroll[self.codex_sel].id.clone();
-                    self.start_codex_quiz(&id);
+                    if let Some(s) = self.content.scrolls.scroll.get(self.codex_sel) {
+                        let id = s.id.clone();
+                        self.start_codex_quiz(&id);
+                    }
                 }
                 Nav::Back => self.screen = Screen::Lobby,
                 _ => {}
@@ -1177,7 +1184,7 @@ impl App {
             Nav::Back => self.quit = true,
             Nav::Enter => match MENU[self.lobby_sel].0 {
                 MenuItem::Train => self.open_map(),
-                MenuItem::Daily => self.start_round_with("black.1", true),
+                MenuItem::Daily => self.start_round(DAILY),
                 MenuItem::Codex => self.screen = Screen::Codex,
                 MenuItem::Records => self.screen = Screen::Records,
                 MenuItem::Precheck => {
@@ -1224,7 +1231,7 @@ impl App {
                 KeyCode::Char('r') | KeyCode::Char('R') => self.restart_round(),
                 KeyCode::Esc => self.abandon_round(),
                 KeyCode::Enter => match sel {
-                    0 => self.pause = None,
+                    0 => self.resume(),
                     1 => self.restart_round(),
                     _ => self.abandon_round(),
                 },
@@ -1234,6 +1241,7 @@ impl App {
         }
         if key.code == KeyCode::Esc {
             self.pause = Some(0);
+            self.paused_at = Some(Instant::now());
             return;
         }
         let now = Instant::now();
@@ -1243,23 +1251,12 @@ impl App {
         }
         // 선택을 모르는 모드에서 Shift 는 그냥 이동이다
         let bare = action.map(|a| a.unshifted().unwrap_or(a));
-        let mut fixture = self.fixture.take();
-        let mut real = self.real_fixture.take();
-        let content = self.content;
+        let summoned = self.with_summon(|r, fx| r.on_key(key, fx));
         let Screen::Round(play) = &mut self.screen else {
-            self.fixture = fixture;
-            self.real_fixture = real;
             return;
         };
         let ev = match play.inner_mut() {
-            Play::Summon(r) => {
-                let fx = if r.real {
-                    real.as_mut()
-                } else {
-                    Some(fixture.get_or_insert_with(|| Fixture::new(content)))
-                };
-                fx.map_or(RoundEvent::None, |fx| r.on_key(key, fx))
-            }
+            Play::Summon(_) => summoned.unwrap_or(RoundEvent::None),
             Play::Golf(r) => match key.code {
                 KeyCode::Tab => {
                     r.hint();
@@ -1289,13 +1286,34 @@ impl App {
             Play::Quiz(r) => r.on_key(&key, now),
             Play::Mixed(_) => RoundEvent::None,
         };
-        let ev = match play.as_mut() {
-            Play::Mixed(g) => g.absorb(ev, now),
-            _ => ev,
-        };
-        self.fixture = fixture;
-        self.real_fixture = real;
+        let ev = play.absorb(ev);
         self.after_round_event(ev);
+    }
+
+    /// 일시정지에서 이어 한다 — 쉰 시간만큼 판의 시계를 민다
+    fn resume(&mut self) {
+        self.pause = None;
+        if let (Some(at), Screen::Round(play)) = (self.paused_at.take(), &mut self.screen) {
+            play.shift(at.elapsed());
+        }
+    }
+
+    /// 소환 라운드에 연습 목록(실전이면 내 인덱스)을 빌려 준다. 소환 판이 아니거나
+    /// 실전 인덱스가 아직 없으면 `None`.
+    fn with_summon<R>(&mut self, f: impl FnOnce(&mut Round, &mut Fixture) -> R) -> Option<R> {
+        let content = self.content;
+        let Screen::Round(play) = &mut self.screen else {
+            return None;
+        };
+        let Play::Summon(r) = play.inner_mut() else {
+            return None;
+        };
+        let fx = if r.real {
+            self.real_fixture.as_mut()?
+        } else {
+            self.fixture.get_or_insert_with(|| Fixture::new(content))
+        };
+        Some(f(r, fx))
     }
 
     fn after_round_event(&mut self, event: RoundEvent) {
@@ -1363,7 +1381,7 @@ impl App {
                     let scroll = q.question().scroll.clone();
                     self.start_codex_quiz(&scroll);
                 }
-                _ => self.start_round_with(&id, id == "black.1"),
+                _ => self.start_round(&id),
             }
         }
     }
@@ -1993,6 +2011,73 @@ mod tests {
         let text = draw(&a, 80, 24);
         assert!(text.contains("마") && text.contains("기"), "{text}");
         assert!(text.contains("第一關"), "첫 단계 표지\n{text}");
+    }
+
+    #[test]
+    fn 배치에_없는_수가_필요한_관문은_열리지_않는다() {
+        // 이어 붙이기 관문은 단계들의 needs 를 물려받는다(content::parse) — 이길 수 없는
+        // 단계가 낀 채로 시작하지 않는다. build_play 의 단계 거르기는 그 뒤의 방어선이다.
+        let mut a = app();
+        a.free = true;
+        let (_, _, boss) = a.content.lesson("brown.boss").unwrap();
+        assert!(
+            boss.needed_actions().contains(&Action::ToggleHangul),
+            "IME 단계의 한/영 수를 물려받는다"
+        );
+        a.bindings.without(Action::ToggleHangul);
+        a.screen = Screen::Intro("brown.boss".into());
+        press(&mut a, KeyCode::Enter);
+        assert!(
+            !matches!(a.screen, Screen::Round(_)),
+            "한/영 수가 없으면 관문을 시작하지 않는다"
+        );
+    }
+
+    #[test]
+    fn 쉬고_돌아와도_관문_제한시간은_흐르지_않는다() {
+        let mut a = app();
+        a.free = true;
+        a.screen = Screen::Intro("white.boss".into());
+        press(&mut a, KeyCode::Enter);
+        let left = |a: &App| match &a.screen {
+            Screen::Round(p) => match p.as_ref() {
+                Play::Summon(r) => r.remaining_time(Instant::now()).expect("제한시간"),
+                _ => panic!("소환 관문이 아니다"),
+            },
+            _ => panic!("라운드가 아니다"),
+        };
+        let before = left(&a);
+        press(&mut a, KeyCode::Esc);
+        assert_eq!(a.pause, Some(0));
+        // 제한시간보다 오래 쉰 셈 치고 이어 한다
+        let Some(long_ago) = Instant::now().checked_sub(before + Duration::from_secs(30)) else {
+            return;
+        };
+        a.paused_at = Some(long_ago);
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.pause, None);
+        assert!(left(&a) >= before, "쉰 시간은 제한시간에서 빠지지 않는다");
+        a.on_tick(Instant::now());
+        assert!(
+            matches!(a.screen, Screen::Round(_)),
+            "쉬었다고 시간 초과로 지지 않는다"
+        );
+    }
+
+    #[test]
+    fn 오늘의_수련_결과에서_r_은_띠_잠금_없이_다시_한다() {
+        let mut a = app();
+        a.screen = Screen::Lobby;
+        a.lobby_sel = MENU.iter().position(|m| m.0 == MenuItem::Daily).unwrap();
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.screen, Screen::Round(_)));
+        a.finish_round(false);
+        assert!(matches!(a.screen, Screen::Result(_)));
+        press(&mut a, KeyCode::Char('r'));
+        assert!(
+            matches!(&a.screen, Screen::Round(p) if matches!(p.as_ref(), Play::Mixed(_))),
+            "흰띠여도 결과 화면의 R 로 오늘의 수련을 다시 한다"
+        );
     }
 
     #[test]

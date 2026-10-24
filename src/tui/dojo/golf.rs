@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::action::{Action, Os};
 use super::content::{Content, GolfHole, Lesson};
-use super::play::{BossState, OutcomeRow, RoundEvent, Summary};
+use super::play::{later_opt, later_tag, BossState, OutcomeRow, RoundEvent, Summary};
 use super::score::{self, HoleResult};
 
 /// 홀 화면에 보이는 줄 수
@@ -819,6 +819,19 @@ impl GolfRound {
 
     pub fn animating(&self, now: Instant) -> bool {
         matches!(self.replay_buffer(now), Some((_, k)) if k < self.sage().moves.len() + 1)
+    }
+
+    /// 일시정지한 만큼 시계를 민다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        later_tag(&mut self.flash, d);
+        later_tag(&mut self.feedback, d);
+        if let Phase::HoleOut { replay } = &mut self.phase {
+            later_opt(replay, d);
+        }
+        if let Some(b) = &mut self.boss {
+            b.shift(d);
+        }
     }
 
     pub fn summary(&self, cleared: bool) -> Summary {

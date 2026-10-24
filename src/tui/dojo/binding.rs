@@ -164,6 +164,12 @@ impl Bindings {
     }
 
     /// 이 배치에 그 수가 있는가. 배치 미상이면 있다고 본다(판정은 보정이 맡는다).
+    /// 테스트용 — 그 수가 없는 배치로 만든다
+    #[cfg(test)]
+    pub fn without(&mut self, a: Action) {
+        self.by_action.remove(&a);
+    }
+
     pub fn has(&self, a: Action) -> bool {
         if let Some(base) = a.unshifted() {
             return self.has(base);

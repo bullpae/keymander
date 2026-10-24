@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::action::Action;
 use super::content::{Content, Lesson, MazeDef};
-use super::play::{OutcomeRow, RoundEvent, Summary};
+use super::play::{later_tag, OutcomeRow, RoundEvent, Summary};
 use super::score::{self, HoleResult};
 
 /// 탈출 연출 시간 — 끝나면 다음 미로로
@@ -313,6 +313,16 @@ impl MazeRound {
             };
         }
         RoundEvent::None
+    }
+
+    /// 일시정지한 만큼 시계를 민다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        later_tag(&mut self.flash, d);
+        later_tag(&mut self.feedback, d);
+        if let Phase::Escaped(t) = &mut self.phase {
+            *t += d;
+        }
     }
 
     pub fn tick(&mut self, now: Instant) -> RoundEvent {

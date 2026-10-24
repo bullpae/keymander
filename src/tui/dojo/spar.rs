@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::action::Action;
 use super::content::Lesson;
-use super::play::{BossState, Rng, RoundEvent, Summary};
+use super::play::{later_tag, BossState, Rng, RoundEvent, Summary};
 
 pub const LANES: [Action; 4] = [Action::Left, Action::Down, Action::Up, Action::Right];
 /// 카드 반응시간 막대의 기준
@@ -304,6 +304,17 @@ impl Spar {
             };
         }
         RoundEvent::Hit
+    }
+
+    /// 일시정지한 만큼 시계를 민다 — 화살비 악보도 시작 기준이라 함께 밀린다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        self.prompt_at += d;
+        later_tag(&mut self.last_judge, d);
+        later_tag(&mut self.flash, d);
+        if let Some(b) = &mut self.boss {
+            b.shift(d);
+        }
     }
 
     pub fn tick(&mut self, now: Instant) -> RoundEvent {

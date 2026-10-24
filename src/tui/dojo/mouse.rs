@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyEvent, MouseButton, MouseEventKind};
 
 use super::content::Lesson;
-use super::play::{BossState, Rng, RoundEvent, Summary};
+use super::play::{later_opt, later_tag, BossState, Rng, RoundEvent, Summary};
 
 /// 과녁장 안쪽 크기
 pub const ARENA_W: u16 = 76;
@@ -499,6 +499,26 @@ impl MouseRound {
         match &self.boss {
             Some(b) if b.hp > 0 => RoundEvent::Failed,
             _ => RoundEvent::Finished,
+        }
+    }
+
+    /// 일시정지한 만큼 시계를 민다 — 쥐의 등장 시각은 시작 기준이라 함께 밀린다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        later_opt(&mut self.finished_at, d);
+        later_tag(&mut self.flash, d);
+        later_tag(&mut self.feedback, d);
+        later_tag(&mut self.burst, d);
+        if let LeakPhase::Count(t) | LeakPhase::Active(t) = &mut self.leak {
+            *t += d;
+        }
+        for r in &mut self.rats {
+            if let RatState::Caught(t) = &mut r.state {
+                *t += d;
+            }
+        }
+        if let Some(b) = &mut self.boss {
+            b.shift(d);
         }
     }
 

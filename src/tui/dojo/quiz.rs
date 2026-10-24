@@ -4,12 +4,12 @@
 //! 순서는 판마다 섞는다 — 자리를 외워서는 못 맞힌다. 틀리면 그 권의 본문을 바로
 //! 펼쳐 보여 준다.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::content::Content;
-use super::play::{Rng, RoundEvent, Summary};
+use super::play::{later_tag, Rng, RoundEvent, Summary};
 
 /// 종합 시험 합격선 — 정답 비율
 const PASS: f32 = 0.6;
@@ -92,6 +92,12 @@ impl QuizRound {
         })
     }
 
+    /// 일시정지한 만큼 시계를 민다
+    pub fn shift(&mut self, d: Duration) {
+        self.started += d;
+        later_tag(&mut self.flash, d);
+    }
+
     pub fn question(&self) -> &Question {
         &self.questions[self.idx.min(self.questions.len() - 1)]
     }
@@ -122,7 +128,7 @@ impl QuizRound {
                 let n = self.question().choices.len();
                 match key.code {
                     KeyCode::Up => self.sel = self.sel.saturating_sub(1),
-                    KeyCode::Down => self.sel = (self.sel + 1).min(n - 1),
+                    KeyCode::Down => self.sel = (self.sel + 1).min(n.saturating_sub(1)),
                     KeyCode::Enter => return self.pick(self.sel, now),
                     KeyCode::Char(c @ '1'..='9') => {
                         return self.pick(c as usize - '1' as usize, now);
