@@ -16,11 +16,12 @@ impl App {
         if trimmed.is_empty() {
             self.clear_results_state(kmd_core::SearchMode::Fuzzy);
             // 빈 화면 대신 최근 실행 항목 — 처음 연 사람에게 유일한 학습 단서다.
-            let recent = kmd_core::query_prefix::recent_items(
+            let mut recent = kmd_core::query_prefix::recent_items(
                 &self.db,
                 RECENT_DISPLAY_LIMIT,
                 self.use_emoji,
             );
+            self.say_empty_state(&mut recent);
             if !recent.is_empty() {
                 self.apply_contains_items(recent);
             }
@@ -61,6 +62,7 @@ impl App {
             Prefix::Route => {
                 post_task = self.handle_route_query(trimmed, generation);
             }
+            Prefix::Say => self.handle_say_query(trimmed),
             Prefix::General => self.handle_main_search(trimmed),
         }
 

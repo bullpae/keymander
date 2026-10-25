@@ -41,6 +41,7 @@ mod engine_boot;
 mod focus_flow;
 mod launch;
 mod results;
+mod say;
 mod scope;
 mod search_routing;
 mod settings;
@@ -181,6 +182,12 @@ pub struct App {
     scope_undo: Option<std::path::PathBuf>,
     /// 범위 변경 후 엔진 교체가 끝나면 상태줄에 남길 결과
     scope_report: Option<scope::ScopeReport>,
+    /// `:say` 런처 한 줄 카드 (docs/21)
+    say_card: say::SayCardSlot,
+    /// 입버릇 문장·상태 파일 위치
+    say_store: kmd_core::say::SayStore,
+    /// `:say` 연습에서 이번 창에서 정답을 연 문장 id
+    say_revealed: Option<String>,
 
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
@@ -380,6 +387,9 @@ impl App {
             status_message: None,
             scope_undo: None,
             scope_report: None,
+            say_card: say::SayCardSlot::default(),
+            say_store: say::default_say_store(),
+            say_revealed: None,
             full_warmup_started: false,
             warmup_token: 0,
         };
@@ -642,6 +652,9 @@ impl App {
                     return self.handle_submit(&modifiers);
                 }
                 if let Some(task) = self.handle_scope_key(&key, &modifiers) {
+                    return task;
+                }
+                if let Some(task) = self.handle_say_card_key(&key) {
                     return task;
                 }
                 if let Some(action) = self.match_shortcut(&key, &modifiers) {

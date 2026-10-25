@@ -557,6 +557,7 @@ leading `/` (e.g. `/help`, `/calc 2+3`). Unknown `:command` input shows an
 | `:keymap` / `:km` | Keymap control | `:km on`, `:km off` | Keymap status, on/off, profile switch |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
 | `:version` / `:ver` / `:v` | Version info | `:version` | Show app/core/target/os versions |
+| `:say` / `:입버릇` | English habit | `:say`, `:say add I'm on it \| 하고 있어요` | One English sentence under the empty launcher + typing recall ([SayHabit](https://github.com/bullpae/SayHabit) companion, off by default) |
 | `:help` / `:h` | Help | `:help` | Show all available commands |
 | `!command` / `>command` | Shell | `!ip`, `>echo hello` | Run shell command |
 

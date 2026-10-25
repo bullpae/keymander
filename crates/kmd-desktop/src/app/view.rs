@@ -561,6 +561,23 @@ impl App {
         let u = self.ui;
         // 알릴 일이 있으면 모드·개수 자리를 잠시 내준다 — 저장 실패 같은
         // 이벤트는 검색 결과가 아니므로 결과 목록에 끼워 넣지 않는다.
+        // 빈 입력이면 입버릇 카드가 이 자리를 쓴다 (docs/21 §2.1) — 목록 항목이 아니라서
+        // Enter 로 최근 항목을 여는 습관을 깨지 않는다
+        if let Some((line, hint)) = self.say_status_line() {
+            let left = text(line)
+                .size(u.status_font + 1.0)
+                .color(t.text)
+                .wrapping(Wrapping::None);
+            let right = text(hint).size(u.status_font).color(t.overlay);
+            let bar = row![left, Space::new().width(Fill), right]
+                .padding(Padding::from([4, 14]))
+                .align_y(iced::Alignment::Center);
+            return container(bar)
+                .width(Fill)
+                .height(u.status_bar_height)
+                .clip(true)
+                .into();
+        }
         let status_text = match &self.status_message {
             Some(msg) => msg.clone(),
             None => format!(

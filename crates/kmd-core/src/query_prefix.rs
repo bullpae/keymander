@@ -47,6 +47,8 @@ pub enum QueryPrefix {
     Clipboard,
     /// `:map` / `:길` / `:route` — 카카오맵 길찾기 (docs/20)
     Route,
+    /// `:say` / `:입버릇` — 영어 문장 노출·타이핑 연습 (docs/21)
+    Say,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
     General,
 }
@@ -193,6 +195,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":map ",
         icon_emoji: "\u{1F687}",
         icon_ascii: "[RT]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Say,
+        aliases: crate::say::SAY_ALIASES,
+        title: ":say  English Habit (입버릇)",
+        usage: "Type :say  (practice today's sentence, :say add English | 한국어, :say export)",
+        seed: ":say ",
+        icon_emoji: "\u{1F4AC}",
+        icon_ascii: "[EN]",
     },
     CommandSpec {
         prefix: QueryPrefix::Help,

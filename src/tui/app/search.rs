@@ -55,6 +55,7 @@ pub(super) fn update_search(
         QueryPrefix::Web => handle_web_query(&query, state),
         QueryPrefix::Transform => handle_transform_query(&query, state),
         QueryPrefix::Prompt => handle_prompt_query(&query, state),
+        QueryPrefix::Say => handle_say_query(&query, state),
         QueryPrefix::Calc => handle_calc_query(&query, state),
         QueryPrefix::Emoji => handle_emoji_query(&query, state),
         QueryPrefix::Settings => handle_settings_query(state),
@@ -171,6 +172,22 @@ pub(super) fn handle_prompt_query(query: &str, state: &mut AppState) {
         &state.config.launcher.prompt_templates,
         state.use_emoji,
     );
+    state.results = items_to_results(items, SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :say / :입버릇 (docs/21) — 미리보기만, 저장은 Enter(`commit_say_command`).
+/// TUI는 정답 열기 상태를 두지 않는다 — 빈 입력 Enter 의 정답은 상태 줄에 보인다.
+pub(super) fn handle_say_query(query: &str, state: &mut AppState) {
+    let ctx = kmd_core::say::command::Ctx {
+        cfg: &state.config.say,
+        now: kmd_core::say::now_ms(),
+        revealed: None,
+        use_emoji: state.use_emoji,
+    };
+    let items =
+        kmd_core::say::command::items(query, &kmd_core::say::SayStore::default_location(), ctx);
     state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;

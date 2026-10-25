@@ -25,6 +25,7 @@ pub mod process;
 pub mod prompt;
 pub mod query_prefix;
 pub mod route;
+pub mod say;
 pub mod scope;
 pub mod search;
 pub mod single_instance;

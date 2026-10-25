@@ -35,6 +35,7 @@
 | [12_clipboard_plan.md](12_clipboard_plan.md) | ✅ v0.13.x (P1–P3) | `crates/kmd-daemon/src/clipboard.rs` |
 | [14_testing_plan.md](14_testing_plan.md) | ✅ Tier 1 + Tier 2(E2E 키 주입) | `crates/kmd-daemon/tests/`, `.github/workflows/ci.yml` |
 | [20_route_kakao_map.md](20_route_kakao_map.md) | ✅ `:길` 카카오맵 길찾기 (2026-10-24) | `crates/kmd-core/src/route.rs` |
+| [21_say_english_exposure.md](21_say_english_exposure.md) | ✅ S1 `:say` 입버릇 데스크톱 (2026-10-25) · S2~S4 남음 | `crates/kmd-core/src/say/`, `crates/kmd-desktop/src/app/say.rs` |
 
 ## 계획 — 아직 구현되지 않음
 

@@ -211,6 +211,7 @@ pub(super) fn execute_selected(
             handle_keymap_query(&query, state);
         }
         Activation::PromptCommit => commit_prompt_command(state, engine, db),
+        Activation::SayCommit(target) => commit_say_command(state, engine, db, target),
         // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 브라우저가 열리지 않게)
         Activation::TransformRun => run_transform(state),
         // 클립보드 히스토리·데스크톱 설정은 TUI에 없다 — 안내 항목과 같이 무시
@@ -322,6 +323,57 @@ fn commit_prompt_command(
             state.status_message = Some(msg);
         }
         Err(e) => state.status_message = Some(format!("\u{274C} 저장 실패: {e}")),
+    }
+}
+
+/// `:say` Enter 확정 (docs/21) — 데스크톱 `commit_say_command` 와 같은 순서로 적용한다.
+fn commit_say_command(
+    state: &mut AppState,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+    target: Option<String>,
+) {
+    use kmd_core::say::{command, SayStore};
+    let query = kmd_core::query_prefix::normalize_slash_command(state.query.trim())
+        .unwrap_or_else(|| state.query.trim().to_string());
+    let ctx = command::Ctx {
+        cfg: &state.config.say,
+        now: kmd_core::say::now_ms(),
+        revealed: None,
+        use_emoji: state.use_emoji,
+    };
+    let applied = match command::commit(
+        &query,
+        target.as_deref(),
+        &SayStore::default_location(),
+        ctx,
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            state.status_message = Some(e);
+            return;
+        }
+    };
+    if let Some(enabled) = applied.set_enabled {
+        if let Err(e) = save_config_change(state, move |c| c.say.enabled = enabled) {
+            state.status_message = Some(format!("\u{274C} 저장 실패: {e}"));
+            return;
+        }
+    }
+    if let Some(text) = &applied.copy {
+        if let Err(e) = kmd_core::clipboard::set_text(text) {
+            state.status_message = Some(format!("클립보드 복사 실패: {e}"));
+            return;
+        }
+    }
+    if let Some(next) = applied.next_query {
+        state.query = next;
+        state.refresh_effective_query();
+        state.selected_index = 0;
+    }
+    update_search(state, engine, db);
+    if !applied.message.is_empty() {
+        state.status_message = Some(applied.message);
     }
 }
 

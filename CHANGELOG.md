@@ -96,6 +96,15 @@ All notable changes to keymander are documented here.
   - 처음 가는 곳은 카카오 REST 키(NextMove 와 같은 `~/.config/nextmove/kakao.env`)가 있으면 장소 후보를
     거리와 함께 보여 준다. 키가 없으면 카카오맵 장소 검색 화면을 연다.
   - 검색 결과는 저장하지 않는다(카카오 약관). HTTP 라이브러리 없이 OS 기본 `curl` 을 쓴다.
+- **`:say` — 컴퓨터 앞에서 영어에 스며들기 (입버릇 데스크톱, docs/21 S1)**. 폰 앱
+  [입버릇(SayHabit)](https://github.com/bullpae/SayHabit)은 말하기를, 컴퓨터는 노출을 맡는다.
+  - 런처를 열고 아무것도 안 치면 결과 아래에 영어 한 줄이 보인다. 익숙해진 문장(상자 2 이상)은
+    한국어만 보이고 Tab 으로 영어를 연다. 목록 항목이 아니라서 Enter 로 최근 항목을 여는 습관을 깨지 않는다.
+  - `:say` = 타이핑 떠올리기. 입버릇의 채점(단어 LCS·축약형 풀기)을 그대로 옮겨 같은 답이면 같은 점수다.
+    통과해도 상자는 올리지 않고 3시간 미룬다 — 상자는 폰에서 말해야 오른다. 틀리면 정답을 보고 한 번 따라 친다.
+  - `:say add`(클립보드 또는 `English | 한국어`), `:say import`·`export`(입버릇 일괄 붙여넣기 형식),
+    `:say list`·`stats`·`next`. CLI 는 `kmd say [list|add|import|export|stats|rm|on|off]`.
+  - 기본 꺼짐(`[say] enabled`). `:say` 첫 Enter 로 켜고, 입버릇 기본 문장 40개로 시작한다.
 
 ## [0.17.0] — 2026-10-19
 
