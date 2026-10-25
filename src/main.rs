@@ -119,6 +119,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<PromptAction>,
     },
+    /// English habit sentences for the :say launcher card (list / add / import / export)
+    Say {
+        #[command(subcommand)]
+        action: Option<SayAction>,
+    },
     /// Show version information
     Version,
     /// Upgrade keymander (stops the daemon/launcher, upgrades, restarts the daemon)
@@ -128,6 +133,27 @@ enum Commands {
         #[command(subcommand)]
         action: KeymapAction,
     },
+}
+
+#[derive(Subcommand)]
+enum SayAction {
+    /// List sentences (due first)
+    List,
+    /// Add a sentence: kmd say add "I'm on it." "하고 있어요"
+    Add { en: String, ko: String },
+    /// Import "English | 한국어" lines from a file (or - for stdin)
+    Import { path: String },
+    /// Print all sentences as "English | 한국어" (SayHabit bulk paste format)
+    Export,
+    /// Show counts per box and exposure totals
+    Stats,
+    /// Remove a sentence by its English text or id
+    #[command(alias = "remove")]
+    Rm { query: String },
+    /// Turn the launcher card on
+    On,
+    /// Turn the launcher card off (sentences are kept)
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -424,6 +450,18 @@ fn main() -> color_eyre::Result<()> {
                 PromptAction::List => cmd::prompt::Action::List,
                 PromptAction::Add { name, body } => cmd::prompt::Action::Add { name, body },
                 PromptAction::Remove { name } => cmd::prompt::Action::Remove { name },
+            }))?;
+        }
+        Some(Commands::Say { action }) => {
+            cmd::say::run(action.map(|a| match a {
+                SayAction::List => cmd::say::Action::List,
+                SayAction::Add { en, ko } => cmd::say::Action::Add { en, ko },
+                SayAction::Import { path } => cmd::say::Action::Import { path },
+                SayAction::Export => cmd::say::Action::Export,
+                SayAction::Stats => cmd::say::Action::Stats,
+                SayAction::Rm { query } => cmd::say::Action::Remove { query },
+                SayAction::On => cmd::say::Action::Enable(true),
+                SayAction::Off => cmd::say::Action::Enable(false),
             }))?;
         }
         Some(Commands::Version) => {

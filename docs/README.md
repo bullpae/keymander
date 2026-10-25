@@ -34,6 +34,7 @@
 | [15_content_search_plan.md](15_content_search_plan.md) | ✅ P0~P3 (v0.15.0~v0.16.9) · P4 조건부 | `crates/kmd-core/src/content_index.rs` |
 | [12_clipboard_plan.md](12_clipboard_plan.md) | ✅ v0.13.x (P1–P3) | `crates/kmd-daemon/src/clipboard.rs` |
 | [14_testing_plan.md](14_testing_plan.md) | ✅ Tier 1 + Tier 2(E2E 키 주입) | `crates/kmd-daemon/tests/`, `.github/workflows/ci.yml` |
+| [21_say_english_exposure.md](21_say_english_exposure.md) | ✅ S1 `:say` 입버릇 데스크톱 (2026-10-25) · S2~S4 남음 | `crates/kmd-core/src/say/`, `crates/kmd-desktop/src/app/say.rs` |
 
 ## 계획 — 아직 구현되지 않음
 

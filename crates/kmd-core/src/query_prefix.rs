@@ -43,6 +43,8 @@ pub enum QueryPrefix {
     ContentSearch,
     /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B)
     Clipboard,
+    /// `:say` / `:입버릇` — 영어 문장 노출·타이핑 연습 (docs/21)
+    Say,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
     General,
 }
@@ -171,6 +173,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ";",
         icon_emoji: "\u{1F4CB}",
         icon_ascii: "[CLIP]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Say,
+        aliases: crate::say::SAY_ALIASES,
+        title: ":say  English Habit (입버릇)",
+        usage: "Type :say  (practice today's sentence, :say add English | 한국어, :say export)",
+        seed: ":say ",
+        icon_emoji: "\u{1F4AC}",
+        icon_ascii: "[EN]",
     },
     CommandSpec {
         prefix: QueryPrefix::Help,

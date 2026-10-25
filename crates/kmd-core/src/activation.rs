@@ -24,6 +24,8 @@ pub enum Activation {
     TransformRun,
     /// `:prompt add/rm` 확정 — 현재 질의를 다시 해석해 적용·저장
     PromptCommit,
+    /// `:say` 확정 — 현재 질의를 다시 해석해 적용·저장. 값은 항목에 실린 문장 id (docs/21)
+    SayCommit(Option<String>),
     /// 폴더 제안 → search_paths에 추가 (마커는 항목 keywords)
     FolderSuggest,
     /// `:scope` 추가 — 이 폴더를 검색 범위에 넣고 바로 인덱싱 (docs/18)
@@ -85,6 +87,12 @@ pub fn classify(item: &IndexItem) -> Activation {
     }
     if kw == crate::prompt::PROMPT_ADD_HINT_MARKER {
         return Activation::SetQuery(":prompt add ".to_string());
+    }
+    if let Some(target) = crate::say::command::commit_target(kw) {
+        return Activation::SayCommit(target);
+    }
+    if let Some(seed) = kw.strip_prefix(crate::say::command::SAY_SEED_MARKER) {
+        return Activation::SetQuery(seed.to_string());
     }
     if kw.starts_with(crate::folder_suggest::SUGGEST_MARKER) {
         return Activation::FolderSuggest;
