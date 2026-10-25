@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-10-25
+
 ### Added
 - **`kmd dojo` — 무협 도장 키맵 트레이너 M1~M5** (docs/10). 띠 지도·입문·사부·비급 도감·
   수련 기록과 흰띠 전체(4과 + 관문 미아귀)가 플레이된다.
