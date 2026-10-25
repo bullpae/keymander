@@ -372,7 +372,7 @@ pub fn lobby(f: &mut Frame, stage: Rect, app: &App) {
     let st = app.standing.belts.get(app.standing.current);
     let (done, req) = st.map_or((0, 0), |s| (s.done, s.required));
     let bar_w = 14usize;
-    let filled = if req == 0 { 0 } else { bar_w * done / req };
+    let filled = (bar_w * done).checked_div(req).unwrap_or(0);
     let remain = app.standing.remaining().unwrap_or(0);
     let seal = |name: &str, id: &str| {
         if app.seals.iter().any(|s| s.os == id) {

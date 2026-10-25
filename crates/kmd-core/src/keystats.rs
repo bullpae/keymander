@@ -256,8 +256,8 @@ impl KeyReport {
         }
         r.moves
             .sort_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
-        r.raw.sort_by(|a, b| b.1.cmp(&a.1));
-        r.idle.sort_by(|a, b| b.1.cmp(&a.1));
+        r.raw.sort_by_key(|a| std::cmp::Reverse(a.1));
+        r.idle.sort_by_key(|a| std::cmp::Reverse(a.1));
         r.unused = mapped
             .into_iter()
             .filter(|(id, _)| !used.contains(id))
@@ -1200,11 +1200,9 @@ impl Compare {
                     .iter()
                     .map(|d| {
                         let all = d.report.total_holds();
-                        if all == 0 {
-                            "—".into()
-                        } else {
-                            format!("{}%", d.report.holds[i] * 100 / all)
-                        }
+                        (d.report.holds[i] * 100)
+                            .checked_div(all)
+                            .map_or_else(|| "—".into(), |pct| format!("{pct}%"))
                     })
                     .collect();
                 let _ = writeln!(o, "| {label} | {} |", cells.join(" | "));
