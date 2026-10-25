@@ -3,6 +3,7 @@
 //! Activated when `kmd` is run with no subcommand.
 
 pub mod app;
+pub mod dojo;
 pub mod event;
 pub mod settings;
 pub mod theme;

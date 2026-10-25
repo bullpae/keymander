@@ -9,6 +9,7 @@
 //!   kmd history      → View/clear launch history
 //!   kmd emoji <q>    → Search and copy Unicode emoji
 //!   kmd portable     → Manage portable mode
+//!   kmd dojo         → Keymap trainer (docs/10)
 
 mod cmd;
 mod tui;
@@ -119,6 +120,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<PromptAction>,
     },
+    /// English habit sentences for the :say launcher card (list / add / import / export)
+    Say {
+        #[command(subcommand)]
+        action: Option<SayAction>,
+    },
     /// Show version information
     Version,
     /// Upgrade keymander (stops the daemon/launcher, upgrades, restarts the daemon)
@@ -128,6 +134,60 @@ enum Commands {
         #[command(subcommand)]
         action: KeymapAction,
     },
+    /// Keymap dojo — learn the layers like a martial art (belts, key golf, scrolls)
+    Dojo {
+        /// Jump straight to a lesson (e.g. white.1)
+        #[arg(long)]
+        lesson: Option<String>,
+        /// Free practice — every lesson open regardless of belt (runs are still recorded)
+        #[arg(long)]
+        free: bool,
+        #[command(subcommand)]
+        action: Option<DojoAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DojoAction {
+    /// Print your result card (belt, streak, seals, most-used moves)
+    Card,
+    /// Carry OS seals between machines (one per OS where you earned the black belt)
+    Seal {
+        #[command(subcommand)]
+        action: SealAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SealAction {
+    /// Print this machine's seal code
+    Export,
+    /// Import a seal code from another machine
+    Import {
+        /// Code printed by `kmd dojo seal export` (KMD1-...)
+        code: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SayAction {
+    /// List sentences (due first)
+    List,
+    /// Add a sentence: kmd say add "I'm on it." "하고 있어요"
+    Add { en: String, ko: String },
+    /// Import "English | 한국어" lines from a file (or - for stdin)
+    Import { path: String },
+    /// Print all sentences as "English | 한국어" (SayHabit bulk paste format)
+    Export,
+    /// Show counts per box and exposure totals
+    Stats,
+    /// Remove a sentence by its English text or id
+    #[command(alias = "remove")]
+    Rm { query: String },
+    /// Turn the launcher card on
+    On,
+    /// Turn the launcher card off (sentences are kept)
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -258,6 +318,14 @@ enum KeymapAction {
     Init { profile: Option<String> },
     /// Show available built-in presets
     ListPresets,
+    /// Key-habit stats — layer moves, bare arrows, trigger holds (counts only, never letters; off by default)
+    Stats {
+        /// on | off | clear | sync <DIR|off> | export [PATH] | compare [PATH...] — without it, print the report
+        args: Vec<String>,
+        /// Report period in days (today included, max 3650)
+        #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u32).range(1..=3650))]
+        days: u32,
+    },
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -426,6 +494,18 @@ fn main() -> color_eyre::Result<()> {
                 PromptAction::Remove { name } => cmd::prompt::Action::Remove { name },
             }))?;
         }
+        Some(Commands::Say { action }) => {
+            cmd::say::run(action.map(|a| match a {
+                SayAction::List => cmd::say::Action::List,
+                SayAction::Add { en, ko } => cmd::say::Action::Add { en, ko },
+                SayAction::Import { path } => cmd::say::Action::Import { path },
+                SayAction::Export => cmd::say::Action::Export,
+                SayAction::Stats => cmd::say::Action::Stats,
+                SayAction::Rm { query } => cmd::say::Action::Remove { query },
+                SayAction::On => cmd::say::Action::Enable(true),
+                SayAction::Off => cmd::say::Action::Enable(false),
+            }))?;
+        }
         Some(Commands::Version) => {
             cmd::version::run();
         }
@@ -441,8 +521,23 @@ fn main() -> color_eyre::Result<()> {
                 KeymapAction::Use { profile } => cmd::keymap::Action::Use { profile },
                 KeymapAction::Init { profile } => cmd::keymap::Action::Init { profile },
                 KeymapAction::ListPresets => cmd::keymap::Action::ListPresets,
+                KeymapAction::Stats { args, days } => cmd::keymap::Action::Stats { args, days },
             })?;
         }
+        Some(Commands::Dojo {
+            lesson,
+            free,
+            action,
+        }) => match action {
+            None => cmd::dojo::run(lesson, free)?,
+            Some(DojoAction::Card) => cmd::dojo::card()?,
+            Some(DojoAction::Seal {
+                action: SealAction::Export,
+            }) => cmd::dojo::seal_export()?,
+            Some(DojoAction::Seal {
+                action: SealAction::Import { code },
+            }) => cmd::dojo::seal_import(&code)?,
+        },
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {
             #[cfg(windows)]

@@ -41,6 +41,7 @@ mod engine_boot;
 mod focus_flow;
 mod launch;
 mod results;
+mod say;
 mod scope;
 mod search_routing;
 mod settings;
@@ -181,6 +182,12 @@ pub struct App {
     scope_undo: Option<std::path::PathBuf>,
     /// 범위 변경 후 엔진 교체가 끝나면 상태줄에 남길 결과
     scope_report: Option<scope::ScopeReport>,
+    /// `:say` 런처 한 줄 카드 (docs/21)
+    say_card: say::SayCardSlot,
+    /// 입버릇 문장·상태 파일 위치
+    say_store: kmd_core::say::SayStore,
+    /// `:say` 연습에서 이번 창에서 정답을 연 문장 id
+    say_revealed: Option<String>,
 
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
@@ -236,6 +243,11 @@ pub enum Message {
     ClipSearchFinished {
         generation: u64,
         result: Result<Vec<kmd_core::ipc::ClipHit>, String>,
+    },
+    /// `:길` 장소 검색 완료 (docs/20)
+    RouteSearchFinished {
+        generation: u64,
+        result: Result<Vec<kmd_core::IndexItem>, String>,
     },
     /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
     ClipActionFinished(Result<String, String>),
@@ -375,6 +387,9 @@ impl App {
             status_message: None,
             scope_undo: None,
             scope_report: None,
+            say_card: say::SayCardSlot::default(),
+            say_store: say::default_say_store(),
+            say_revealed: None,
             full_warmup_started: false,
             warmup_token: 0,
         };
@@ -458,6 +473,7 @@ impl App {
 
     fn handle_got_window_id(&mut self, id: Option<window::Id>) -> Task<Message> {
         self.window_id = id;
+        crate::launch_perf::mark_window();
         tracing::info!(
             "Window id acquired {} ms after boot",
             self.app_started_at.elapsed().as_millis()
@@ -638,6 +654,9 @@ impl App {
                 if let Some(task) = self.handle_scope_key(&key, &modifiers) {
                     return task;
                 }
+                if let Some(task) = self.handle_say_card_key(&key) {
+                    return task;
+                }
                 if let Some(action) = self.match_shortcut(&key, &modifiers) {
                     return self.execute_context_action(action);
                 }
@@ -677,6 +696,9 @@ impl App {
             Message::ShellDone(result) => self.handle_shell_done(result),
             Message::ClipSearchFinished { generation, result } => {
                 self.handle_clip_search_finished(generation, result)
+            }
+            Message::RouteSearchFinished { generation, result } => {
+                self.handle_route_search_finished(generation, result)
             }
             Message::ScopeReindexed(result) => self.handle_scope_reindexed(result),
             Message::ClipActionFinished(result) => match result {

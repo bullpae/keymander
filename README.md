@@ -155,9 +155,29 @@ memory. This mission is the whole point of keymander.
 for three consecutive days with zero mouse pickups for launching/navigation.
 When it stops feeling like practice, you've graduated.
 
-> **Coming: `kmd dojo`** — an interactive trainer that turns these missions
-> into timed, scored practice rounds inside the TUI. See the
-> [roadmap](#roadmap).
+> **`kmd dojo` — the keymap dojo.** A terminal trainer that turns these
+> missions into belts, key golf and design-rationale scrolls. Playable now:
+> white (launcher golf — fewest keystrokes to rank the target first), yellow
+> (arrow drills, maze, falling-arrow rhythm boss), orange (key golf with a
+> BFS-optimal "sage" line), green (Shift-selection surgery on real-looking
+> paragraphs), blue (Hangul/English switching rhythm, judged by the characters
+> that arrive) and purple (pointer aim, wheel, drag, rat boss via terminal
+> mouse capture), brown (mixed drills, a scroll exam and "a day without leaving
+> the home row" chained across lessons), black (today's 2-minute practice, three
+> days in a row) and dan (one seal per OS — carry them between machines with
+> `kmd dojo seal export|import`). A layout diagnosis checks your remaps against
+> the design rationale, `kmd dojo card` prints a shareable result card, and
+> summon lessons can run on your real index (R). Instructions follow your own
+> remapped keymap; `kmd dojo --free` opens every lesson. See the
+> [plan](docs/10_dojo_plan.md).
+>
+> **Key-habit stats (opt-in).** `kmd keymap stats on` lets the daemon count
+> layer moves, bare arrow presses and trigger hold times — counts only, never
+> letters, never order or timestamps, and nothing leaves the machine unless you
+> pick a sync folder. `kmd keymap stats` reads them back with advice;
+> `kmd keymap stats sync <folder>` on each machine (iCloud/OneDrive/Dropbox) and
+> `kmd keymap stats compare` puts your Mac and Windows habits side by side
+> ([details](docs/19_key_stats.md)).
 
 ---
 
@@ -532,10 +552,12 @@ leading `/` (e.g. `/help`, `/calc 2+3`). Unknown `:command` input shows an
 | `:prompt` / `:pt` | Prompt templates | `:prompt add review ...` | Manage reusable prompt templates for `@ll` |
 | `:f` | Folder search | `:f ~/docs report` | Search inside a specific folder |
 | `:scope` | Search scope | `:scope D:\Util` | Add/remove folders to index (Ctrl+Del remove, Ctrl+Z undo) — indexed right away |
+| `:map` / `:길` / `:route` | Route (Kakao Map) | `:map 판교역`, `:map 차 회사 → 강남역` | Open Kakao Map directions (transit/car/walk/bike); saved places + place search |
 | `:keys` / `:k` | Keybinding sheet | `:keys` | Show keybinding cheatsheet |
 | `:keymap` / `:km` | Keymap control | `:km on`, `:km off` | Keymap status, on/off, profile switch |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
 | `:version` / `:ver` / `:v` | Version info | `:version` | Show app/core/target/os versions |
+| `:say` / `:입버릇` | English habit | `:say`, `:say add I'm on it \| 하고 있어요` | One English sentence under the empty launcher + typing recall ([SayHabit](https://github.com/bullpae/SayHabit) companion, off by default) |
 | `:help` / `:h` | Help | `:help` | Show all available commands |
 | `!command` / `>command` | Shell | `!ip`, `>echo hello` | Run shell command |
 
@@ -778,8 +800,8 @@ toggle_preview = "ctrl+p"
 ## Roadmap
 
 **Toward v1.0.0**
-- **`kmd dojo`** — interactive keymap trainer: timed missions, scores, streaks
-  ([plan](docs/10_dojo_plan.md))
+- **`kmd dojo`** — keymap trainer: all belts through dan shipped; strict physical-key
+  judging ("hard mode") next ([plan](docs/10_dojo_plan.md))
 - Cloud-synced todo / memo (remote storage integration)
 - Clipboard history manager
 - Plugin marketplace & script-based plugins

@@ -406,6 +406,80 @@ impl Database {
                 )?;
         }
 
+        if version < 5 {
+            // v5: kmd dojo 수련 기록 (docs/10 §10). 스키마 전체를 한 번에 만든다 —
+            // 마일스톤마다 마이그레이션을 쪼개지 않도록 아직 안 쓰는 테이블도 포함.
+            self.conn.execute_batch(
+                "
+                    BEGIN;
+                    CREATE TABLE IF NOT EXISTS dojo_runs (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        lesson      TEXT    NOT NULL,
+                        kind        TEXT    NOT NULL,
+                        strokes     INTEGER,
+                        par         INTEGER,
+                        score       INTEGER NOT NULL,
+                        stars       INTEGER NOT NULL,
+                        max_combo   INTEGER,
+                        mistakes    INTEGER NOT NULL DEFAULT 0,
+                        hints       INTEGER NOT NULL DEFAULT 0,
+                        duration_ms INTEGER NOT NULL,
+                        os          TEXT    NOT NULL,
+                        terminal    TEXT,
+                        keymap_fp   TEXT,
+                        created_at  INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_dojo_runs_lesson ON dojo_runs(lesson);
+                    CREATE TABLE IF NOT EXISTS dojo_progress (
+                        lesson       TEXT PRIMARY KEY,
+                        best_stars   INTEGER NOT NULL,
+                        best_score   INTEGER,
+                        best_strokes INTEGER,
+                        cleared_at   INTEGER
+                    );
+                    CREATE TABLE IF NOT EXISTS dojo_scrolls (
+                        scroll      TEXT PRIMARY KEY,
+                        unlocked_at INTEGER NOT NULL,
+                        mastery     INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE IF NOT EXISTS dojo_daily (
+                        day          TEXT PRIMARY KEY,
+                        score        INTEGER NOT NULL,
+                        completed_at INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS dojo_seals (
+                        os        TEXT PRIMARY KEY,
+                        earned_at INTEGER NOT NULL,
+                        source    TEXT    NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS dojo_keys (
+                        action TEXT PRIMARY KEY,
+                        count  INTEGER NOT NULL
+                    );
+                    PRAGMA user_version = 5;
+                    COMMIT;
+                    ",
+            )?;
+        }
+
+        if version < 6 {
+            // v6: 손버릇 통계 (docs/19) — 데몬이 날마다 지표별 횟수만 더한다.
+            // 글자·순서·시각은 담지 않는다.
+            self.conn.execute_batch(
+                "
+                    BEGIN;
+                    CREATE TABLE IF NOT EXISTS key_stats (
+                        day    TEXT    NOT NULL,
+                        metric TEXT    NOT NULL,
+                        count  INTEGER NOT NULL,
+                        PRIMARY KEY (day, metric)
+                    );
+                    PRAGMA user_version = 6;
+                    COMMIT;
+                    ",
+            )?;
+        }
+
         Ok(())
     }
 }
@@ -622,7 +696,7 @@ mod tests {
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4, "DB 버전이 4로 업그레이드");
+        assert_eq!(version, 6, "DB 버전이 6으로 업그레이드");
 
         // idx_history_executed_at 인덱스 존재 확인
         let idx_exists: bool = db

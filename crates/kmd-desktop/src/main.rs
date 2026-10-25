@@ -12,6 +12,7 @@ mod app;
 mod app_icons;
 mod brand_icons;
 mod engine;
+mod launch_perf;
 mod platform;
 mod query_prefix;
 mod system_icons;
@@ -144,6 +145,7 @@ fn main() -> iced::Result {
         return Ok(());
     }
     let boot_started = std::time::Instant::now();
+    launch_perf::init();
 
     let desktop_data_dir = kmd_core::Config::default_data_dir().join("desktop");
     let log_dir = desktop_data_dir.join("logs");
@@ -208,6 +210,7 @@ fn main() -> iced::Result {
 
     // ── Preload config + window state ─────────────────────────────────────
     let config = engine::load_config();
+    launch_perf::enable(config.launcher.keymap.stats);
     let window_state = WindowState::load();
     apply_renderer_preference(&config.general.renderer);
     // 창을 만들기 전에 투명 여부를 확정해야 한다 (창 설정·레이아웃·렌더에 모두 영향).

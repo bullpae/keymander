@@ -1486,3 +1486,83 @@ fn 범위_밖_폴더_경로를_치면_맨_위에_추가_행() {
         .keywords
         .starts_with(kmd_core::scope::SCOPE_ADD_MARKER));
 }
+
+// ── :say 입버릇 (docs/21) ──
+
+/// 입버릇을 켠 테스트 앱 — 문장 하나(상자 지정)를 임시 폴더에 둔다
+fn make_say_app(b: u8) -> (App, String) {
+    let mut app = make_test_app();
+    let seq = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("kmd_test_say_{}_{seq}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    app.say_store = kmd_core::say::SayStore::new(dir);
+    app.runtime_config.say.enabled = true;
+    let mut s = kmd_core::say::Sentence::new("It's up to you.", "마음대로 하세요", false, 0);
+    s.r#box = b;
+    let id = s.id.clone();
+    app.say_store
+        .save_deck(&kmd_core::say::Deck::new(vec![s]))
+        .unwrap();
+    (app, id)
+}
+
+#[test]
+fn 입버릇_빈_입력_카드는_떠올리기_단계면_영어를_가리고_tab으로_연다() {
+    let (mut app, _) = make_say_app(2);
+    app.query.clear();
+    let _ = app.perform_search();
+    // 테스트 DB 에는 최근 항목이 없어 카드가 항목으로 들어간다
+    let card = &app.results[0].item;
+    assert!(card.name.contains("마음대로 하세요"), "{}", card.name);
+    assert!(!card.name.contains("up to you"), "{}", card.name);
+    let tab = keyboard::Key::Named(keyboard::key::Named::Tab);
+    assert!(app.handle_say_card_key(&tab).is_some());
+    assert!(app.results[0].item.name.contains("up to you"));
+    // Enter = :say 연습으로
+    let _ = app.launch_selected();
+    assert_eq!(app.query, ":say ");
+}
+
+#[test]
+fn 입버릇_꺼져_있으면_say_enter가_켠다() {
+    let (mut app, _) = make_say_app(0);
+    app.runtime_config.say.enabled = false;
+    app.query = ":say".into();
+    let _ = app.perform_search();
+    let _ = app.launch_selected();
+    assert!(app.runtime_config.say.enabled);
+    assert_eq!(app.query, ":say ");
+    assert!(app
+        .status_message
+        .as_deref()
+        .unwrap_or("")
+        .contains("켰습니다"));
+}
+
+#[test]
+fn 입버릇_타이핑_통과는_상자를_올리지_않는다() {
+    let (mut app, id) = make_say_app(2);
+    app.query = ":say it is up to you".into();
+    let _ = app.perform_search();
+    assert!(
+        app.results[1].item.name.starts_with("100%"),
+        "{}",
+        app.results[1].item.name
+    );
+    let _ = app.launch_selected();
+    assert!(app.status_message.as_deref().unwrap_or("").contains("통과"));
+    let deck = app.say_store.load_deck(0).unwrap();
+    let s = deck.get(&id).unwrap();
+    assert_eq!((s.r#box, s.typed_count), (2, 1));
+}
+
+#[test]
+fn 입버릇_빈_입력_enter는_정답을_연다() {
+    let (mut app, id) = make_say_app(3);
+    app.query = ":say ".into();
+    let _ = app.perform_search();
+    assert!(!app.results[0].item.name.contains("up to you"));
+    let _ = app.launch_selected();
+    assert_eq!(app.say_revealed.as_deref(), Some(id.as_str()));
+    assert!(app.results[0].item.name.contains("up to you"));
+}

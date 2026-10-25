@@ -195,6 +195,7 @@ impl App {
             self.use_emoji = config.general.emoji_icons;
             self.runtime_config = config;
             self.loading = false;
+            crate::launch_perf::mark_engine();
             tracing::info!("Search engine ready");
             // `:scope` 변경 결과 — 재검색이 알림을 지우므로 그 뒤에 남긴다
             let scope_msg = self.take_scope_report_message();
@@ -263,6 +264,7 @@ impl App {
         if let Some(engine) = loaded {
             self.engine = engine;
             self.loading = false;
+            crate::launch_perf::mark_engine();
             tracing::info!(
                 "Quick engine applied {} ms after boot",
                 self.app_started_at.elapsed().as_millis()

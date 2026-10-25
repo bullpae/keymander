@@ -1,5 +1,6 @@
 pub mod config;
 pub mod daemon;
+pub mod dojo;
 pub mod emoji;
 pub mod grep;
 pub mod history;
@@ -9,6 +10,7 @@ pub mod launch;
 pub mod plugin;
 pub mod portable;
 pub mod prompt;
+pub mod say;
 pub mod scope;
 pub mod search;
 pub mod upgrade;

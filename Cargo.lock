@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "keymander"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2303,6 +2303,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "unicode-width 0.2.0",
@@ -2328,7 +2329,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kmd-core"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "arboard",
  "bincode",
@@ -2353,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "kmd-daemon"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "arboard",
  "clipboard-win",
@@ -2363,16 +2364,19 @@ dependencies = [
  "kmd-core",
  "notify",
  "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-location 0.3.2",
  "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
+ "windows 0.62.2",
  "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "kmd-desktop"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "core-foundation-sys",
  "iced",
@@ -3014,7 +3018,7 @@ dependencies = [
  "bitflags 2.13.1",
  "block2 0.5.1",
  "objc2 0.5.2",
- "objc2-core-location",
+ "objc2-core-location 0.2.2",
  "objc2-foundation 0.2.2",
 ]
 
@@ -3119,6 +3123,16 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-contacts",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-core-location"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca347214e24bc973fc025fd0d36ebb179ff30536ed1f80252706db19ee452009"
+dependencies = [
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -3260,7 +3274,7 @@ dependencies = [
  "objc2-cloud-kit 0.2.2",
  "objc2-core-data 0.2.2",
  "objc2-core-image 0.2.2",
- "objc2-core-location",
+ "objc2-core-location 0.2.2",
  "objc2-foundation 0.2.2",
  "objc2-link-presentation",
  "objc2-quartz-core 0.2.2",
@@ -3289,7 +3303,7 @@ dependencies = [
  "bitflags 2.13.1",
  "block2 0.5.1",
  "objc2 0.5.2",
- "objc2-core-location",
+ "objc2-core-location 0.2.2",
  "objc2-foundation 0.2.2",
 ]
 

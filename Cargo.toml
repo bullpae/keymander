@@ -10,7 +10,7 @@ iced_wgpu = { path = "vendor/iced_wgpu" }
 
 [package]
 name = "keymander"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
 build = "build.rs"
 description = "키보드 하나로 모든 것을 지휘한다 — CLI-first 크로스플랫폼 런처"
@@ -44,6 +44,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Serialization (for CLI JSON output)
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+# kmd dojo 콘텐츠(assets/dojo/*.toml) 파싱 — kmd-core 와 같은 버전
+toml = "0.8"
 
 # Unicode display width (for proper CJK cursor positioning)
 unicode-width = "0.2"

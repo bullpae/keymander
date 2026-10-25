@@ -301,6 +301,83 @@ fn sync_content_index(config: &Config) {
     }
 }
 
+/// 손버릇 통계 (docs/19) 를 1분마다 DB 에 더한다. 엔진은 `[launcher.keymap] stats`
+/// 가 켜졌을 때만 세므로, 꺼져 있으면 꺼낼 것이 없어 DB 를 열지도 않는다.
+fn spawn_key_stats_saver(shutdown: Arc<AtomicBool>) {
+    // DB 는 1분마다(데몬이 신호로 끝나도 잃는 것이 1분 안), 공유 폴더는 5분마다
+    // (동기화 도구를 자주 깨우지 않게)
+    const SAVE: Duration = Duration::from_secs(60);
+    const SYNC: Duration = Duration::from_secs(300);
+    std::thread::spawn(move || {
+        let mut last_save = Instant::now();
+        let mut last_sync = Instant::now();
+        while !shutdown.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(1));
+            if last_save.elapsed() >= SAVE {
+                last_save = Instant::now();
+                let sync = last_sync.elapsed() >= SYNC;
+                if sync {
+                    last_sync = Instant::now();
+                }
+                save_key_stats(sync);
+            }
+        }
+    });
+}
+
+/// DB 쓰기에 실패한 통계 — 다음 저장 때 다시 더한다 (엔진에서 이미 꺼냈으므로)
+static UNSAVED_KEY_STATS: std::sync::Mutex<Vec<(String, u32)>> = std::sync::Mutex::new(Vec::new());
+
+fn save_key_stats(sync: bool) {
+    let mut stats = keybind::take_key_stats();
+    let mut unsaved = UNSAVED_KEY_STATS.lock().unwrap_or_else(|e| e.into_inner());
+    stats.append(&mut unsaved);
+    if stats.is_empty() {
+        return;
+    }
+    match kmd_core::Database::open_default(kmd_core::DbRole::Shared) {
+        Ok(db) => {
+            if let Err(e) = db.key_stats_add(&stats) {
+                tracing::warn!("손버릇 통계 저장 실패 — 다음에 다시: {e}");
+                keep_unsaved(&mut unsaved, stats);
+                return;
+            }
+            drop(unsaved);
+            if sync {
+                sync_key_stats(&db);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("손버릇 통계 DB 열기 실패 — 다음에 다시: {e}");
+            keep_unsaved(&mut unsaved, stats);
+        }
+    }
+}
+
+/// 못 쓴 통계를 남긴다 — DB 가 오래 막혀도 메모리가 끝없이 늘지 않게 상한을 둔다
+fn keep_unsaved(unsaved: &mut Vec<(String, u32)>, mut stats: Vec<(String, u32)>) {
+    const MAX: usize = 20_000;
+    stats.truncate(MAX);
+    *unsaved = stats;
+}
+
+/// `stats_sync` 공유 폴더가 정해져 있으면 이 기기 스냅숏을 거기 쓴다 (docs/19 §6)
+fn sync_key_stats(db: &kmd_core::Database) {
+    let Ok(config) = Config::load(&Config::default_config_dir()) else {
+        return;
+    };
+    let km = &config.launcher.keymap;
+    if km.stats_sync.is_none() {
+        return;
+    }
+    let effective = kmd_core::keymap::effective_keymap(km);
+    match kmd_core::keystats::sync_export(db, km, &effective) {
+        Ok(Some(path)) => tracing::debug!("손버릇 통계 내보냄: {}", path.display()),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("손버릇 통계 공유 폴더 쓰기 실패: {e}"),
+    }
+}
+
 /// 파일 변경 감시 스레드 — 본문 인덱스 실시간 증분 sync (docs/15 P2).
 ///
 /// search_paths를 재귀 감시하고, 이벤트가 500ms 잠잠해지면 증분 sync를
@@ -535,6 +612,7 @@ pub fn run() -> color_eyre::Result<()> {
     // 주기 리프레시 전까지 아무 스캔도 하지 않는다.
     spawn_index_refresher(engine.clone(), shutdown.clone(), rebuild_immediately);
     spawn_content_watcher(shutdown.clone());
+    spawn_key_stats_saver(shutdown.clone());
 
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
     // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.
@@ -589,7 +667,8 @@ pub fn run() -> color_eyre::Result<()> {
 
     let _ = accept_handle.join();
 
-    // 키 바인딩 종료
+    // 남은 손버릇 통계를 저장하고 키 바인딩 종료
+    save_key_stats(true);
     if let Err(e) = kb_backend.stop() {
         tracing::warn!("키 바인딩 종료 실패: {e}");
     }
@@ -711,6 +790,16 @@ fn process_request(
                 message: "이어서 질문 전달 중".into(),
             }
         }
+
+        Request::Location => match crate::location::current() {
+            Ok((fix, age_secs)) => Response::Location {
+                lat: fix.lat,
+                lng: fix.lng,
+                accuracy_m: fix.accuracy_m,
+                age_secs,
+            },
+            Err(message) => Response::Error { message },
+        },
 
         Request::InjectPaste => {
             keybind::inject_paste();

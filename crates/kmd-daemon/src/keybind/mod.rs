@@ -366,6 +366,38 @@ pub fn resolve_launch_cmd(name: &str) -> String {
     safe_name.to_string()
 }
 
+/// Launch 액션 실행 — 느린 worker 에서 부른다. `delay` 뒤 별도 스레드에서 띄운다.
+///
+/// 자식에게 실행 시각(`KMD_LAUNCH_AT_MS`)을 넘긴다. 데스크톱 런처는 이것으로
+/// 프로세스 생성·창·엔진 준비까지의 지연을 재어 손버릇 통계에 남긴다 (docs/19 §7).
+pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
+    // 런처가 포커스를 뺏기 전에 현재 전경 앱을 기억한다 (docs/12 흐름 B —
+    // 나중에 클립보드 항목을 그 앱에 붙여넣기 위함). 다른 launch 바인딩이
+    // 런처 사용 중 붙여넣기 대상을 덮어쓰지 않도록 데스크톱 런처를 여는
+    // 액션에서만 캡처한다.
+    if crate::clipboard::launch_captures_foreground(cmd) {
+        crate::clipboard::capture_foreground_app();
+    }
+    let resolved = resolve_launch_cmd(cmd);
+    tracing::info!("프로그램 실행: {resolved}");
+    std::thread::spawn(move || {
+        use kmd_core::process::HideConsole;
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        if let Err(e) = std::process::Command::new(&resolved)
+            .env(kmd_core::keystats::LAUNCH_AT_ENV, at.to_string())
+            .hide_console()
+            .spawn()
+        {
+            tracing::error!("프로그램 실행 실패: {resolved} — {e}");
+        }
+    });
+}
+
 // ── 붙여넣기 주입 (확장 능력 스파이크, docs/11) ──────────────────────────────
 //
 // [P3 프로토타입] 클립보드 확장이 현재 분리 구조에서 가능한지 실증하기 위한 것.
@@ -578,6 +610,8 @@ pub struct KeybindConfig {
     pub tap_holds: Vec<TapHoldBinding>,
     /// Runtime toggle hotkey. When disabled, this and Launch combos still run.
     pub toggle_keymap: Option<ComboTrigger>,
+    /// 손버릇 통계를 센다 (`[launcher.keymap] stats`, docs/19) — 기본 꺼짐
+    pub stats: bool,
 }
 
 impl KeybindConfig {
@@ -589,6 +623,7 @@ impl KeybindConfig {
             double_taps: Vec::new(),
             tap_holds: Vec::new(),
             toggle_keymap: None,
+            stats: false,
         }
     }
 }
@@ -800,6 +835,7 @@ impl KeybindConfig {
             double_taps,
             tap_holds,
             toggle_keymap: None,
+            stats: cfg.stats,
         })
     }
 }
@@ -975,6 +1011,22 @@ fn parse_combo_vkeys(s: &str) -> Option<(Vec<&str>, VKey)> {
 pub trait KeyboardBackend: Send {
     fn start(&mut self, config: KeybindConfig) -> Result<(), String>;
     fn stop(&mut self) -> Result<(), String>;
+}
+
+/// 쌓인 손버릇 통계를 꺼낸다 (docs/19). 훅이 없는 플랫폼(Linux 는 kanata)은 빈 목록.
+pub fn take_key_stats() -> Vec<(String, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::take_key_stats()
+    }
+    #[cfg(windows)]
+    {
+        windows::take_key_stats()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Vec::new()
+    }
 }
 
 /// 키보드 훅 생존 요약 — `kmd daemon status`로 노출한다.

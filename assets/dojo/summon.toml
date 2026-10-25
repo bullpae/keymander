@@ -1,0 +1,155 @@
+# 소환술 연습 목록 + 의뢰 (docs/10 §4-4)
+#
+# 연습 목록은 결정론적이라 사부의 수(Par)가 공정하다. 일부러 이름이 겹치는
+# 항목(fire/FileZilla, quote/quarterly …)을 섞어 "몇 글자로 1순위가 되는가"를
+# 고민하게 한다. 이름은 영문 — 한글 음절은 한 글자가 여러 타인데 1타로 세면
+# 불공정해진다.
+#
+# 의뢰는 둘 중 하나:
+#   target = "항목 이름"        → 그 항목이 1순위인 상태에서 Enter
+#   accept = ["@gh keymander"]  → 입력이 이 중 하나와 같으면 성공 (접두 비급)
+
+items = [
+  # ── 앱 ──
+  { name = "Firefox", kind = "app", path = "/Applications/Firefox.app" },
+  { name = "Firefox Developer Edition", kind = "app", path = "/Applications/Firefox Developer Edition.app" },
+  { name = "FileZilla", kind = "app", path = "/Applications/FileZilla.app" },
+  { name = "Finder", kind = "app", path = "/System/Library/CoreServices/Finder.app" },
+  { name = "Final Cut Pro", kind = "app", path = "/Applications/Final Cut Pro.app" },
+  { name = "Figma", kind = "app", path = "/Applications/Figma.app" },
+  { name = "Visual Studio Code", kind = "app", path = "/Applications/Visual Studio Code.app" },
+  { name = "VLC", kind = "app", path = "/Applications/VLC.app" },
+  { name = "VirtualBox", kind = "app", path = "/Applications/VirtualBox.app" },
+  { name = "Slack", kind = "app", path = "/Applications/Slack.app" },
+  { name = "Sketch", kind = "app", path = "/Applications/Sketch.app" },
+  { name = "Safari", kind = "app", path = "/Applications/Safari.app" },
+  { name = "Spotify", kind = "app", path = "/Applications/Spotify.app" },
+  { name = "Sports Tracker", kind = "app", path = "/Applications/Sports Tracker.app" },
+  { name = "System Settings", kind = "app", path = "/System/Applications/System Settings.app" },
+  { name = "Terminal", kind = "app", path = "/System/Applications/Utilities/Terminal.app" },
+  { name = "Termius", kind = "app", path = "/Applications/Termius.app" },
+  { name = "TextEdit", kind = "app", path = "/System/Applications/TextEdit.app" },
+  { name = "Telegram", kind = "app", path = "/Applications/Telegram.app" },
+  { name = "Calculator", kind = "app", path = "/System/Applications/Calculator.app" },
+  { name = "Calendar", kind = "app", path = "/System/Applications/Calendar.app" },
+  { name = "Camera", kind = "app", path = "/Applications/Camera.app" },
+  { name = "Chrome", kind = "app", path = "/Applications/Google Chrome.app" },
+  { name = "Claude", kind = "app", path = "/Applications/Claude.app" },
+  { name = "Notion", kind = "app", path = "/Applications/Notion.app" },
+  { name = "Notes", kind = "app", path = "/System/Applications/Notes.app" },
+  { name = "Numbers", kind = "app", path = "/Applications/Numbers.app" },
+  { name = "Keynote", kind = "app", path = "/Applications/Keynote.app" },
+  { name = "KakaoTalk", kind = "app", path = "/Applications/KakaoTalk.app" },
+  { name = "Mail", kind = "app", path = "/System/Applications/Mail.app" },
+  { name = "Maps", kind = "app", path = "/System/Applications/Maps.app" },
+  { name = "Music", kind = "app", path = "/System/Applications/Music.app" },
+  { name = "Preview", kind = "app", path = "/System/Applications/Preview.app" },
+  { name = "Photos", kind = "app", path = "/System/Applications/Photos.app" },
+  { name = "QuickTime Player", kind = "app", path = "/System/Applications/QuickTime Player.app" },
+  { name = "Zoom", kind = "app", path = "/Applications/zoom.us.app" },
+  # ── 파일 ──
+  { name = "quote_2026-09.pdf", kind = "file", path = "~/Downloads/quote_2026-09.pdf" },
+  { name = "quote_2026-07.pdf", kind = "file", path = "~/Downloads/quote_2026-07.pdf" },
+  { name = "quarterly_report.pdf", kind = "file", path = "~/Documents/quarterly_report.pdf" },
+  { name = "invoice_2026-08.pdf", kind = "file", path = "~/Downloads/invoice_2026-08.pdf" },
+  { name = "invoice_2026-09.pdf", kind = "file", path = "~/Downloads/invoice_2026-09.pdf" },
+  { name = "lease_contract.pdf", kind = "file", path = "~/Documents/house/lease_contract.pdf" },
+  { name = "tax_return_2025.pdf", kind = "file", path = "~/Documents/tax/tax_return_2025.pdf" },
+  { name = "boarding_pass_jeju.pdf", kind = "file", path = "~/Downloads/boarding_pass_jeju.pdf" },
+  { name = "resume_2026.hwpx", kind = "file", path = "~/Documents/career/resume_2026.hwpx" },
+  { name = "resume_2024.hwpx", kind = "file", path = "~/Documents/career/resume_2024.hwpx" },
+  { name = "report_draft.hwpx", kind = "file", path = "~/Documents/work/report_draft.hwpx" },
+  { name = "budget_2026.xlsx", kind = "file", path = "~/Documents/finance/budget_2026.xlsx" },
+  { name = "budget_2025.xlsx", kind = "file", path = "~/Documents/finance/budget_2025.xlsx" },
+  { name = "attendance.xlsx", kind = "file", path = "~/Documents/work/attendance.xlsx" },
+  { name = "logo_final.svg", kind = "file", path = "~/Design/brand/logo_final.svg" },
+  { name = "logo_draft.svg", kind = "file", path = "~/Design/brand/logo_draft.svg" },
+  { name = "logo_final.png", kind = "file", path = "~/Design/brand/logo_final.png" },
+  { name = "banner_autumn.png", kind = "file", path = "~/Design/banner_autumn.png" },
+  { name = "keynote_talk.key", kind = "file", path = "~/Documents/talks/keynote_talk.key" },
+  { name = "meeting_notes.md", kind = "file", path = "~/notes/meeting_notes.md" },
+  { name = "reading_list.md", kind = "file", path = "~/notes/reading_list.md" },
+  { name = "todo.md", kind = "file", path = "~/notes/todo.md" },
+  { name = "README.md", kind = "file", path = "~/repo/keymander/README.md" },
+  { name = "config.toml", kind = "file", path = "~/.config/keymander/config.toml" },
+  { name = "main.rs", kind = "file", path = "~/repo/keymander/src/main.rs" },
+  { name = "Cargo.toml", kind = "file", path = "~/repo/keymander/Cargo.toml" },
+  { name = "package.json", kind = "file", path = "~/repo/site/package.json" },
+  { name = "docker-compose.yml", kind = "file", path = "~/repo/site/docker-compose.yml" },
+  { name = "wedding_video.mp4", kind = "file", path = "~/Movies/wedding_video.mp4" },
+  { name = "lofi_mix.mp3", kind = "file", path = "~/Music/lofi_mix.mp3" },
+  { name = "screenshot_0912.png", kind = "file", path = "~/Desktop/screenshot_0912.png" },
+  { name = "screenshot_0915.png", kind = "file", path = "~/Desktop/screenshot_0915.png" },
+  { name = "passport_scan.jpg", kind = "file", path = "~/Documents/id/passport_scan.jpg" },
+  { name = "family_photo.jpg", kind = "file", path = "~/Pictures/family_photo.jpg" },
+  # ── 폴더 ──
+  { name = "Downloads", kind = "dir", path = "~/Downloads" },
+  { name = "Documents", kind = "dir", path = "~/Documents" },
+  { name = "Desktop", kind = "dir", path = "~/Desktop" },
+  { name = "Design", kind = "dir", path = "~/Design" },
+  { name = "meetings", kind = "dir", path = "~/Documents/work/meetings" },
+  { name = "career", kind = "dir", path = "~/Documents/career" },
+  { name = "finance", kind = "dir", path = "~/Documents/finance" },
+  { name = "jeju_trip", kind = "dir", path = "~/Pictures/jeju_trip" },
+  { name = "keymander", kind = "dir", path = "~/repo/keymander" },
+  { name = "site", kind = "dir", path = "~/repo/site" },
+  { name = "notes", kind = "dir", path = "~/notes" },
+  { name = "Movies", kind = "dir", path = "~/Movies" },
+  { name = "Pictures", kind = "dir", path = "~/Pictures" },
+]
+
+[[set]]
+id = "names"
+requests = [
+  { ask = "Firefox 를 열어라.", target = "Firefox" },
+  { ask = "Visual Studio Code 를 열어라.", target = "Visual Studio Code" },
+  { ask = "Slack 을 열어라.", target = "Slack" },
+  { ask = "Terminal 을 열어라.", target = "Terminal" },
+  { ask = "Calculator 를 열어라.", target = "Calculator" },
+  { ask = "Spotify 를 열어라.", target = "Spotify" },
+]
+
+[[set]]
+id = "ext"
+requests = [
+  { ask = "PDF 중에서 9월 견적서 (quote_2026-09.pdf).", target = "quote_2026-09.pdf" },
+  { ask = "한글 문서 중에서 2026년 이력서 (resume_2026.hwpx).", target = "resume_2026.hwpx" },
+  { ask = "엑셀 중에서 출근부 (attendance.xlsx).", target = "attendance.xlsx" },
+  { ask = "키노트 발표 파일 하나뿐인 .key.", target = "keynote_talk.key" },
+  { ask = "SVG 중에서 최종 로고 (logo_final.svg).", target = "logo_final.svg" },
+  { ask = "mp4 영상 (wedding_video.mp4).", target = "wedding_video.mp4" },
+]
+
+[[set]]
+id = "asks"
+requests = [
+  { ask = "지난달 받은 견적서 PDF 를 열어 달라.", target = "quote_2026-09.pdf" },
+  { ask = "회의록을 모아 둔 폴더가 어디더라.", target = "meetings" },
+  { ask = "올해 이력서 한글 파일을 다오.", target = "resume_2026.hwpx" },
+  { ask = "회사 로고 최종본, 벡터로.", target = "logo_final.svg" },
+  { ask = "올해 예산표 엑셀.", target = "budget_2026.xlsx" },
+  { ask = "제주 여행 사진 폴더.", target = "jeju_trip" },
+]
+
+[[set]]
+id = "prefix"
+requests = [
+  { ask = "GitHub 에서 keymander 를 검색하라.", accept = ["@gh keymander", "@github keymander"] },
+  { ask = "YouTube 에서 lofi 를 틀어라.", accept = ["@yt lofi", "@youtube lofi"] },
+  { ask = "위키백과에서 rust 를 찾아라.", accept = ["@w rust", "@wiki rust"] },
+  { ask = "구글에서 kanata 를 검색하라.", accept = ["@g kanata", "@google kanata"] },
+  { ask = "셸에서 ls 를 바로 실행하라.", accept = ["!ls", ">ls"] },
+]
+
+[[set]]
+id = "boss"
+requests = [
+  { ask = "Final Cut Pro 를 열어라.", target = "Final Cut Pro" },
+  { ask = "8월 인보이스 PDF.", target = "invoice_2026-08.pdf" },
+  { ask = "GitHub 에서 ratatui 를 검색하라.", accept = ["@gh ratatui", "@github ratatui"] },
+  { ask = "Telegram 을 열어라.", target = "Telegram" },
+  { ask = "임대차 계약서 PDF.", target = "lease_contract.pdf" },
+  { ask = "keymander 저장소 폴더.", target = "keymander" },
+  { ask = "QuickTime Player 를 열어라.", target = "QuickTime Player" },
+  { ask = "작년 세금 신고서.", target = "tax_return_2025.pdf" },
+]

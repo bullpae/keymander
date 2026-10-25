@@ -7,9 +7,7 @@
 
 use super::engine::{lock_engine, EngineState, HookLossCleanup, KeyDecision};
 use super::mouse::{MouseSink, MouseWorker};
-use super::{
-    resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
-};
+use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -732,25 +730,9 @@ fn execute_action(action: &BindAction) {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         }
-        BindAction::Launch(cmd) => {
-            // 런처가 포커스를 뺏기 전에 현재 전경 앱을 기억한다 (docs/12 흐름 B —
-            // 나중에 클립보드 항목을 그 앱에 붙여넣기 위함). 다른 launch 바인딩이
-            // 런처 사용 중 붙여넣기 대상을 덮어쓰지 않도록 데스크톱 런처를 여는
-            // 액션에서만 캡처한다.
-            if crate::clipboard::launch_captures_foreground(cmd) {
-                crate::clipboard::capture_foreground_app();
-            }
-            let resolved = resolve_launch_cmd(cmd);
-            tracing::info!("프로그램 실행: {resolved}");
-            std::thread::spawn(move || {
-                // macOS에서 Alt/Space 단축키 직후 즉시 실행하면 modifier 해제/IME 초기 조합
-                // 타이밍과 겹쳐 첫 한글 조합이 깨질 수 있다. 짧은 지연 후 실행한다.
-                std::thread::sleep(std::time::Duration::from_millis(45));
-                if let Err(e) = std::process::Command::new(&resolved).spawn() {
-                    tracing::error!("프로그램 실행 실패: {resolved} — {e}");
-                }
-            });
-        }
+        // macOS에서 Alt/Space 단축키 직후 즉시 실행하면 modifier 해제/IME 초기 조합
+        // 타이밍과 겹쳐 첫 한글 조합이 깨질 수 있다. 짧은 지연 후 실행한다.
+        BindAction::Launch(cmd) => super::spawn_launch(cmd, std::time::Duration::from_millis(45)),
         // 상태형 마우스 바인딩이 콤보/리맵/더블탭 등 일회성 경로로 온 경우 —
         // 단발 동작으로 처리 (클릭 1회, 휠 1노치, 짧은 이동)
         BindAction::Mouse(mb) => match mb {
@@ -906,6 +888,23 @@ fn clear_hidutil_remap() {
 // 있다. 이 파일은 CGEventTap 설치/이벤트 변환/액션 실행만 담당한다.
 
 static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
+
+/// 쌓인 손버릇 통계를 꺼낸다 (docs/19) — 데몬의 저장 스레드가 몇 분마다 부른다.
+/// 엔진 락은 해시맵을 통째로 옮기는 동안만 쥔다.
+pub fn take_key_stats() -> Vec<(String, u32)> {
+    match HOOK_STATE.get() {
+        Some(state) => {
+            let (mut guard, recovered) = lock_engine(state);
+            let batch = guard.take_stats();
+            drop(guard);
+            if let Some(cleanup) = recovered {
+                apply_hook_loss_cleanup(cleanup);
+            }
+            batch.named()
+        }
+        None => Vec::new(),
+    }
+}
 
 /// 훅 상실·엔진 poison 복구 정리를 워커 큐에 넣는다 (눌린 트리거 해제·마우스 정지).
 fn apply_hook_loss_cleanup(cleanup: HookLossCleanup) {

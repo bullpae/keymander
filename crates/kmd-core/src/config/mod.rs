@@ -38,6 +38,8 @@ pub struct Config {
     pub launcher: LauncherConfig,
     pub keybindings: KeybindingsConfig,
     pub clipboard: ClipboardConfig,
+    /// `:say` 입버릇 데스크톱 (docs/21)
+    pub say: crate::say::SayConfig,
 
     /// Config file path (excluded from serialization)
     #[serde(skip)]

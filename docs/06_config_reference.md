@@ -125,6 +125,15 @@ toggle_preview = "ctrl+p"
 | multi_llm_prefixes | Vec\<String\> | @llm,@ll,… | `@llm` 별칭 |
 | llm_autopilot | bool | false | LLM 자동 제출(데몬 키 주입, Windows). `@gpt`/`@claude`는 Enter, `@gemini`는 붙여넣기+Enter를 전경창 검증 후 주입. `@@ <질문>`으로 이어서 질문. 자동 키 주입이라 opt-in (docs/09) |
 
+### 4.2.0 [launcher.route] — `:map` (`:길`) 카카오맵 길찾기 (docs/20)
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| use_location | bool | true | 출발지를 안 적으면 현재 위치(OS 위치 서비스, 데몬이 메모리에만 보관)에서 출발 |
+| origin | String? | 없음 | 현재 위치를 못 얻었거나 `use_location = false`일 때의 출발지 (내 장소 이름) |
+| places | Map\<String, String\> | {} | 내 장소: 이름 = "위도,경도" (`[launcher.route.places]`) |
+| kakao_key_file | Path? | `~/.config/nextmove/kakao.env` | 처음 가는 곳의 후보 검색용 카카오 REST 키 파일. 환경 변수 `KAKAO_REST_API_KEY`가 먼저 |
+
 ### 4.2.1 [launcher.content_search] — 문서 본문 검색 (docs/15)
 
 파일 이름이 아니라 **내용**으로 찾는 FTS5 인덱스. 스캔 범위는 `search_paths` +
@@ -198,6 +207,8 @@ flowchart TD
 | kanata_path | Path? | None | kanata 바이너리 경로 (None = PATH에서 탐색) |
 | profile_dir | Path? | None | 프로파일 디렉토리 (None = `config_dir/keymap`) |
 | active_profile | String | "vim-nav" | 활성 프로파일 이름 |
+| stats | bool | false | 손버릇 통계 — 데몬이 레이어 수 사용·맨 화살표·트리거 홀드 시간을 **횟수로만** 센다(글자는 안 셈). `kmd keymap stats on/off` 로도 바꾼다 ([19](19_key_stats.md)) |
+| stats_sync | path | (없음) | 손버릇 통계를 내보낼 공유 폴더 — 데몬이 저장할 때마다 `kmd-keystats-<기기>.json` 을 쓴다. `kmd keymap stats sync <폴더\|off>` ([19 §6](19_key_stats.md)) |
 
 ```toml
 [launcher.keymap]
@@ -333,6 +344,25 @@ macOS는 `org.nspasteboard.ConcealedType`, Windows는
 > macOS는 Cmd+숫자가 탭 전환이라 Alt+숫자가 비어 충돌이 없다. Windows는
 > Alt+숫자가 일부 앱에서 탭/메뉴 단축이므로, 겹치지 않는 슬롯만 고르거나
 > 다른 키에 매핑한다 (예: `"clip:2"`를 다른 키로).
+
+### 4.8 [say] — 입버릇 영어 노출 (docs/21)
+
+런처를 열 때 빈 입력이면 결과 아래(상태 줄)에 영어 문장 한 줄을 보이고, `:say` 로
+타이핑 떠올리기를 한다. 문장은 `<data_dir>/say/deck.json` 에 입버릇(SayHabit)과 같은
+필드로 저장한다.
+
+```toml
+[say]
+enabled = false   # 기본 off — :say 첫 Enter 또는 kmd say on 으로 켠다
+card = true       # 빈 입력 카드
+pass_score = 0.8  # 타이핑 통과 기준 (0~1)
+```
+
+| 키 | 기본값 | 설명 |
+|----|--------|------|
+| enabled | false | 켜기. **기본 off** — 런처는 검색 도구이고 화면을 다른 사람이 볼 수 있다 |
+| card | true | 빈 입력일 때 상태 줄 카드. 떠올리기 단계(상자 2 이상)는 한국어만 보이고 Tab 으로 영어를 연다 |
+| pass_score | 0.8 | 이 점수 이상이면 통과. 통과해도 상자는 올리지 않고 3시간 미룬다 — 상자는 폰에서 말해야 오른다 |
 
 ---
 

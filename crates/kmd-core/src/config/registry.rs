@@ -98,6 +98,9 @@ config_registry! {
     "keybindings.prev"                 => keybindings.prev, text;
     "keybindings.select"               => keybindings.select, text;
     "keybindings.toggle_preview"       => keybindings.toggle_preview, text;
+    "say.enabled"                      => say.enabled, num;
+    "say.card"                         => say.card, num;
+    "say.pass_score"                   => say.pass_score, num;
 }
 
 impl Config {

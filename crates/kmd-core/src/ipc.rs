@@ -48,6 +48,8 @@ pub enum Request {
     /// 데스크톱이 클립보드를 세팅한 뒤 호출한다 — 클립보드 확장의 핵심 능력을
     /// 분리 구조에서 실증하기 위한 것 (docs/11).
     InjectPaste,
+    /// 현재 위치 — `:길` 기본 출발지 (docs/20). 데몬이 메모리에만 들고 있다.
+    Location,
     /// 클립보드 히스토리 n번째(1-기반) 항목을 붙여넣기 (docs/12).
     /// `to_previous=false`: 현재 전경 앱(흐름 A). `true`: 런처 열기 전 앱으로
     /// 포커스를 되돌린 뒤(흐름 B — 런처가 결과 선택 시 사용).
@@ -163,6 +165,13 @@ pub enum Response {
     Error { message: String },
     /// Ping 응답
     Pong,
+    /// 현재 위치 (`accuracy_m` = 정확도 반경, `age_secs` = 측정 후 지난 초)
+    Location {
+        lat: f64,
+        lng: f64,
+        accuracy_m: f64,
+        age_secs: u64,
+    },
 }
 
 impl Response {

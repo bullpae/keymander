@@ -5,9 +5,7 @@
 
 use super::engine::{lock_engine, EngineState, HookLossCleanup, KeyDecision};
 use super::mouse::{MouseSink, MouseWorker};
-use super::{
-    resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
-};
+use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError, LPARAM, LRESULT, WPARAM};
@@ -29,6 +27,31 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 // 재진입 문제가 없다.
 
 static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
+
+/// 쌓인 손버릇 통계를 꺼낸다 (docs/19) — 데몬의 저장 스레드가 몇 분마다 부른다.
+/// 엔진 락은 해시맵을 통째로 옮기는 동안만 쥔다.
+pub fn take_key_stats() -> Vec<(String, u32)> {
+    match HOOK_STATE.get() {
+        Some(state) => {
+            let (mut guard, recovered) = lock_engine(state);
+            let batch = guard.take_stats();
+            let stats_on = guard.config.stats;
+            drop(guard);
+            if let Some(cleanup) = recovered {
+                apply_hook_loss_cleanup(cleanup);
+            }
+            let mut stats = batch.named();
+            // 20ms 넘은 훅 콜백 — 지난번 이후 늘어난 만큼 (누적값은 daemon status 용)
+            let slow = HOOK_SLOW_CALLBACKS.load(Ordering::Relaxed);
+            let seen = STATS_SLOW_SEEN.swap(slow, Ordering::Relaxed);
+            if stats_on && slow > seen {
+                stats.push(("perf:hookslow".into(), slow - seen));
+            }
+            stats
+        }
+        None => Vec::new(),
+    }
+}
 
 /// 훅 상실·엔진 poison 복구 정리 — 주입해 둔 트리거 해제 + 마우스 정지.
 fn apply_hook_loss_cleanup(cleanup: HookLossCleanup) {
@@ -75,6 +98,8 @@ static LAST_INJECTION_ERROR: AtomicU32 = AtomicU32::new(0);
 /// 훅 콜백 최대 지연과 큐 깊이 진단. 사용자 입력 내용은 포함하지 않는다.
 static HOOK_MAX_LATENCY_MS: AtomicU32 = AtomicU32::new(0);
 static HOOK_SLOW_CALLBACKS: AtomicU32 = AtomicU32::new(0);
+/// 손버릇 통계가 마지막으로 읽어 간 HOOK_SLOW_CALLBACKS 값
+static STATS_SLOW_SEEN: AtomicU32 = AtomicU32::new(0);
 static HOOK_PANICS: AtomicU32 = AtomicU32::new(0);
 static FAST_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
 static SLOW_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
@@ -866,22 +891,7 @@ fn execute_mouse_pulse(mb: MouseBind) -> Result<(), SendInputFailure> {
 /// 느린 액션 전용 worker. 훅 콜백과 key-up/chord release 경로를 막지 않는다.
 fn execute_slow_action(action: BindAction) {
     match action {
-        BindAction::Launch(cmd) => {
-            // 런처가 포커스를 뺏기 전에 전경 HWND 캡처 (docs/12 흐름 B).
-            // 다른 launch 바인딩이 런처 사용 중 붙여넣기 대상을 덮어쓰지 않도록
-            // 데스크톱 런처를 여는 액션에서만 캡처한다.
-            if crate::clipboard::launch_captures_foreground(&cmd) {
-                crate::clipboard::capture_foreground_app();
-            }
-            let resolved = resolve_launch_cmd(&cmd);
-            tracing::info!("프로그램 실행: {resolved}");
-            std::thread::spawn(move || {
-                use kmd_core::process::HideConsole;
-                if let Err(e) = std::process::Command::new(&resolved).hide_console().spawn() {
-                    tracing::error!("프로그램 실행 실패: {resolved} — {e}");
-                }
-            });
-        }
+        BindAction::Launch(cmd) => super::spawn_launch(&cmd, std::time::Duration::ZERO),
         BindAction::ClipPaste(n) => crate::clipboard::paste_slot(n),
         _ => tracing::error!("합성 입력 액션이 느린 worker로 잘못 전달됨"),
     }

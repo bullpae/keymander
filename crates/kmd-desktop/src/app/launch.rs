@@ -217,6 +217,7 @@ impl App {
                 exit_launcher()
             }
             Activation::PromptCommit => self.commit_prompt_command(),
+            Activation::SayCommit(target) => self.commit_say_command(target),
             Activation::Settings => self.handle_settings_action(&result),
             Activation::Keymap => self.handle_keymap_action(&result),
             // TUI 전용 모달 · 안내 항목

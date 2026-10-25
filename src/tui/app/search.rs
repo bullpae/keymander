@@ -55,6 +55,7 @@ pub(super) fn update_search(
         QueryPrefix::Web => handle_web_query(&query, state),
         QueryPrefix::Transform => handle_transform_query(&query, state),
         QueryPrefix::Prompt => handle_prompt_query(&query, state),
+        QueryPrefix::Say => handle_say_query(&query, state),
         QueryPrefix::Calc => handle_calc_query(&query, state),
         QueryPrefix::Emoji => handle_emoji_query(&query, state),
         QueryPrefix::Settings => handle_settings_query(state),
@@ -63,12 +64,21 @@ pub(super) fn update_search(
         QueryPrefix::Shell => handle_shell_query(&query, state),
         QueryPrefix::Keymap => handle_keymap_query(&query, state),
         QueryPrefix::Keys => handle_keys_query(state),
+        QueryPrefix::Dojo => {
+            state.results = items_to_results(
+                kmd_core::query_prefix::dojo_items(state.use_emoji),
+                SCORE_CALC,
+            );
+            state.search_mode = SearchMode::Contains;
+            state.selected_index = 0;
+        }
         QueryPrefix::FolderSearch => handle_folder_search(&query, state),
         QueryPrefix::Scope => super::scope::handle_scope_query(&query, state, engine),
         QueryPrefix::ContentSearch => handle_content_search(&query, state, db),
         // 클립보드 히스토리는 데몬+데스크톱 기능이다 (TUI는 상주 감시가 없음).
         // TUI에서는 일반 검색으로 흘려보낸다.
         QueryPrefix::Clipboard => handle_main_search(&query, state, engine),
+        QueryPrefix::Route => handle_route_query(&query, state),
         QueryPrefix::General => {
             handle_main_search(&query, state, engine);
             // 범위 밖 폴더 경로를 그대로 쳤으면 맨 위에 "검색 범위에 추가" (docs/18 E1)
@@ -167,9 +177,33 @@ pub(super) fn handle_prompt_query(query: &str, state: &mut AppState) {
     state.selected_index = 0;
 }
 
+/// Handle :say / :입버릇 (docs/21) — 미리보기만, 저장은 Enter(`commit_say_command`).
+/// TUI는 정답 열기 상태를 두지 않는다 — 빈 입력 Enter 의 정답은 상태 줄에 보인다.
+pub(super) fn handle_say_query(query: &str, state: &mut AppState) {
+    let ctx = kmd_core::say::command::Ctx {
+        cfg: &state.config.say,
+        now: kmd_core::say::now_ms(),
+        revealed: None,
+        use_emoji: state.use_emoji,
+    };
+    let items =
+        kmd_core::say::command::items(query, &kmd_core::say::SayStore::default_location(), ctx);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
 /// Handle :calc prefix (explicit calculator mode)
 fn handle_calc_query(query: &str, state: &mut AppState) {
     let items = kmd_core::query_prefix::calc_items(query, state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.selected_index = 0;
+}
+
+/// `:길` — 카카오맵 길찾기. TUI는 키마다 네트워크를 기다릴 수 없어 내 장소와
+/// 장소 검색 링크만 낸다 (후보 검색은 데스크톱, docs/20).
+fn handle_route_query(query: &str, state: &mut AppState) {
+    let items = kmd_core::route::items(&state.config.launcher.route, query, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.selected_index = 0;
 }
