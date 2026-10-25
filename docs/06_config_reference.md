@@ -125,7 +125,7 @@ toggle_preview = "ctrl+p"
 | multi_llm_prefixes | Vec\<String\> | @llm,@ll,… | `@llm` 별칭 |
 | llm_autopilot | bool | false | LLM 자동 제출(데몬 키 주입, Windows). `@gpt`/`@claude`는 Enter, `@gemini`는 붙여넣기+Enter를 전경창 검증 후 주입. `@@ <질문>`으로 이어서 질문. 자동 키 주입이라 opt-in (docs/09) |
 
-### 4.2.0 [launcher.route] — `:길` 카카오맵 길찾기 (docs/20)
+### 4.2.0 [launcher.route] — `:map` (`:길`) 카카오맵 길찾기 (docs/20)
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|

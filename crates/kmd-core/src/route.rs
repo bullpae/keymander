@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::index::{IndexItem, ItemKind, Source};
 use crate::process::HideConsole;
 
-pub const ROUTE_ALIASES: &[&str] = &[":route", ":길"];
+pub const ROUTE_ALIASES: &[&str] = &[":map", ":route", ":길"];
 
 /// 키를 찾는 환경 변수 이름 (NextMove 와 같다)
 pub const KEY_ENV: &str = "KAKAO_REST_API_KEY";
@@ -431,8 +431,8 @@ pub fn items_for(cfg: &RouteConfig, plan: &Plan, use_emoji: bool) -> Vec<IndexIt
     match &plan.to {
         End::None | End::Here => {
             let mut out = vec![notice(
-                ":길 [대중교통|차|도보|자전거] [출발 →] 도착",
-                "예: :길 판교역   :길 차 회사 → 강남역   (카카오맵 길찾기를 엽니다)",
+                ":map [대중교통|차|도보|자전거] [출발 →] 도착   (:길 도 같음)",
+                "예: :map 판교역   :map 차 회사 → 강남역   (카카오맵 길찾기를 엽니다)",
                 use_emoji,
             )];
             out.extend(
@@ -661,6 +661,8 @@ mod tests {
 
         assert_eq!(parse(&c, ":길 도보").mode, Some(Mode::Walk));
         assert_eq!(parse(&c, ":길").to, End::None);
+        // 영문 자판 그대로 치는 별칭
+        assert_eq!(parse(&c, ":map 회사").to, parse(&c, ":길 회사").to);
     }
 
     #[test]
