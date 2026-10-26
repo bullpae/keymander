@@ -1,6 +1,6 @@
 # 22. 파일 검색 엔진 — 수십만 개를 세 OS에서 똑같이 빠르게
 
-> 상태: **설계 v4.1** (2026-10-26, 브랜치 `bullpae/file-search`) — **IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트**.
+> 상태: **설계 v4.1, F0 구현** (2026-10-26, 브랜치 `bullpae/scope-quota`) — **IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트**.
 > v1~v3.1 은 "데몬이 색인을 들고 런처가 IPC 로 묻는" 구조였다. 보안·차단 환경 검토 끝에 파일 검색에서 IPC 를 뺐다(§7).
 > 계기: Windows 10 사용자 보고 — `:scope` 로 `E:\MyOffice` (파일 약 40만, 폴더 약 8,200)를 넣었더니
 > `2022년` 이후 폴더가 검색되지 않음. 직접 원인은 커밋 08ed07c 에서 고쳤다(§2.1). 이 문서는 근본 구조를 다룬다.
@@ -341,7 +341,7 @@ accelerator = "none"     # none | everything (F4)
 
 | 단계 | 내용 | 완료 조건 |
 |---|---|---|
-| **F0** (이번 PR `bullpae/scope-quota`) | 08ed07c + `search_fuzzy` 완료 확인(tick 반복 상한 50ms, 안 끝났으면 다음 프레임 재확인) + `filter_contains` HashSet 제거 + `LlmAutopilot` URL https 만 | 40만 `2`→`zzzz` 에서 이전 결과가 남지 않음, "보고서 최종" 10배 이상 |
+| **F0** ✅ (`bullpae/scope-quota`) | 08ed07c + `search_fuzzy` 완료 확인(tick 반복 상한 50ms, 넘기면 `is_pending` + 빈 결과 → 데스크톱 30ms 뒤 재검색·TUI Tick 재검색, CLI·데몬은 끝까지 대기) + `filter_contains` HashSet 제거·상위만 복제 + `LlmAutopilot` URL https 만 | 실측(40만): `2` 50건·`zzzz` 0건(이전 결과 남지 않음), "보고서 최종" 188→80ms(목표 10배는 미달 — 긴 경로 선형 스캔 자체가 남은 비용, F1 에서 해소) |
 | **F1** | `filesearch` 코어: 열 형식·base 스냅숏 쓰기/검증/mmap·View·질의(memmem·bag·1~2글자·폴더 마스크)·싼 점수→Matcher + **메모리 변경분과 열 때 대조**(폴더 mtime → 재나열 → 이번 검색에 반영). base 는 지금 `Index::build` 시점에 같이 쓴다. 런처는 `engine=auto` 면 새 엔진, 실패 시 옛 경로 | Windows 4코어·한글·깊이 4~7 합성 40만/100만에서 p95(질의 종류별), 참조 구현 차등 테스트, 스냅숏 퍼징 |
 | **F2** | 변경분 세그먼트·manifest 세대·정리(열 때 대조 결과를 공개해 다음 런처가 이어 씀) + `rank::combine` + 골든 셋 + quick-index 합치기 + `kmd index --stats` 상태. 파일 할당량 제거는 설정 뒤에 숨긴 채 | 골든 셋 통과, 데몬 끈 상태에서 검색·대조 동작 |
 | **F3** | 데몬의 notify + Dirty 큐·대조기 + 볼륨별 전략 + 폴더 이동 재배치 → 런처를 열지 않아도 수 초 안에 공개. 검증 후 **할당량 제거를 기본으로** | NTFS 실측(폴더 mtime, 대소문자 변경, 260자 경로, 10만 개 폭주), 데몬 강제 종료 복구 |
