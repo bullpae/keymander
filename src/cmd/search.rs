@@ -17,26 +17,28 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
 
     let (mode, mut results) = engine.search(query, limit);
 
-    // 새 파일 검색 엔진(docs/22) — 한 번 묻고 끝나므로 열 때 대조도 그 자리에서
-    if config.launcher.file_search.enabled() {
-        if let Some(index) = kmd_core::filesearch::FileIndex::open_default() {
-            let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
-            let index = index.reconciled(&cfg).unwrap_or(index);
-            let files = index.search(
-                query,
-                limit,
-                &kmd_core::filesearch::Boost::default(),
-                &config.launcher.kind_weights,
-                config.general.emoji_icons,
-            );
-            kmd_core::filesearch::merge_results(&mut results, files);
-            results.truncate(limit);
-        }
-    }
+    let frecency = super::open_db()
+        .map(|db| kmd_core::history::load_boost_map(&db))
+        .unwrap_or_default();
 
-    // Apply history boost
-    if let Ok(db) = super::open_db() {
-        kmd_core::history::boost_results(&mut results, &db);
+    // 새 파일 검색 엔진(docs/22) — 한 번 묻고 끝나므로 열 때 대조도 그 자리에서.
+    // 앱·실행 파일까지 한 척도로 다시 매기고 실행 이력도 그 안에서 더한다.
+    let file_index = config
+        .launcher
+        .file_search
+        .enabled()
+        .then(kmd_core::filesearch::FileIndex::open_default)
+        .flatten();
+    if let Some(index) = file_index {
+        let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
+        let index = index.reconciled(&cfg).unwrap_or(index);
+        let weights = &config.launcher.kind_weights;
+        let boost = kmd_core::filesearch::Boost::new(&frecency);
+        let files = index.search(query, limit, &boost, weights, config.general.emoji_icons);
+        results = kmd_core::rank::merge(results, files, query, weights, &frecency);
+        results.truncate(limit);
+    } else {
+        kmd_core::history::boost_results_with_map(&mut results, &frecency);
     }
 
     if json {

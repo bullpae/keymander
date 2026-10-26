@@ -57,6 +57,9 @@ enum Commands {
         /// Suggest active folders outside the current search scope
         #[arg(long)]
         suggest: bool,
+        /// Compare legacy vs new file search ranking on your launch history (docs/22)
+        #[arg(long)]
+        golden: bool,
     },
     /// Manage search scope — folders to index (list / add / rm)
     Scope {
@@ -426,8 +429,13 @@ fn main() -> color_eyre::Result<()> {
             rebuild,
             stats,
             suggest,
+            golden,
         }) => {
-            cmd::index::run(rebuild, stats, suggest)?;
+            if golden {
+                cmd::golden::run()?;
+            } else {
+                cmd::index::run(rebuild, stats, suggest)?;
+            }
         }
         Some(Commands::Config { action }) => {
             cmd::config::run(action.map(|a| match a {

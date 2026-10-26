@@ -171,10 +171,13 @@ toggle_preview = "ctrl+p"
 
 - 켜는 법: `kmd config set launcher.file_search.engine auto` → `kmd index --rebuild`
 - 확인: `kmd index --stats` 의 "File index" 줄(세대·폴더·파일 수·검색 폴더별 상태)
+- 켜기 전 비교: `kmd index --golden` — 실행 이력의 항목마다 질의(앞 세 글자·첫 단어·머리글자)를 만들어
+  옛 엔진과 새 엔진에서 몇 위에 오는지 1위·3위 안 비율로 보여 준다
+- 켜면 순위도 바뀐다: 앱·실행 파일·폴더·파일을 이름 일치 품질 중심의 한 공식으로 매긴다(docs/22 §3.7)
 - 저장 위치: 로밍되지 않는 사용자 데이터 폴더 `filesearch/` (Windows `%LOCALAPPDATA%\kmd\filesearch`,
   macOS `~/Library/Application Support/kmd/filesearch`). 포터블 모드여도 포터블 폴더에 두지 않는다
-- FAT32·exFAT·네트워크 볼륨은 폴더 시각을 믿을 수 없어 열 때 대조에서 빠지고 색인 재빌드 때만 갱신된다
-  (Windows 는 UNC 경로만 판별 — 매핑된 네트워크 드라이브·FAT 는 아직 판별하지 않음)
+- FAT32·exFAT·네트워크 볼륨(UNC·매핑된 드라이브, SMB·NFS)은 폴더 시각을 믿을 수 없어 열 때 대조에서 빠지고
+  색인 재빌드 때만 갱신된다
 
 ### 4.3 [launcher.kind_weights]
 

@@ -51,6 +51,10 @@ getrandom = "0.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# 파일 검색 색인: 볼륨 종류 판별(네트워크·FAT 는 폴더 시각을 믿을 수 없다, docs/22 §3.9)
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tempfile = "3"
 filetime = "0.2"
