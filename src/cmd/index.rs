@@ -118,6 +118,32 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
     Ok(())
 }
 
+/// 새 파일 검색 엔진 스냅숏 (docs/22) — 세대·항목 수·검색 폴더별 상태
+fn print_file_index_stats() {
+    use kmd_core::filesearch::{snapshot, table::Kind};
+    let dir = snapshot::default_dir();
+    let Ok(snap) = snapshot::Snapshot::open_current(&dir) else {
+        return;
+    };
+    let t = snap.table();
+    let dirs = (0..t.len()).filter(|&r| t.kind(r) == Kind::Dir).count();
+    println!(
+        "\n  File index (docs/22): 세대 {}, 폴더 {}, 파일 {} — {}",
+        snap.generation(),
+        dirs,
+        t.len() - dirs,
+        snap.path().display()
+    );
+    for root in t.roots {
+        let note = if root.mtime_reliable {
+            "열 때 대조"
+        } else {
+            "폴더 시각을 믿을 수 없는 볼륨 — 주기 재빌드로만 갱신"
+        };
+        println!("    {}  ({note})", root.path_buf().display());
+    }
+}
+
 fn print_stats(index: &kmd_core::Index) {
     use kmd_core::index::Source;
     use std::collections::HashMap;
@@ -150,6 +176,7 @@ fn print_stats(index: &kmd_core::Index) {
     println!("  PATH executables: {}", path_exes);
     println!("  Files:            {}", files);
     println!("  System commands:  {}", sys_cmds);
+    print_file_index_stats();
 
     // Show top file extensions
     if files > 0 {

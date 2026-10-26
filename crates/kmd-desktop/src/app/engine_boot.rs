@@ -87,6 +87,24 @@ impl App {
         })
     }
 
+    /// 열 때 대조 — 창을 띄운 뒤 뒤에서 폴더 시각을 확인해 바뀐 폴더만 다시 읽는다 (docs/22 §3.8)
+    pub(super) fn spawn_file_reconcile_task(
+        index: Option<Arc<kmd_core::filesearch::FileIndex>>,
+        config: &kmd_core::Config,
+    ) -> Task<Message> {
+        let Some(index) = index else {
+            return Task::none();
+        };
+        let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
+        Task::future(async move {
+            match tokio::task::spawn_blocking(move || index.reconciled(&cfg)).await {
+                Ok(Some(updated)) => Some(Message::FileIndexUpdated(Arc::new(updated))),
+                _ => None,
+            }
+        })
+        .and_then(Task::done)
+    }
+
     pub(super) fn spawn_full_engine_load_task(&self) -> Task<Message> {
         let slot = self.engine_slot.clone();
         Task::future(async move {

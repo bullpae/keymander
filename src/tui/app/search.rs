@@ -361,6 +361,18 @@ fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngi
         results.splice(0..0, calc_results);
     }
 
+    // 새 파일 검색 엔진(docs/22): 할당량에 잘린 옛 파일 결과를 전체 색인 결과로 바꾼다
+    if let Some(index) = &state.file_index {
+        let files = index.search(
+            query,
+            SEARCH_RESULT_LIMIT,
+            &state.file_boost,
+            &state.config.launcher.kind_weights,
+            state.use_emoji,
+        );
+        kmd_core::filesearch::merge_results(&mut results, files);
+    }
+
     // Apply history boost — 캐시된 맵으로 (키 입력마다 DB 조회 없음)
     kmd_core::history::boost_results_with_map(&mut results, &state.frecency);
 

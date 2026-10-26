@@ -133,6 +133,10 @@ pub struct App {
     full_engine_loaded: bool,
     /// 실행 이력 frecency 맵 — 부팅 시 1회 로드해 키 입력마다의 DB 조회를 제거
     frecency: kmd_core::history::FrecencyMap,
+    /// 새 파일 검색 엔진 색인 (docs/22) — `launcher.file_search.engine = "auto"` 이고 스냅숏이 있을 때만
+    file_index: Option<Arc<kmd_core::filesearch::FileIndex>>,
+    /// 파일 검색 후보 선정용 실행 이력 (frecency 에서 이름 → 경로)
+    file_boost: Arc<kmd_core::filesearch::Boost>,
     db: kmd_core::db::Database,
     /// 본문 검색용 공유 DB (`<data_dir>/kmd.db` — 데몬이 인덱싱, 여기선 읽기만).
     /// 위의 `db`(desktop 전용 히스토리 DB)와 다른 파일이다. `?` 첫 사용 시 지연 오픈.
@@ -257,6 +261,8 @@ pub enum Message {
     ScopeReindexed(Result<String, String>),
     /// 퍼지 검색 미완성 → 같은 질의로 다시 검색 — generation 이 현재 세대와 다르면 폐기
     SearchRetry(u64),
+    /// 열 때 대조로 파일 색인이 바뀜 (docs/22 §3.8)
+    FileIndexUpdated(Arc<kmd_core::filesearch::FileIndex>),
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -335,6 +341,16 @@ impl App {
         // 검색 핫패스(키 입력마다)에서 DB를 조회하지 않도록 부팅 시 1회 로드
         let frecency = kmd_core::history::load_boost_map(&db);
         let config_for_quick = config.clone();
+        // 스냅숏은 매핑만 하므로(0.1ms 안팎) 부팅 길에서 바로 연다. 열 때 대조는 뒤에서.
+        let file_index = config
+            .launcher
+            .file_search
+            .enabled()
+            .then(kmd_core::filesearch::FileIndex::open_default)
+            .flatten()
+            .map(Arc::new);
+        let file_boost = Arc::new(kmd_core::filesearch::Boost::new(&frecency));
+        let reconcile_task = Self::spawn_file_reconcile_task(file_index.clone(), &config);
 
         let app = Self {
             query: String::new(),
@@ -361,6 +377,8 @@ impl App {
             quick_engine_slot: quick_engine_slot.clone(),
             full_engine_loaded: false,
             frecency,
+            file_index,
+            file_boost,
             db,
             content_db: None,
             _guard: guard,
@@ -400,7 +418,7 @@ impl App {
 
         let quick_task = Self::spawn_quick_engine_load_task(quick_engine_slot, config_for_quick);
         let boot_tasks = Self::initial_boot_tasks(input_id, false);
-        (app, Task::batch([quick_task, boot_tasks]))
+        (app, Task::batch([quick_task, boot_tasks, reconcile_task]))
     }
 
     // ─── Update ───────────────────────────────────────────────────────────
@@ -423,6 +441,7 @@ impl App {
                 | Message::AutostartStatusLoaded(_)
                 | Message::AutostartToggleFinished(_)
                 | Message::ScopeReindexed(_)
+                | Message::FileIndexUpdated(_)
         );
 
         let old_query_len = self.query.len();
@@ -686,6 +705,14 @@ impl App {
             Message::GotWindowId(id) => self.handle_got_window_id(id),
             Message::GotRawWindowId(raw_id) => self.handle_got_raw_window_id(raw_id),
             Message::WarmupTick(token) => self.handle_warmup_tick(token),
+            Message::FileIndexUpdated(index) => {
+                self.file_index = Some(index);
+                if self.query.trim().is_empty() {
+                    Task::none()
+                } else {
+                    self.perform_search()
+                }
+            }
             Message::SearchRetry(generation) => {
                 if generation == self.search_generation {
                     self.perform_search()

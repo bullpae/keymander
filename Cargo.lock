@@ -2338,6 +2338,8 @@ dependencies = [
  "filetime",
  "getrandom 0.3.4",
  "libc",
+ "memchr",
+ "memmap2",
  "nucleo",
  "regex",
  "rusqlite",

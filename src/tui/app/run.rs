@@ -61,11 +61,31 @@ pub fn run_app(
             .as_ref()
             .map(kmd_core::history::load_boost_map)
             .unwrap_or_default(),
+        file_index: None,
+        file_boost: Default::default(),
+        pending_file_index: None,
         pending_shell: None,
         cached_effective_query: String::new(),
         dirty: true,
     };
     state.sync_config_mirrors();
+    state.file_boost = kmd_core::filesearch::Boost::new(&state.frecency);
+    if config.launcher.file_search.enabled() {
+        state.file_index = kmd_core::filesearch::FileIndex::open_default();
+        // 열 때 대조는 뒤에서 — 스냅숏 복사본을 따로 열어 대조한다
+        if state.file_index.is_some() {
+            let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                if let Some(updated) = kmd_core::filesearch::FileIndex::open_default()
+                    .and_then(|index| index.reconciled(&cfg))
+                {
+                    let _ = tx.send(updated);
+                }
+            });
+            state.pending_file_index = Some(rx);
+        }
+    }
 
     // Setup terminal — 복구는 가드가 책임진다 (아래 TerminalSession 참조).
     // 가드는 raw mode를 켠 **직후** 만든다. execute!가 실패하면 raw mode만
@@ -146,6 +166,16 @@ pub fn run_app(
                     }
                 }
                 poll_pending_shell(&mut state);
+                if let Some(updated) = state
+                    .pending_file_index
+                    .as_ref()
+                    .and_then(|rx| rx.try_recv().ok())
+                {
+                    state.file_index = Some(updated);
+                    state.pending_file_index = None;
+                    update_search(&mut state, &mut engine, db.as_ref());
+                    state.mark_dirty();
+                }
                 // 퍼지 검색이 시간 안에 안 끝났으면 같은 질의로 다시 물어 결과를 완성한다
                 if engine.is_pending() && state.settings.is_none() {
                     update_search(&mut state, &mut engine, db.as_ref());

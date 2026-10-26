@@ -26,8 +26,8 @@ pub fn default_user_folders() -> Vec<PathBuf> {
     defaults::default_search_paths()
 }
 pub use types::{
-    ClipboardConfig, ContentSearchConfig, CustomWebService, GeneralConfig, KeybindingsConfig,
-    KindWeights, LauncherConfig, PromptTemplate,
+    ClipboardConfig, ContentSearchConfig, CustomWebService, FileSearchConfig, GeneralConfig,
+    KeybindingsConfig, KindWeights, LauncherConfig, PromptTemplate,
 };
 
 /// Top-level configuration

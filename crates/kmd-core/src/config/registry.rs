@@ -85,6 +85,8 @@ config_registry! {
     "launcher.scan_drives"             => launcher.scan_drives, num;
     "launcher.drive_scan_depth"        => launcher.drive_scan_depth, num;
     "launcher.index_refresh_minutes"   => launcher.index_refresh_minutes, num;
+    "launcher.file_search.engine"      => launcher.file_search.engine, text;
+    "launcher.file_search.max_files"   => launcher.file_search.max_files, num;
     "launcher.kind_weights.directory"  => launcher.kind_weights.directory, num;
     "launcher.kind_weights.app"        => launcher.kind_weights.app, num;
     "launcher.kind_weights.file"       => launcher.kind_weights.file, num;

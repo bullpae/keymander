@@ -69,6 +69,13 @@ pub fn boost_results_with_map(results: &mut [SearchResult], freq_map: &FrecencyM
     results.sort_by_key(|r| std::cmp::Reverse(r.score));
 }
 
+/// 경로 하나의 부스트 값 — [`boost_results_with_map`] 과 같은 계산 (파일 검색 엔진이 후보 선정에 쓴다)
+pub fn boost_value(freq: u32, executed_at: &str) -> u32 {
+    LAUNCHED_BASE_BOOST
+        .saturating_add(frecency_score(freq, executed_at))
+        .min(FRECENCY_BOOST_CAP)
+}
+
 /// Frecency 점수 계산: frequency × recency_weight
 ///
 /// recency_weight는 `executed_at`으로부터 경과 시간에 따라 감쇠:
