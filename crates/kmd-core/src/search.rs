@@ -403,6 +403,22 @@ impl SearchEngine {
         // 단일 토큰: 기존 동작 100% 보존 (score: 0, substring match)
         if tokens.len() <= 1 {
             let query_lower = tokens.first().map(|s| s.as_str()).unwrap_or("");
+            // 초성 질의(`ㅋㅋㅇㅌ` → 카카오톡) — 이름의 초성 문자열에서 찾는다 (docs/22 §3.10)
+            if crate::hangul::is_choseong_query(query_lower) {
+                return self
+                    .all_items
+                    .iter()
+                    .zip(self.lowercase_cache.entries.iter())
+                    .filter(|(_, lc)| {
+                        crate::hangul::choseong_string(&lc.name).contains(query_lower)
+                    })
+                    .take(limit)
+                    .map(|(item, _)| SearchResult {
+                        item: item.clone(),
+                        score: 0,
+                    })
+                    .collect();
+            }
             return self
                 .all_items
                 .iter()
@@ -922,6 +938,21 @@ mod tests {
             keywords: keywords.to_string(),
             icon_path: None,
         }
+    }
+
+    #[test]
+    fn 초성_질의는_이름의_초성에서_찾는다() {
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("카카오톡", "/Applications/KakaoTalk.app", ""),
+            make_item("카카오맵", "/Applications/KakaoMap.app", ""),
+            make_item("메모", "/Applications/Notes.app", ""),
+        ]);
+        let (mode, r) = engine.search("ㅋㅋㅇㅌ", 10);
+        assert_eq!(mode, SearchMode::Contains);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].item.name, "카카오톡");
+        assert_eq!(engine.search("ㅋㅋㅇ", 10).1.len(), 2);
     }
 
     #[test]

@@ -229,6 +229,10 @@ fn char_bit(c: char) -> u64 {
         'a'..='z' => 1 << (c as u32 - 'a' as u32),
         '0'..='9' => 1 << (26 + c as u32 - '0' as u32),
         '\u{AC00}'..='\u{D7A3}' => 1 << (36 + (c as u32 - 0xAC00) / 588),
+        // 초성 자모는 그 음절들과 같은 비트 — 초성 질의(`ㅂㄱㅅ`)가 가방에서 걸러지지 않게
+        c if crate::hangul::choseong_index(c).is_some() => {
+            1 << (36 + crate::hangul::choseong_index(c).unwrap_or(0))
+        }
         c if c.is_ascii() => 0, // 구분자·기호는 거르는 데 쓰지 않는다
         c => 1 << (55 + (c as u32 % 9)),
     }

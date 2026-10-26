@@ -304,7 +304,9 @@ impl App {
         self.apply_contains_items(items);
     }
 
-    pub(super) fn handle_main_search(&mut self, query: &str) {
+    /// 엔진 검색 + URL 열기 행 + (새 엔진이면) 파일 결과 합치기·순위, 아니면 실행 이력 부스트.
+    /// 한영 오타 변환이 바꾼 질의로 한 번 더 부르므로 따로 둔다.
+    fn ranked_results(&mut self, query: &str) -> Vec<kmd_core::SearchResult> {
         let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
         self.search_mode = mode;
 
@@ -349,6 +351,11 @@ impl App {
         } else {
             kmd_core::history::boost_results_with_map(&mut results, &self.frecency);
         }
+        results
+    }
+
+    pub(super) fn handle_main_search(&mut self, query: &str) {
+        let mut results = self.ranked_results(query);
 
         if builtin_calc::looks_like_math(query) {
             let calc = builtin_calc::CalcExtension;
@@ -365,6 +372,26 @@ impl App {
 
         // 미완성이면 빈 결과가 진짜가 아니다 — 완화 검색·웹 제안을 띄우지 않고 재검색을 기다린다
         let pending = self.engine.is_pending();
+
+        // 한영 오타: 영문 자판으로 친 한글(`qhrhtj` → 보고서). 원래 질의가 그대로 든 결과가 없고,
+        // 바꾼 질의는 그대로 든 결과가 있을 때만 위에 올린다 — 영어 질의를 가리지 않게.
+        let mut korean_hint = None;
+        if !pending && !has_literal_match(&results, query) {
+            if let Some(ko) = kmd_core::hangul::qwerty_to_hangul(query) {
+                let mode = self.search_mode;
+                let ko_results = self.ranked_results(&ko);
+                if has_literal_match(&ko_results, &ko) {
+                    let mut seen: std::collections::HashSet<String> =
+                        ko_results.iter().map(|r| r.item.path.clone()).collect();
+                    results.retain(|r| seen.insert(r.item.path.clone()));
+                    results.splice(0..0, ko_results);
+                    results.truncate(SEARCH_LIMIT);
+                    korean_hint = Some(ko);
+                } else {
+                    self.search_mode = mode;
+                }
+            }
+        }
         if results.is_empty() && !query.is_empty() && !pending {
             if let Some(relaxed) = relaxed_hangul_query(query) {
                 let mut relaxed_results = self.engine.search_with_mode(
@@ -425,6 +452,9 @@ impl App {
         }
 
         self.commit_results(results, self.search_mode, true);
+        if let Some(ko) = korean_hint {
+            self.status_message = Some(format!("한글로 바꿔 찾음: {ko}"));
+        }
     }
 
     /// `:f /경로 쿼리` — 지정 폴더 안에서 파일/폴더를 즉석 검색 (kmd-core 공용 구현).
@@ -542,8 +572,9 @@ fn has_literal_match(results: &[kmd_core::SearchResult], query: &str) -> bool {
         return true;
     }
     results.iter().any(|r| {
-        let name = r.item.name.to_lowercase();
-        let path = r.item.path.to_lowercase();
+        // macOS 파일 이름은 NFD(자모 분리)일 수 있다 — 질의(NFC)와 맞춰 비교
+        let name = kmd_core::textenc::nfc(&r.item.name).to_lowercase();
+        let path = kmd_core::textenc::nfc(&r.item.path).to_lowercase();
         tokens
             .iter()
             .all(|t| name.contains(t.as_str()) || path.contains(t.as_str()))

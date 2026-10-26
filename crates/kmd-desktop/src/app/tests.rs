@@ -1566,3 +1566,56 @@ fn 입버릇_빈_입력_enter는_정답을_연다() {
     assert_eq!(app.say_revealed.as_deref(), Some(id.as_str()));
     assert!(app.results[0].item.name.contains("up to you"));
 }
+
+// ── 한영 오타 변환 · 초성 (docs/22 §3.10) ──
+
+fn korean_item(name: &str) -> IndexItem {
+    IndexItem {
+        name: name.to_string(),
+        path: format!("/Applications/{name}.app"),
+        kind: ItemKind::App,
+        source: Source::Apps,
+        icon: "Ap".to_string(),
+        keywords: String::new(),
+        icon_path: None,
+    }
+}
+
+#[test]
+fn 영문_자판으로_친_한글은_바꿔_찾고_알린다() {
+    let mut app = make_test_app();
+    app.engine
+        .load(vec![korean_item("카카오톡"), korean_item("Chrome")]);
+    app.query = "zkzkdhxhr".to_string(); // 카카오톡
+    let _ = app.perform_search();
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("카카오톡")
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("한글로 바꿔 찾음: 카카오톡")
+    );
+
+    // 영어 질의는 그대로 — 바꾸지 않는다
+    app.query = "chrome".to_string();
+    let _ = app.perform_search();
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("Chrome")
+    );
+    assert!(app.status_message.is_none());
+}
+
+#[test]
+fn 초성으로_앱을_찾는다() {
+    let mut app = make_test_app();
+    app.engine
+        .load(vec![korean_item("카카오톡"), korean_item("메모")]);
+    app.query = "ㅋㅋㅇㅌ".to_string();
+    let _ = app.perform_search();
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("카카오톡")
+    );
+}

@@ -378,6 +378,24 @@ fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngi
         kmd_core::history::boost_results_with_map(&mut results, &state.frecency);
     }
 
+    // 한영 오타: 영문 자판으로 친 한글(`qhrhtj` → 보고서). 질의가 이름에 그대로 든 결과가 없을 때만
+    // 바꾼 질의로 다시 찾아, 그쪽에 그대로 든 결과가 있으면 그것을 보여 준다 (데스크톱과 같은 규칙).
+    if !engine.is_pending() && !results.iter().any(|r| name_contains(&r.item.name, query)) {
+        if let Some(ko) = kmd_core::hangul::qwerty_to_hangul(query) {
+            // 바꾼 질의의 결과가 맞지 않으면 아래에서 원래 결과(results)로 덮어쓴다
+            handle_main_search(&ko, state, engine);
+            if state
+                .results
+                .iter()
+                .any(|r| name_contains(&r.item.name, &ko))
+            {
+                state.status_message = Some(format!("한글로 바꿔 찾음: {ko}"));
+                return;
+            }
+            state.search_mode = mode;
+        }
+    }
+
     // 결과가 없으면 "검색 범위 밖 폴더" 제안을 보여준다. 빈 화면만 내놓으면
     // 사용자는 왜 안 나오는지 알 수 없다 — 가장 흔한 원인이 범위 누락이다.
     // (데스크톱도 같은 지점에서 같은 제안을 쓴다)
@@ -392,6 +410,13 @@ fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngi
 
     state.results = results;
     state.selected_index = 0;
+}
+
+/// 이름에 질의가 그대로 들었는지 (대소문자·NFC 무시)
+fn name_contains(name: &str, query: &str) -> bool {
+    let name = kmd_core::textenc::nfc(name).to_lowercase();
+    let query = query.trim().to_lowercase();
+    !query.is_empty() && name.contains(query.as_str())
 }
 
 // ── History ──────────────────────────────────────────────────────────────────
