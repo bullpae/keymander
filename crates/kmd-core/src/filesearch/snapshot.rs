@@ -81,6 +81,12 @@ pub fn publish(dir: &Path, table: &TableBuilder) -> Result<u64, SnapshotError> {
     Ok(generation)
 }
 
+/// 현재 세대를 공개한 지 얼마나 됐는지 (`files.current` 수정 시각 기준)
+pub fn current_age(dir: &Path) -> Option<std::time::Duration> {
+    let modified = fs::metadata(dir.join(CURRENT_FILE)).ok()?.modified().ok()?;
+    std::time::SystemTime::now().duration_since(modified).ok()
+}
+
 /// `files.current` 가 가리키는 세대 번호
 pub fn current_generation(dir: &Path) -> Option<u64> {
     let name = fs::read_to_string(dir.join(CURRENT_FILE)).ok()?;

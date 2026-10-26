@@ -481,6 +481,9 @@ fn spawn_content_watcher(shutdown: Arc<AtomicBool>) {
 
 /// 백그라운드 인덱스 리프레셔 스레드.
 ///
+/// 새 파일 검색 엔진 스냅숏을 폴더 시각으로 갱신하는 주기 (docs/22 §3.8)
+const FILE_INDEX_REFRESH_SECS: u64 = 5 * 60;
+
 /// `launcher.index_refresh_minutes` 주기(기본 6시간, 0=off)로 전체/quick
 /// 인덱스를 재빌드해 공유 캐시를 원자적으로 갱신하고 데몬 검색 엔진도
 /// 교체한다. kmd-desktop은 언제 떠도 신선한 캐시를 즉시 로드하므로
@@ -513,12 +516,32 @@ fn spawn_index_refresher(
 
         let mut elapsed_secs: u64 = 0;
         let mut interval_min = boot_cfg.launcher.index_refresh_minutes;
+        let mut since_file_refresh: u64 = 0;
         loop {
             if shutdown.load(Ordering::Relaxed) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
             elapsed_secs += 1;
+            since_file_refresh += 1;
+
+            // 새 파일 검색 엔진(docs/22): 바뀐 폴더만 다시 읽어 스냅숏 갱신 — 폴더 시각 확인이라 가볍다
+            if since_file_refresh >= FILE_INDEX_REFRESH_SECS {
+                since_file_refresh = 0;
+                let cfg = load_config();
+                if cfg.launcher.file_search.enabled() {
+                    match kmd_core::filesearch::refresh(&cfg.launcher) {
+                        Ok(Some(s)) => tracing::info!(
+                            "파일 색인 갱신: 폴더 {}개 바뀜, +{} −{}",
+                            s.changed_dirs,
+                            s.added,
+                            s.removed
+                        ),
+                        Ok(None) => {}
+                        Err(e) => tracing::warn!("파일 색인 갱신 실패: {e}"),
+                    }
+                }
+            }
 
             // 1분마다 설정 재로드 — 주기 변경/비활성화를 재시작 없이 반영
             if elapsed_secs.is_multiple_of(60) {
