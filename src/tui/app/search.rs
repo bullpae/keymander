@@ -361,20 +361,22 @@ fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngi
         results.splice(0..0, calc_results);
     }
 
-    // 새 파일 검색 엔진(docs/22): 할당량에 잘린 옛 파일 결과를 전체 색인 결과로 바꾼다
+    // 새 파일 검색 엔진(docs/22): 옛 파일 결과를 전체 색인 결과로 바꾸고 한 척도로 다시 매긴다
+    // (실행 이력도 그 안에서). 이력은 캐시된 맵으로 — 키 입력마다 DB 조회 없음.
     if let Some(index) = &state.file_index {
+        let weights = &state.config.launcher.kind_weights;
         let files = index.search(
             query,
             SEARCH_RESULT_LIMIT,
             &state.file_boost,
-            &state.config.launcher.kind_weights,
+            weights,
             state.use_emoji,
         );
-        kmd_core::filesearch::merge_results(&mut results, files);
+        results = kmd_core::rank::merge(results, files, query, weights, &state.frecency);
+        results.truncate(SEARCH_RESULT_LIMIT);
+    } else {
+        kmd_core::history::boost_results_with_map(&mut results, &state.frecency);
     }
-
-    // Apply history boost — 캐시된 맵으로 (키 입력마다 DB 조회 없음)
-    kmd_core::history::boost_results_with_map(&mut results, &state.frecency);
 
     // 결과가 없으면 "검색 범위 밖 폴더" 제안을 보여준다. 빈 화면만 내놓으면
     // 사용자는 왜 안 나오는지 알 수 없다 — 가장 흔한 원인이 범위 누락이다.

@@ -17,8 +17,9 @@ use memchr::memmem;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config as NucleoConfig, Matcher, Utf32Str};
 
-use super::table::{char_bag, fold, Kind, Table, NO_PARENT};
+use super::table::{char_bag, fold, Table, NO_PARENT};
 use crate::history::FrecencyMap;
+use crate::rank;
 use crate::search::{GlobMatcher, SearchMode};
 
 /// 한 번에 다룰 최대 토큰 수 (마스크 비트)
@@ -34,9 +35,9 @@ const Q_PREFIX: u32 = 70;
 const Q_WORD: u32 = 50;
 const Q_SUBSTR: u32 = 30;
 const Q_ACRONYM: u32 = 25;
-const Q_SUBSEQ: u32 = 10;
+pub(crate) const Q_SUBSEQ: u32 = 10;
 /// 단어가 자기 이름이 아니라 조상 폴더에만 있을 때
-const Q_ANCESTOR: u32 = 6;
+pub(crate) const Q_ANCESTOR: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
@@ -141,8 +142,8 @@ enum TokKind {
     Short,
 }
 
-struct Token {
-    text: Vec<u8>,
+pub(crate) struct Token {
+    pub(crate) text: Vec<u8>,
     kind: TokKind,
     bag: u64,
     finder: memmem::Finder<'static>,
@@ -334,80 +335,82 @@ fn subsequence(name: &[u8], t: &[u8]) -> bool {
     t.iter().all(|c| it.any(|x| x == c))
 }
 
-/// 종류·최근 수정·깊이 가중 (docs/22 §3.7)
+/// 최근 수정·깊이 가중 — 종류 가중은 설정(kind_weights)을 아는 쪽이 더한다 ([`crate::rank`])
 fn extras(t: &Table<'_>, row: usize, now_ns: i64) -> u32 {
-    const DAY: i64 = 86_400 * 1_000_000_000;
-    let kind: u32 = if t.kind(row) == Kind::Dir { 15 } else { 0 };
     let age = now_ns.saturating_sub(t.mtime[row]);
-    let recency = if age < DAY {
-        15
-    } else if age < 7 * DAY {
-        10
-    } else if age < 30 * DAY {
-        5
-    } else {
-        0
-    };
-    let depth_penalty = (t.depth(row).saturating_sub(1) * 2).min(10);
-    (40 + kind + recency).saturating_sub(depth_penalty)
+    (rank::BASE + rank::recency_points(age)).saturating_sub(rank::depth_penalty(t.depth(row)))
 }
 
-/// 후보 → 상위 `limit`. 실행 이력은 선정에만 쓰고 점수에는 넣지 않는다.
+/// 질의 토큰 — 다른 결과(앱·실행 파일)를 같은 척도로 다시 매길 때도 쓴다 ([`crate::rank::merge`])
+pub(crate) fn query_tokens(query: &str) -> Vec<Token> {
+    let (mode, _) = SearchMode::detect(query);
+    tokens_of(query, mode == SearchMode::Fuzzy)
+}
+
+/// 접은 이름 하나의 토큰별 품질 — 0 이면 그 토큰이 이름에 없다
+pub(crate) fn token_quality(name: &[u8], tok: &Token) -> u32 {
+    match_quality(name, tok)
+}
+
+/// 후보 → 상위 `limit`. 실행 이력과 nucleo 점수는 **고르고 줄 세우는 데만** 쓰고 돌려주는
+/// 점수에는 넣지 않는다 — 앱 등 다른 결과와 같은 척도로 합칠 때([`crate::rank::merge`])
+/// 파일만 덤을 받으면 안 된다(이력은 merge 가 모두에게 한 번 더한다).
 fn rank(
     t: &Table<'_>,
-    mut scored: Vec<(u32, u32)>,
+    scored: Vec<(u32, u32)>,
     query: &str,
     mode: SearchMode,
     limit: usize,
     boost: &Boost,
 ) -> Vec<Hit> {
-    if !boost.by_name.is_empty() {
-        for (score, row) in &mut scored {
-            *score += boost.get(t, *row as usize);
-        }
-    }
-    let key = |&(score, row): &(u32, u32)| (std::cmp::Reverse(score), row);
-    if scored.len() > REFINE_TOP {
-        scored.select_nth_unstable_by_key(REFINE_TOP, key);
-        scored.truncate(REFINE_TOP);
+    // (점수, 선정 키 = 점수 + 이력, 행)
+    let mut cand: Vec<(u32, u32, u32)> = scored
+        .into_iter()
+        .map(|(score, row)| (score, score + boost.get(t, row as usize), row))
+        .collect();
+    if cand.len() > REFINE_TOP {
+        cand.select_nth_unstable_by_key(REFINE_TOP, |&(_, key, row)| (std::cmp::Reverse(key), row));
+        cand.truncate(REFINE_TOP);
     }
 
-    // 한 단어 퍼지: subsequence 처럼 거칠게 맞은 것들의 순서를 nucleo 로 다듬는다
+    // 한 단어 퍼지: subsequence 처럼 거칠게 맞은 것들의 순서를 nucleo 로 다듬는다 (같은 점수 안에서)
+    let mut fine = vec![0u32; cand.len()];
     if mode == SearchMode::Fuzzy && query.split_whitespace().count() == 1 {
         let mut matcher = Matcher::new(NucleoConfig::DEFAULT);
         let pat = Pattern::parse(query, CaseMatching::Ignore, Normalization::Never);
         let mut buf = Vec::new();
-        for (score, row) in &mut scored {
-            let name = String::from_utf8_lossy(t.folded_name(*row as usize));
-            if let Some(s) = pat.score(Utf32Str::new(&name, &mut buf), &mut matcher) {
-                *score += (s / 10).min(40);
-            }
+        for (f, &(_, _, row)) in fine.iter_mut().zip(&cand) {
+            let name = String::from_utf8_lossy(t.folded_name(row as usize));
+            *f = pat
+                .score(Utf32Str::new(&name, &mut buf), &mut matcher)
+                .unwrap_or(0);
         }
     }
 
-    scored.sort_unstable_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| {
-                t.folded_name(a.1 as usize)
-                    .len()
-                    .cmp(&t.folded_name(b.1 as usize).len())
-            })
-            .then_with(|| t.mtime[b.1 as usize].cmp(&t.mtime[a.1 as usize]))
-            .then(a.1.cmp(&b.1))
+    let mut order: Vec<usize> = (0..cand.len()).collect();
+    order.sort_unstable_by(|&a, &b| {
+        let (ra, rb) = (cand[a].2 as usize, cand[b].2 as usize);
+        cand[b]
+            .1
+            .cmp(&cand[a].1)
+            .then(fine[b].cmp(&fine[a]))
+            .then_with(|| t.folded_name(ra).len().cmp(&t.folded_name(rb).len()))
+            .then_with(|| t.mtime[rb].cmp(&t.mtime[ra]))
+            .then(ra.cmp(&rb))
     });
-    scored.truncate(limit);
-    scored
+    order
         .into_iter()
-        .map(|(score, row)| Hit {
-            row,
-            score: score.saturating_sub(boost.get(t, row as usize)),
+        .take(limit)
+        .map(|i| Hit {
+            row: cand[i].2,
+            score: cand[i].0,
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::table::{RootInfo, TableBuilder};
+    use super::super::table::{Kind, RootInfo, TableBuilder};
     use super::*;
     use std::ffi::OsStr;
 

@@ -326,21 +326,29 @@ impl App {
             );
         }
 
-        // 새 파일 검색 엔진(docs/22): 할당량에 잘린 옛 파일 결과를 빼고 전체 색인 결과로 바꾼다
+        // 새 파일 검색 엔진(docs/22): 할당량에 잘린 옛 파일 결과를 전체 색인 결과로 바꾸고,
+        // 앱·실행 파일까지 한 척도(rank::merge)로 다시 매긴다 — 실행 이력도 그 안에서 한 번.
+        // 실행 이력은 키 입력마다 DB 조회 대신 부팅 시 로드한 맵을 쓴다.
         if let Some(index) = &self.file_index {
+            let weights = &self.runtime_config.launcher.kind_weights;
             let files = index.search(
                 query,
                 SEARCH_LIMIT,
                 &self.file_boost,
-                &self.runtime_config.launcher.kind_weights,
+                weights,
                 self.use_emoji,
             );
-            kmd_core::filesearch::merge_results(&mut results, files);
+            results = kmd_core::rank::merge(
+                std::mem::take(&mut results),
+                files,
+                query,
+                weights,
+                &self.frecency,
+            );
+            results.truncate(SEARCH_LIMIT);
+        } else {
+            kmd_core::history::boost_results_with_map(&mut results, &self.frecency);
         }
-
-        // 실행 이력 기반으로 자주 사용하는 항목의 점수를 높인다.
-        // 키 입력마다 호출되는 핫패스 — DB 조회 대신 부팅 시 로드한 맵 사용.
-        kmd_core::history::boost_results_with_map(&mut results, &self.frecency);
 
         if builtin_calc::looks_like_math(query) {
             let calc = builtin_calc::CalcExtension;

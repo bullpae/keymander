@@ -25,6 +25,7 @@ pub mod portable;
 pub mod process;
 pub mod prompt;
 pub mod query_prefix;
+pub mod rank;
 pub mod route;
 pub mod say;
 pub mod scope;

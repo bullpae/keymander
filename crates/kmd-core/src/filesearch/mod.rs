@@ -75,7 +75,7 @@ impl FileIndex {
         Some(Self::Memory(b))
     }
 
-    /// 질의 → 결과 항목. 점수는 옛 엔진과 섞을 수 있게 맞춘 값([`merge_results`]).
+    /// 질의 → 결과 항목. 점수는 [`crate::rank`] 공식에서 실행 이력만 뺀 값 — [`crate::rank::merge`] 로 합친다.
     pub fn search(
         &self,
         query: &str,
@@ -90,19 +90,12 @@ impl FileIndex {
             .into_iter()
             .map(|hit| {
                 let item = hit_item(&t, hit.row as usize, use_emoji);
-                // 옛 엔진 퍼지 점수(순위×10, 최대 수백)와 대략 같은 범위로 — 순위 통합은 F2 (docs/22 §3.7)
-                let score = hit.score * 3 + weights.weight_for(item.kind);
+                // 질의 점수(품질·최근·깊이)에 종류 가중을 더해 rank::merge 와 같은 척도로
+                let score = hit.score + crate::rank::kind_points(item.kind, weights);
                 SearchResult { item, score }
             })
             .collect()
     }
-}
-
-/// 옛 엔진 결과에서 파일 검색 결과(할당량에 잘린 옛 파일 항목)를 빼고 새 엔진 결과를 합친다
-pub fn merge_results(results: &mut Vec<SearchResult>, files: Vec<SearchResult>) {
-    results.retain(|r| r.item.source != Source::FileProvider);
-    results.extend(files);
-    results.sort_by_key(|r| std::cmp::Reverse(r.score));
 }
 
 /// 행 하나를 결과 항목으로 — 옛 파일 색인 항목과 같은 모양 (`index::files`)
