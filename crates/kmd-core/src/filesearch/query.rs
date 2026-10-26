@@ -140,6 +140,8 @@ enum TokKind {
     Fuzzy,
     /// ASCII 1~2글자 — 접두·단어 시작·머리글자만
     Short,
+    /// 초성만(`ㅂㄱㅅ`) — 이름의 초성 문자열에서 찾는다
+    Choseong,
 }
 
 pub(crate) struct Token {
@@ -155,7 +157,9 @@ fn tokens_of(query: &str, fuzzy_mode: bool) -> Vec<Token> {
         .take(MAX_TOKENS)
         .map(|w| {
             let text = fold(w).into_bytes();
-            let kind = if !text.is_ascii() || !fuzzy_mode {
+            let kind = if crate::hangul::is_choseong_query(w) {
+                TokKind::Choseong
+            } else if !text.is_ascii() || !fuzzy_mode {
                 TokKind::Substr
             } else if text.len() <= 2 {
                 TokKind::Short
@@ -271,6 +275,9 @@ fn worker_count(rows: usize) -> usize {
 
 /// 이름 하나에 토큰 하나 — 0 이면 불일치
 fn match_quality(name: &[u8], tok: &Token) -> u32 {
+    if tok.kind == TokKind::Choseong {
+        return choseong_quality(name, tok);
+    }
     let t = tok.text.as_slice();
     if name == t || stem(name) == t {
         return Q_EXACT;
@@ -294,6 +301,31 @@ fn match_quality(name: &[u8], tok: &Token) -> u32 {
         TokKind::Fuzzy => 0,
         TokKind::Short if acronym(name, t) => Q_ACRONYM,
         TokKind::Short => 0,
+        TokKind::Choseong => 0, // 위에서 따로 처리
+    }
+}
+
+/// 초성 질의 — `보고서_최종` 의 초성 `ㅂㄱㅅ_ㅊㅈ` 에서 찾는다
+fn choseong_quality(name: &[u8], tok: &Token) -> u32 {
+    let Ok(name) = std::str::from_utf8(name) else {
+        return 0;
+    };
+    let cs = crate::hangul::choseong_string(name);
+    let cs = cs.as_bytes();
+    if cs.starts_with(&tok.text) {
+        return Q_PREFIX;
+    }
+    let mut found = false;
+    for pos in tok.finder.find_iter(cs) {
+        if is_word_start(cs, pos) {
+            return Q_WORD;
+        }
+        found = true;
+    }
+    if found {
+        Q_SUBSTR
+    } else {
+        0
     }
 }
 
@@ -520,6 +552,17 @@ mod tests {
         assert_eq!(names(&b, "myoffice 2024년"), vec!["2024년".to_string()]);
         // 폴더 아래 아무 파일이나 내지 않는다
         assert!(names(&b, "2026년 프로젝트").iter().all(|n| n == "프로젝트"));
+    }
+
+    #[test]
+    fn 초성_질의() {
+        let b = office();
+        let got = names(&b, "ㅂㄱㅅ");
+        assert_eq!(got.len(), 21, "{got:?}");
+        assert!(got.iter().all(|n| n.starts_with("보고서")));
+        // 여러 단어: 초성 + 조상 폴더
+        assert_eq!(names(&b, "2026년 ㅂㄱㅅ").len(), 3);
+        assert!(names(&b, "ㅎㅎㅎ").is_empty());
     }
 
     #[test]

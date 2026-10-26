@@ -635,11 +635,94 @@ pub fn is_jamo(c: char) -> bool {
 }
 
 // ============================================================================
+// 검색용 — 한영 오타 변환 · 초성 (docs/22 §3.10)
+// ============================================================================
+
+/// 영문 자판 상태로 친 질의를 두벌식 한글로 바꾼다 — `qhrhtj` → `보고서`.
+///
+/// 한글 입력기를 켜지 않고 친 경우(Windows 에서 특히 흔하다)를 살리기 위한 것이다.
+/// 영어 단어를 엉뚱한 한글로 바꾸지 않도록, 모든 글자가 **완성 음절로만** 조합될 때만
+/// 돌려준다 — `test` 는 `ㅅㄷㄴㅅ`(자음만)이라 `None`.
+pub fn qwerty_to_hangul(s: &str) -> Option<String> {
+    if !s.is_ascii() || !s.chars().any(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut out = String::with_capacity(s.len() * 2);
+    let mut composer = HangulComposer::new();
+    for ch in s.chars() {
+        match key_to_jamo(ch) {
+            Some(jamo) => {
+                if let Some(c) = composer.process(jamo).committed {
+                    out.push(c);
+                }
+            }
+            None => {
+                if let Some(c) = composer.flush() {
+                    out.push(c);
+                }
+                out.push(ch);
+            }
+        }
+    }
+    if let Some(c) = composer.flush() {
+        out.push(c);
+    }
+    let has_syllable = out.chars().any(|c| decompose_syllable(c).is_some());
+    (has_syllable && !out.chars().any(is_jamo)).then_some(out)
+}
+
+/// 초성 자음 → 초성 번호 (`ㄱ`=0 … `ㅎ`=18). 받침 전용 겹자음(`ㄳ` 등)은 `None`.
+pub fn choseong_index(c: char) -> Option<u32> {
+    CHO_CHARS.iter().position(|&x| x == c).map(|i| i as u32)
+}
+
+/// 초성 질의인지 — 초성 자음으로만 2글자 이상 (`ㅂㄱㅅ`). 한 글자는 너무 많이 걸린다.
+pub fn is_choseong_query(s: &str) -> bool {
+    s.chars().count() >= 2 && s.chars().all(|c| choseong_index(c).is_some())
+}
+
+/// 이름의 초성 문자열 — 완성 음절은 초성 자모로, 나머지는 그대로 (`보고서_2026` → `ㅂㄱㅅ_2026`)
+pub fn choseong_string(s: &str) -> String {
+    s.chars()
+        .map(|c| match decompose_syllable(c) {
+            Some((cho, _, _)) => CHO_CHARS[cho as usize],
+            None => c,
+        })
+        .collect()
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn 한영_오타_변환은_완성_음절일_때만() {
+        assert_eq!(qwerty_to_hangul("qhrhtj").as_deref(), Some("보고서"));
+        assert_eq!(
+            qwerty_to_hangul("dkssud gktpdy").as_deref(),
+            Some("안녕 하세요")
+        );
+        assert_eq!(qwerty_to_hangul("2026sus").as_deref(), Some("2026년"));
+        assert_eq!(qwerty_to_hangul("Tkdgks").as_deref(), Some("쌍한"));
+        assert_eq!(qwerty_to_hangul("test"), None, "자음만 — 영어 단어");
+        assert_eq!(qwerty_to_hangul("chrome"), None, "끝이 자음 하나로 남음");
+        assert_eq!(qwerty_to_hangul("123"), None);
+        assert_eq!(qwerty_to_hangul("보고서"), None);
+    }
+
+    #[test]
+    fn 초성() {
+        assert!(is_choseong_query("ㅂㄱㅅ"));
+        assert!(!is_choseong_query("ㅂ"));
+        assert!(!is_choseong_query("ㅂㄱ서"));
+        assert!(!is_choseong_query("ㄳㄱ"), "받침 전용 겹자음");
+        assert_eq!(choseong_string("보고서_2026.hwp"), "ㅂㄱㅅ_2026.hwp");
+        assert_eq!(choseong_index('ㅎ'), Some(18));
+    }
+
     use super::*;
 
     /// Helper: process a sequence of keys and return (committed_string, composing_char)
