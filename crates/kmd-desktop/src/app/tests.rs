@@ -1584,24 +1584,38 @@ fn korean_item(name: &str) -> IndexItem {
 #[test]
 fn 영문_자판으로_친_한글은_바꿔_찾고_알린다() {
     let mut app = make_test_app();
-    app.engine.load(vec![korean_item("카카오톡"), korean_item("Chrome")]);
+    app.engine
+        .load(vec![korean_item("카카오톡"), korean_item("Chrome")]);
     app.query = "zkzkdhxhr".to_string(); // 카카오톡
     let _ = app.perform_search();
-    assert_eq!(app.results.first().map(|r| r.item.name.as_str()), Some("카카오톡"));
-    assert_eq!(app.status_message.as_deref(), Some("한글로 바꿔 찾음: 카카오톡"));
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("카카오톡")
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("한글로 바꿔 찾음: 카카오톡")
+    );
 
     // 영어 질의는 그대로 — 바꾸지 않는다
     app.query = "chrome".to_string();
     let _ = app.perform_search();
-    assert_eq!(app.results.first().map(|r| r.item.name.as_str()), Some("Chrome"));
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("Chrome")
+    );
     assert!(app.status_message.is_none());
 }
 
 #[test]
 fn 초성으로_앱을_찾는다() {
     let mut app = make_test_app();
-    app.engine.load(vec![korean_item("카카오톡"), korean_item("메모")]);
+    app.engine
+        .load(vec![korean_item("카카오톡"), korean_item("메모")]);
     app.query = "ㅋㅋㅇㅌ".to_string();
     let _ = app.perform_search();
-    assert_eq!(app.results.first().map(|r| r.item.name.as_str()), Some("카카오톡"));
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("카카오톡")
+    );
 }
