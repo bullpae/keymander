@@ -112,11 +112,7 @@ pub(crate) fn walk_into(
         }
         stack.truncate(d);
         let Some(&p) = stack.last() else { continue };
-        let mtime = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .map_or(0, to_ns);
+        let mtime = entry_mtime(&entry, is_dir);
         let kind = if is_dir { Kind::Dir } else { Kind::File };
         let row = b.push(
             entry.file_name(),
@@ -159,11 +155,7 @@ pub(crate) fn list_children(cfg: &ScanConfig, dir: &Path) -> std::io::Result<Vec
         out.push(Child {
             name: entry.file_name().to_os_string(),
             is_dir: entry.file_type().is_dir(),
-            mtime: entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .map_or(0, to_ns),
+            mtime: entry_mtime(&entry, entry.file_type().is_dir()),
         });
     }
     Ok(out)
@@ -173,6 +165,20 @@ pub(crate) struct Child {
     pub name: std::ffi::OsString,
     pub is_dir: bool,
     pub mtime: i64,
+}
+
+/// 걷기 항목의 수정 시각. 폴더는 [`mtime_of`] 로 따로 읽는다 — Windows 에서 걷기가 주는 시각은
+/// 부모 폴더 목록(FindNextFile)에 적힌 값이라 폴더는 늦게 갱신될 수 있고, 열 때 대조는
+/// `fs::metadata` 로 확인하므로 둘이 어긋나면 매번 "바뀜"으로 보인다.
+fn entry_mtime(entry: &walkdir::DirEntry, is_dir: bool) -> i64 {
+    if is_dir {
+        return mtime_of(entry.path());
+    }
+    entry
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map_or(0, to_ns)
 }
 
 pub(crate) fn mtime_of(path: &Path) -> i64 {
