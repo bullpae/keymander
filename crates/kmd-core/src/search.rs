@@ -1,6 +1,7 @@
 //! Search engine — fuzzy, glob, regex, and contains matching over IndexItems
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use nucleo::pattern::{CaseMatching, Normalization};
 use nucleo::{Config as NucleoConfig, Nucleo};
@@ -149,7 +150,14 @@ pub struct SearchEngine {
     all_items: Vec<IndexItem>,
     lowercase_cache: LowercaseCache,
     kind_weights: KindWeights,
+    /// 퍼지 검색이 끝나기를 기다리는 최대 시간 — 넘기면 [`Self::is_pending`]
+    fuzzy_wait: Duration,
+    /// 마지막 퍼지 검색이 시간 안에 끝나지 않았다 — UI 는 잠시 뒤 같은 질의로 다시 묻는다
+    pending: bool,
 }
+
+/// UI 기본값 — 키 입력 한 번에 이보다 오래 멈추지 않는다
+const FUZZY_WAIT_UI: Duration = Duration::from_millis(50);
 
 impl SearchEngine {
     /// Create a new empty search engine
@@ -163,7 +171,27 @@ impl SearchEngine {
                 entries: Vec::new(),
             },
             kind_weights: KindWeights::default(),
+            fuzzy_wait: FUZZY_WAIT_UI,
+            pending: false,
         }
+    }
+
+    /// 퍼지 검색을 기다리는 최대 시간. 한 번 묻고 끝나는 호출(`kmd search`·데몬 IPC)은
+    /// 다시 물을 기회가 없으므로 길게 잡는다.
+    pub fn set_fuzzy_wait(&mut self, wait: Duration) {
+        self.fuzzy_wait = wait;
+    }
+
+    /// 마지막 검색 결과가 미완성인지 — 참이면 같은 질의로 다시 검색해 완성된 결과를 받는다.
+    /// 항목이 많으면(수십만) 퍼지 매칭이 [`Self::set_fuzzy_wait`] 안에 끝나지 않을 수 있다.
+    pub fn is_pending(&self) -> bool {
+        self.pending
+    }
+
+    /// 엔진을 거치지 않는 질의(`:say` 등)로 바뀌었을 때 — 이전 미완성 표시를 지워
+    /// UI 가 엉뚱한 질의를 계속 다시 묻지 않게 한다.
+    pub fn clear_pending(&mut self) {
+        self.pending = false;
     }
 
     /// kind 가중치를 적용한 뒤 항목을 적재한 엔진을 만든다.
@@ -242,6 +270,7 @@ impl SearchEngine {
         // UI가 이 함수를 직접 부르기도 해서 search()가 아니라 여기서 한다.
         let pattern = nfc(pattern);
         let pattern = pattern.as_ref();
+        self.pending = false;
         let mut results = match mode {
             SearchMode::Fuzzy => self.search_fuzzy_with_paths(pattern, limit),
             SearchMode::Glob => self.filter_glob(pattern, limit),
@@ -291,11 +320,19 @@ impl SearchEngine {
         self.nucleo
             .pattern
             .reparse(0, pattern, CaseMatching::Smart, Normalization::Never, false);
-        // timeout in milliseconds — wait for worker threads to finish matching.
-        // 10ms keeps the UI responsive while still giving Nucleo time to
-        // process most queries on typical indexes (< 20k items).
+        // 매칭은 워커 스레드에서 돈다. tick 한 번(10ms)만 기다리면 항목이 많을 때
+        // 끝나기 전에 스냅숏을 읽어, 결과가 비거나 **이전 질의의 결과**가 그대로 나왔다
+        // (40만 개에서 `2` → 0건, 이어 `zzzz` → 이전 50건, docs/22 §2.2).
+        // 끝날 때까지 tick 을 반복하고, 시간을 넘기면 미완성으로 표시해 다시 묻게 한다.
         const NUCLEO_TICK_TIMEOUT_MS: u64 = 10;
-        self.nucleo.tick(NUCLEO_TICK_TIMEOUT_MS);
+        let deadline = Instant::now() + self.fuzzy_wait;
+        while self.nucleo.tick(NUCLEO_TICK_TIMEOUT_MS).running {
+            if Instant::now() >= deadline {
+                // 스냅숏은 아직 이전 질의 것일 수 있다 — 틀린 결과 대신 빈 결과
+                self.pending = true;
+                return Vec::new();
+            }
+        }
 
         let snapshot = self.nucleo.snapshot();
         let count = snapshot.matched_item_count().min(limit as u32);
@@ -393,30 +430,30 @@ impl SearchEngine {
 
         let token_count = tokens.len() as u32;
 
-        let mut results: Vec<SearchResult> = self
-            .all_items
+        // 점수는 행 번호와 함께만 모으고, 항목 복제는 상위 `limit` 개만 —
+        // 흔한 단어("보고서")면 수십만 개가 통과해 전부 복제하는 비용이 컸다.
+        let mut scored: Vec<(u32, usize)> = self
+            .lowercase_cache
+            .entries
             .iter()
-            .zip(self.lowercase_cache.entries.iter())
-            .filter_map(|(item, lc)| {
-                // 경로 세그먼트를 HashSet으로 구성해 O(1) 조회 — 멀티 토큰 시
-                // 기존 segments.contains(&t) (O(n)) 반복을 제거한다.
-                let segment_set: std::collections::HashSet<&str> = lc
-                    .path
-                    .split(['\\', '/'])
-                    .filter(|s| !s.is_empty())
-                    .collect();
-
+            .enumerate()
+            .filter_map(|(row, lc)| {
                 let mut total_score: u32 = 0;
                 let mut exact_segments: u32 = 0;
 
                 for token in &tokens {
                     let t = token.as_str();
-                    // 우선순위 기반 점수 — 최고 점수만 적용
-                    if segment_set.contains(t) {
-                        total_score += SEGMENT_EXACT;
-                        exact_segments += 1;
-                    } else if lc.path.contains(t) {
-                        total_score += PATH_CONTAINS;
+                    // 우선순위 기반 점수 — 최고 점수만 적용.
+                    // 세그먼트 정확 일치는 경로 포함의 부분집합이라 포함부터 본다 — 예전에는
+                    // 항목마다 경로 조각 HashSet 을 먼저 만들어 대부분 탈락할 항목에도
+                    // 할당을 치렀다(40만 개 "보고서 최종" 188ms, docs/22 §2.2).
+                    if lc.path.contains(t) {
+                        if lc.path.split(['\\', '/']).any(|seg| seg == t) {
+                            total_score += SEGMENT_EXACT;
+                            exact_segments += 1;
+                        } else {
+                            total_score += PATH_CONTAINS;
+                        }
                     } else if lc.name.contains(t) {
                         total_score += NAME_CONTAINS;
                     } else if lc.keywords.contains(t) {
@@ -431,16 +468,20 @@ impl SearchEngine {
                     total_score += ALL_SEGMENTS_BONUS;
                 }
 
-                Some(SearchResult {
-                    item: item.clone(),
-                    score: total_score,
-                })
+                Some((total_score, row))
             })
             .collect();
 
-        results.sort_by_key(|entry| std::cmp::Reverse(entry.score));
-        results.truncate(limit);
-        results
+        // 안정 정렬 — 같은 점수는 색인 순서 그대로 (예전 동작과 같다)
+        scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(score, row)| SearchResult {
+                item: self.all_items[row].clone(),
+                score,
+            })
+            .collect()
     }
 
     /// Total loaded items
@@ -881,6 +922,36 @@ mod tests {
             keywords: keywords.to_string(),
             icon_path: None,
         }
+    }
+
+    #[test]
+    fn 퍼지가_덜_끝나면_이전_질의_결과를_내지_않고_미완성으로_표시() {
+        // docs/22 §2.2 재현: 항목이 많으면 tick 한 번 안에 매칭이 안 끝나 `2` → 0건,
+        // 이어 `zzzz` → 이전 결과 50건이 나왔다.
+        let items: Vec<IndexItem> = (0..200_000)
+            .map(|i| make_item(&format!("file{i}.txt"), &format!("/d/file{i}.txt"), ""))
+            .collect();
+        let mut engine = SearchEngine::new();
+        engine.load(items);
+        engine.set_fuzzy_wait(Duration::ZERO);
+
+        let first = engine.search_with_mode(SearchMode::Fuzzy, "2", 50);
+        if engine.is_pending() {
+            assert!(first.is_empty(), "미완성이면 빈 결과");
+        }
+        let stale = engine.search_with_mode(SearchMode::Fuzzy, "zzzz", 50);
+        assert!(
+            stale.is_empty(),
+            "z 가 든 항목은 없다 — 이전 질의 결과가 남으면 안 된다"
+        );
+
+        // 다시 물으면(UI 재검색) 완성된다
+        engine.set_fuzzy_wait(Duration::from_secs(10));
+        let done = engine.search_with_mode(SearchMode::Fuzzy, "123", 50);
+        assert!(!engine.is_pending());
+        assert_eq!(done.len(), 50);
+        engine.clear_pending();
+        assert!(!engine.is_pending());
     }
 
     #[test]

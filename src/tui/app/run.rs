@@ -146,6 +146,11 @@ pub fn run_app(
                     }
                 }
                 poll_pending_shell(&mut state);
+                // 퍼지 검색이 시간 안에 안 끝났으면 같은 질의로 다시 물어 결과를 완성한다
+                if engine.is_pending() && state.settings.is_none() {
+                    update_search(&mut state, &mut engine, db.as_ref());
+                    state.mark_dirty();
+                }
                 // Re-render on tick only when status_message is set (for auto-clear)
                 if state.status_message.is_some() {
                     state.mark_dirty();

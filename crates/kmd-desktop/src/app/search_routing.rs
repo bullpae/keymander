@@ -8,6 +8,8 @@ impl App {
         // 세대가 달라져 update에서 폐기된다.
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
+        // 일반 검색이 아니면 엔진을 안 거치므로 이전 미완성 표시를 지운다
+        self.engine.clear_pending();
         let query = self.query.clone();
         let trimmed = query.trim();
         // 알림은 짧은 수명 — 다음 검색이 시작되면 지운다 (TUI와 같은 규칙).
@@ -63,7 +65,17 @@ impl App {
                 post_task = self.handle_route_query(trimmed, generation);
             }
             Prefix::Say => self.handle_say_query(trimmed),
-            Prefix::General => self.handle_main_search(trimmed),
+            Prefix::General => {
+                self.handle_main_search(trimmed);
+                // 항목이 많아 퍼지 검색이 시간 안에 안 끝났다 — 잠시 뒤 같은 질의로 다시 묻는다.
+                // 그 사이 입력이 바뀌면 세대가 달라져 버려진다.
+                if self.engine.is_pending() {
+                    post_task = Task::future(async move {
+                        tokio::time::sleep(Duration::from_millis(SEARCH_RETRY_MS)).await;
+                        Message::SearchRetry(generation)
+                    });
+                }
+            }
         }
 
         // 결과가 실제로 바뀐 경우에만 아이콘 prefetch를 실행한다.
@@ -331,7 +343,9 @@ impl App {
             results.splice(0..0, calc_results);
         }
 
-        if results.is_empty() && !query.is_empty() {
+        // 미완성이면 빈 결과가 진짜가 아니다 — 완화 검색·웹 제안을 띄우지 않고 재검색을 기다린다
+        let pending = self.engine.is_pending();
+        if results.is_empty() && !query.is_empty() && !pending {
             if let Some(relaxed) = relaxed_hangul_query(query) {
                 let mut relaxed_results = self.engine.search_with_mode(
                     kmd_core::SearchMode::Contains,
@@ -346,7 +360,9 @@ impl App {
             }
         }
 
-        if results.is_empty() && !query.is_empty() {
+        if pending {
+            // 계산기·경로 추가 행처럼 엔진 밖 결과만 그대로 둔다
+        } else if results.is_empty() && !query.is_empty() {
             results = self.build_fallback_suggestions(query);
             self.search_mode = kmd_core::SearchMode::Contains;
         } else if self.search_mode == kmd_core::SearchMode::Fuzzy

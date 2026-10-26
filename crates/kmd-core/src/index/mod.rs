@@ -202,8 +202,12 @@ impl Index {
         };
 
         let priority_files = files::collect_priority_files(&provider_config);
-        let priority_count = priority_files.len();
-        tracing::info!("Priority directory files: {} items", priority_count);
+        tracing::info!("Priority directory files: {} items", priority_files.len());
+        // 할당량은 파일만 센다 — 검색 폴더의 폴더 이름은 할당량 밖에서 모두 담는다
+        let priority_count = priority_files
+            .iter()
+            .filter(|i| i.kind != ItemKind::Directory)
+            .count();
         items.extend(priority_files);
 
         // 5. General file provider scan (fills remaining quota)
