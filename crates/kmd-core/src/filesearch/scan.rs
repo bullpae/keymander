@@ -15,6 +15,9 @@ use crate::config::LauncherConfig;
 use crate::index::files::{is_ignored_dir, is_ignored_file, is_walk_candidate};
 use crate::index::package;
 
+/// 검색 폴더가 없을 때(마운트 해제 등)의 시각 표시
+pub const OFFLINE: i64 = 0;
+
 /// 스캔 설정 — `LauncherConfig` 에서 뽑는다
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
@@ -50,15 +53,18 @@ pub fn build_table(cfg: &ScanConfig) -> (TableBuilder, ScanStats) {
     let mut b = TableBuilder::new();
     let mut stats = ScanStats::default();
     for root in &cfg.roots {
-        if !root.is_dir() {
-            continue;
-        }
+        // 없는 검색 폴더(마운트 해제된 VeraCrypt·외장 볼륨)도 표에 남긴다 — 시각 0 = 오프라인.
+        // 빼 버리면 다시 마운트해도 다음 전체 재빌드까지 검색되지 않는다. 열 때 대조가
+        // 다시 나타난 것을 보고 그 아래를 걷는다.
+        let online = root.is_dir();
         let root_id = b.add_root(RootInfo {
             path: root.as_os_str().as_encoded_bytes().to_vec(),
-            mtime: mtime_of(root),
-            mtime_reliable: mtime_reliable(root),
+            mtime: if online { mtime_of(root) } else { OFFLINE },
+            mtime_reliable: online && mtime_reliable(root),
         });
-        walk_into(&mut b, cfg, root, root_id, NO_PARENT, 0, &mut stats);
+        if online {
+            walk_into(&mut b, cfg, root, root_id, NO_PARENT, 0, &mut stats);
+        }
     }
     if stats.skipped_files > 0 {
         tracing::warn!(

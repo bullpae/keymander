@@ -10,7 +10,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::scan::{list_children, mtime_of, walk_into, ScanConfig, ScanStats};
+use super::scan::{
+    list_children, mtime_of, mtime_reliable, walk_into, ScanConfig, ScanStats, OFFLINE,
+};
 use super::table::{Kind, Table, TableBuilder, NO_PARENT};
 
 /// 자식을 가진 쪽 — 검색 폴더 자신 또는 폴더 행
@@ -93,7 +95,10 @@ pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Recon
     b.roots = t.roots.to_vec();
     for (&c, &m) in &new_mtime {
         if let Container::Root(r) = c {
-            b.roots[r as usize].mtime = m;
+            let root = &mut b.roots[r as usize];
+            root.mtime = m;
+            // 다시 마운트되면 볼륨이 바뀌었을 수 있다(같은 드라이브 문자에 다른 볼륨)
+            root.mtime_reliable = m != OFFLINE && mtime_reliable(&root.path_buf());
         }
     }
     let mut new_index = vec![NO_PARENT; n];
@@ -190,10 +195,16 @@ fn changed_containers(
     let mut changed = Vec::new();
     let mut new_mtime = HashMap::new();
     for (r, root) in t.roots.iter().enumerate() {
-        if !root.mtime_reliable {
+        let path = root.path_buf();
+        let online = path.is_dir();
+        // 오프라인이던 검색 폴더가 다시 나타남(VeraCrypt·외장 볼륨 다시 마운트) — 볼륨 종류와
+        // 상관없이 통째로 다시 읽는다. 사라진 폴더도 마찬가지로 자식을 모두 지운다.
+        let came_back = root.mtime == OFFLINE && online;
+        let went_away = root.mtime != OFFLINE && !online;
+        if !(came_back || went_away || root.mtime_reliable) {
             continue;
         }
-        let m = mtime_of(&root.path_buf());
+        let m = if online { mtime_of(&path) } else { OFFLINE };
         if m != root.mtime {
             changed.push(Container::Root(r as u16));
             new_mtime.insert(Container::Root(r as u16), m);
@@ -274,6 +285,30 @@ mod tests {
         let m = std::fs::metadata(dir).unwrap().modified().unwrap();
         let later = filetime::FileTime::from_system_time(m + std::time::Duration::from_secs(5));
         filetime::set_file_mtime(dir, later).unwrap();
+    }
+
+    #[test]
+    fn 마운트_해제된_검색_폴더는_오프라인으로_남고_다시_나타나면_색인된다() {
+        // VeraCrypt·외장 볼륨: 색인 재빌드 때 마운트가 풀려 있어도 다시 마운트하면 열 때 대조로 돌아온다
+        let tmp = tempfile::tempdir().unwrap();
+        let vol = tmp.path().join("vol");
+        let c = cfg(&vol);
+        let (b, stats) = build_table(&c);
+        assert_eq!((b.len(), stats.files), (0, 0));
+        assert_eq!(b.roots.len(), 1, "없는 검색 폴더도 표에 남는다");
+        assert_eq!(b.roots[0].mtime, OFFLINE);
+
+        std::fs::create_dir_all(vol.join("비밀")).unwrap();
+        std::fs::write(vol.join("비밀/계약서.hwp"), "").unwrap();
+        let (mounted, _) = reconcile(&b.table(), &c).expect("다시 나타남");
+        assert_eq!(names(&mounted), names(&build_table(&c).0));
+        assert_ne!(mounted.roots[0].mtime, OFFLINE);
+
+        std::fs::remove_dir_all(&vol).unwrap();
+        let (gone, _) = reconcile(&mounted.table(), &c).expect("사라짐");
+        assert_eq!(gone.len(), 0, "마운트 해제되면 결과에서 빠진다");
+        assert_eq!(gone.roots[0].mtime, OFFLINE);
+        assert!(reconcile(&gone.table(), &c).is_none());
     }
 
     #[test]
