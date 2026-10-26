@@ -266,7 +266,8 @@ mod tests {
         let merged = merge(legacy_hits(query), f, query, &w, frecency);
         merged
             .first()
-            .map(|r| r.item.path.clone())
+            // 기대값은 `/` 로 적는다 — Windows 는 검색 폴더 아래를 `\` 로 잇는다
+            .map(|r| r.item.path.replace('\\', "/"))
             .unwrap_or_default()
     }
 
@@ -315,7 +316,12 @@ mod tests {
         // 깊은 README 도 자주 열면 얕은 README 를 이긴다
         let mut used = FrecencyMap::new();
         used.insert(
-            "/Users/me/MyOffice/archive/old/README.md".into(),
+            std::path::Path::new("/Users/me/MyOffice")
+                .join("archive")
+                .join("old")
+                .join("README.md")
+                .to_string_lossy()
+                .into_owned(),
             (30, chrono_now()),
         );
         assert_eq!(
