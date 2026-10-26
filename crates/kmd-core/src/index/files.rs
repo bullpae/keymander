@@ -783,7 +783,7 @@ fn walkdir_into_items<I>(
 
 /// 색인에 넣을 수 있는 항목인지 — 파일·폴더만(심볼릭 링크 제외), 검색 루트 자신 제외,
 /// 숨김 제외 (숨김 규칙은 OS마다 다르다 — Windows는 속성, fsutil 참조)
-fn is_walk_candidate(entry: &walkdir::DirEntry) -> bool {
+pub(crate) fn is_walk_candidate(entry: &walkdir::DirEntry) -> bool {
     let ft = entry.file_type();
     if !ft.is_file() && !ft.is_dir() {
         return false;
@@ -835,7 +835,7 @@ fn entry_item(
 }
 
 /// 파일 확장자가 `ignore_extensions`에 들면 true (폴더는 항상 false).
-fn is_ignored_file(entry: &walkdir::DirEntry, ignore_ext: &HashSet<String>) -> bool {
+pub(crate) fn is_ignored_file(entry: &walkdir::DirEntry, ignore_ext: &HashSet<String>) -> bool {
     entry.file_type().is_file() && has_ignored_extension(entry.path(), ignore_ext)
 }
 

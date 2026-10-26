@@ -189,6 +189,36 @@ pub struct LauncherConfig {
     /// `:길` 카카오맵 길찾기 — 내 장소·기본 출발지·카카오 키 파일 (docs/20).
     #[serde(default)]
     pub route: crate::route::RouteConfig,
+    /// 새 파일 검색 엔진 — 할당량 없는 색인 + 스냅숏 (docs/22).
+    #[serde(default)]
+    pub file_search: FileSearchConfig,
+}
+
+/// 파일 검색 엔진 설정 — `[launcher.file_search]` (docs/22 §3.15).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FileSearchConfig {
+    /// `"legacy"`(지금 엔진만) | `"auto"`(새 엔진으로 파일 검색, 스냅숏이 없거나 깨지면 legacy).
+    /// 순위 통합(F2) 전까지 기본은 legacy.
+    pub engine: String,
+    /// 색인할 파일 수 안전 상한 (기본 100만). 넘으면 "색인 불완전"을 남긴다. 폴더는 세지 않는다.
+    pub max_files: usize,
+}
+
+impl Default for FileSearchConfig {
+    fn default() -> Self {
+        Self {
+            engine: "legacy".to_string(),
+            max_files: 1_000_000,
+        }
+    }
+}
+
+impl FileSearchConfig {
+    /// 새 엔진을 쓰는지
+    pub fn enabled(&self) -> bool {
+        self.engine.eq_ignore_ascii_case("auto")
+    }
 }
 
 /// 문서 본문 검색(FTS5) 설정 — `[launcher.content_search]` (docs/15).
@@ -326,6 +356,7 @@ impl Default for LauncherConfig {
             prompt_templates: vec![],
             content_search: ContentSearchConfig::default(),
             route: Default::default(),
+            file_search: Default::default(),
         }
     }
 }

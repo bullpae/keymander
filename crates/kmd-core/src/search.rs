@@ -545,7 +545,7 @@ fn normalize_url(s: &str) -> String {
 ///
 /// 예전 구현은 `*`마다 재귀로 모든 분할을 시도해 `*a*a*a*a*b` 같은 질의에서 항목마다
 /// 지수적으로 느려졌다. 키 입력 경로라 정규식처럼(ReDoS 방어) 최악 비용을 막아야 한다.
-struct GlobMatcher {
+pub(crate) struct GlobMatcher {
     toks: Vec<GlobTok>,
 }
 
@@ -559,7 +559,7 @@ enum GlobTok {
 }
 
 impl GlobMatcher {
-    fn new(pattern: &str) -> Self {
+    pub(crate) fn new(pattern: &str) -> Self {
         let mut toks: Vec<GlobTok> = Vec::new();
         for ch in pattern.chars() {
             let tok = match ch {
@@ -575,7 +575,7 @@ impl GlobMatcher {
         Self { toks }
     }
 
-    fn matches(&self, text: &str) -> bool {
+    pub(crate) fn matches(&self, text: &str) -> bool {
         let (mut p, mut ti) = (0usize, 0usize);
         // 마지막 `*`의 (토큰 위치, 그 `*`가 지금까지 삼킨 끝 바이트 위치)
         let mut star: Option<(usize, usize)> = None;

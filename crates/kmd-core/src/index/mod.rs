@@ -137,7 +137,14 @@ impl Index {
     /// 3. General file provider scan — fills remaining quota
     /// 4. Deduplicate by path
     pub fn build(config: &crate::config::LauncherConfig, use_emoji: bool) -> Self {
-        Self::build_inner(config, use_emoji, true)
+        let index = Self::build_inner(config, use_emoji, true);
+        // 새 파일 검색 엔진의 스냅숏도 같은 시점에 (docs/22 F1). 실패해도 옛 색인은 그대로 쓴다.
+        if config.file_search.enabled() {
+            if let Err(e) = crate::filesearch::rebuild(config) {
+                tracing::warn!("파일 색인 스냅숏 실패: {e}");
+            }
+        }
+        index
     }
 
     /// Lightweight build: PATH + system commands only (no apps, no files).

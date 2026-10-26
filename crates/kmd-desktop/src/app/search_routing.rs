@@ -326,6 +326,18 @@ impl App {
             );
         }
 
+        // 새 파일 검색 엔진(docs/22): 할당량에 잘린 옛 파일 결과를 빼고 전체 색인 결과로 바꾼다
+        if let Some(index) = &self.file_index {
+            let files = index.search(
+                query,
+                SEARCH_LIMIT,
+                &self.file_boost,
+                &self.runtime_config.launcher.kind_weights,
+                self.use_emoji,
+            );
+            kmd_core::filesearch::merge_results(&mut results, files);
+        }
+
         // 실행 이력 기반으로 자주 사용하는 항목의 점수를 높인다.
         // 키 입력마다 호출되는 핫패스 — DB 조회 대신 부팅 시 로드한 맵 사용.
         kmd_core::history::boost_results_with_map(&mut results, &self.frecency);

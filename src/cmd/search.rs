@@ -17,6 +17,23 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
 
     let (mode, mut results) = engine.search(query, limit);
 
+    // 새 파일 검색 엔진(docs/22) — 한 번 묻고 끝나므로 열 때 대조도 그 자리에서
+    if config.launcher.file_search.enabled() {
+        if let Some(index) = kmd_core::filesearch::FileIndex::open_default() {
+            let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
+            let index = index.reconciled(&cfg).unwrap_or(index);
+            let files = index.search(
+                query,
+                limit,
+                &kmd_core::filesearch::Boost::default(),
+                &config.launcher.kind_weights,
+                config.general.emoji_icons,
+            );
+            kmd_core::filesearch::merge_results(&mut results, files);
+            results.truncate(limit);
+        }
+    }
+
     // Apply history boost
     if let Ok(db) = super::open_db() {
         kmd_core::history::boost_results(&mut results, &db);

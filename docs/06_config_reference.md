@@ -158,6 +158,24 @@ toggle_preview = "ctrl+p"
 - 한국어는 공백 단위 토큰 + 접두어 매칭 — 어절 중간 부분어("고용보험료"에서
   "보험료")는 현재 미지원, 재현율 부족 시 형태소 색인 도입 예정 (docs/15 P4)
 
+### 4.2.2 [launcher.file_search] — 새 파일 검색 엔진 (docs/22, 시험 단계)
+
+`max_results` 할당량 없이 검색 폴더 안 파일·폴더를 모두 색인한다. 색인은 스냅숏 파일로 남고
+런처는 그 파일을 매핑만 해서(40만 개 0.1ms 안팎) 직접 검색한다 — 데몬과 통신하지 않는다.
+런처를 열 때마다 폴더 수정 시각을 확인해 바뀐 폴더만 다시 읽는다(열 때 대조).
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| engine | String | "legacy" | `"auto"` = 새 엔진으로 파일 검색(스냅숏이 없거나 깨지면 옛 엔진). 순위 통합(F2) 전까지 기본은 legacy |
+| max_files | usize | 1000000 | 파일 수 안전 상한. 넘으면 로그에 "색인 불완전". 폴더는 세지 않는다 |
+
+- 켜는 법: `kmd config set launcher.file_search.engine auto` → `kmd index --rebuild`
+- 확인: `kmd index --stats` 의 "File index" 줄(세대·폴더·파일 수·검색 폴더별 상태)
+- 저장 위치: 로밍되지 않는 사용자 데이터 폴더 `filesearch/` (Windows `%LOCALAPPDATA%\kmd\filesearch`,
+  macOS `~/Library/Application Support/kmd/filesearch`). 포터블 모드여도 포터블 폴더에 두지 않는다
+- FAT32·exFAT·네트워크 볼륨은 폴더 시각을 믿을 수 없어 열 때 대조에서 빠지고 색인 재빌드 때만 갱신된다
+  (Windows 는 UNC 경로만 판별 — 매핑된 네트워크 드라이브·FAT 는 아직 판별하지 않음)
+
 ### 4.3 [launcher.kind_weights]
 
 검색 결과 우선순위 가중치 (0-100). 높을수록 검색 결과에서 상위에 노출됩니다.

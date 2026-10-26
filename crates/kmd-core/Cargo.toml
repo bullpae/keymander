@@ -8,6 +8,9 @@ description = "keymander core library — indexing, search, config, database"
 # Search
 nucleo = "0.5"
 regex = "1"
+# 파일 검색 엔진 (docs/22) — 스냅숏 매핑, 이름 부분 문자열
+memmap2 = "0.9"
+memchr = "2"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
