@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-10-26
+
 ### Fixed
 - **`:scope` 로 큰 폴더를 넣으면 뒤쪽 하위 폴더가 검색되지 않던 문제**. `E:\MyOffice\2020년 … 2026년`
   (파일 40만 개)를 넣으면 `2021년` 까지만 나오고 `2022년` 이후는 이름을 다 쳐도 안 나왔다.
