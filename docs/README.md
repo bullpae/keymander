@@ -42,7 +42,7 @@
 | 문서 | 상태 |
 |---|---|
 | [18_search_scope_ux.md](18_search_scope_ux.md) | **설계안** (2026-10-19) — `:scope` 검색 범위 관리(추가·삭제·즉시 인덱싱) + 포터블 프로그램 폴더 모드 |
-| [22_file_search_engine.md](22_file_search_engine.md) | **설계 v3** (2026-10-26) — 파일 검색 엔진: 데몬 상주 구조 배열 색인 + IPC, 할당량 제거, Dirty 큐 갱신 (Fable·Opus·GPT Astra 검토 반영) |
+| [22_file_search_engine.md](22_file_search_engine.md) | **설계 v4** (2026-10-26) — 파일 검색 엔진: IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트, 할당량 제거 (Fable·Opus·GPT Astra 검토 반영) |
 | [17_feature_backlog.md](17_feature_backlog.md) | **기능 백로그** — 계획·누락 기능 전수 조사(2026-10-05, v0.16.8). 어떤 "향후"가 진짜 미구현이고 어떤 게 이미 됐는지, 무엇을 영구 보류할지 |
 | [11_refactor_backlog.md](11_refactor_backlog.md) | **리팩토링·코드건강 백로그** — 코드 모양·블로킹 지점 (2026-10-18 전수 리뷰 반영, 진행 중) |
 | [10_dojo_plan.md](10_dojo_plan.md) | **구현 (M1~M5, 브랜치 `bullpae/dojo`)** — 흰띠~단, 오늘의 수련, 결과 카드, 인장. 남은 것: v2 hard mode |
