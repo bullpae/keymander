@@ -1,6 +1,6 @@
 # 22. 파일 검색 엔진 — 수십만 개를 세 OS에서 똑같이 빠르게
 
-> 상태: **설계 v4.1, F0 출시(v0.18.1)·F1 구현** (2026-10-26, F1 브랜치 `bullpae/filesearch-f1`) — **IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트**.
+> 상태: **설계 v4.1, F0 출시(v0.18.1)·F1·F2 구현** (2026-10-26, 브랜치 `bullpae/filesearch-f1`·`-f2`) — **IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트**.
 > v1~v3.1 은 "데몬이 색인을 들고 런처가 IPC 로 묻는" 구조였다. 보안·차단 환경 검토 끝에 파일 검색에서 IPC 를 뺐다(§7).
 > 계기: Windows 10 사용자 보고 — `:scope` 로 `E:\MyOffice` (파일 약 40만, 폴더 약 8,200)를 넣었더니
 > `2022년` 이후 폴더가 검색되지 않음. 직접 원인은 커밋 08ed07c 에서 고쳤다(§2.1). 이 문서는 근본 구조를 다룬다.
@@ -343,7 +343,7 @@ accelerator = "none"     # none | everything (F4)
 |---|---|---|
 | **F0** ✅ (`bullpae/scope-quota`) | 08ed07c + `search_fuzzy` 완료 확인(tick 반복 상한 50ms, 넘기면 `is_pending` + 빈 결과 → 데스크톱 30ms 뒤 재검색·TUI Tick 재검색, CLI·데몬은 끝까지 대기) + `filter_contains` HashSet 제거·상위만 복제 + `LlmAutopilot` URL https 만 | 실측(40만): `2` 50건·`zzzz` 0건(이전 결과 남지 않음), "보고서 최종" 188→80ms(목표 10배는 미달 — 긴 경로 선형 스캔 자체가 남은 비용, F1 에서 해소) |
 | **F1** ✅ (`bullpae/filesearch-f1`, 기본 꺼짐 `engine = "auto"`) | `crates/kmd-core/src/filesearch/`: table(열 배열)·snapshot(세대 파일 + `files.current`, 헤더·오프셋·부모 순서 검증, mmap)·query(토큰별 부분 문자열·단어 시작·머리글자·subsequence, 문자 가방, 폴더 마스크, 싼 점수 → 상위 5천 nucleo 다듬기, 실행 이력은 선정에만)·scan(할당량 없음, `max_files`)·reconcile(폴더 시각 → 바뀐 폴더 재나열 → 새 표, 결과를 새 세대로 공개). `Index::build` 가 스냅숏도 공개. 데스크톱·TUI·`kmd search` 가 옛 파일 결과를 새 결과로 바꿔 합침(점수는 `×3 + kind 가중` 임시 — F2 rank::combine) | 실측(M 시리즈, 40만 합성, 4스레드): 대부분 0.5~4.5ms, `*.hwp` 6ms, 열기+검증 0.1ms, 실제 폴더(3천 개) 대조 1ms. **남은 것**: Windows 실측, bag 로 비ASCII 블롭 memmem 최적화(현재 행별 memmem), 상주 스레드 풀(현재 질의마다 scope 스레드) |
-| **F2** | 변경분 세그먼트·manifest 세대·정리(열 때 대조 결과를 공개해 다음 런처가 이어 씀) + `rank::combine` + 골든 셋 + quick-index 합치기 + `kmd index --stats` 상태. 파일 할당량 제거는 설정 뒤에 숨긴 채 | 골든 셋 통과, 데몬 끈 상태에서 검색·대조 동작 |
+| **F2** 🟡 (`bullpae/filesearch-f2`) | ✅ `crate::rank`: 한 척도 공식(품질 + kind_weights÷4 + 최근 + 이력 최대 60 − 깊이), `rank::merge` 가 옛 결과(앱 등)를 이름 품질로 다시 매기고 파일 결과와 합침(플러그인 항목은 그대로), nucleo·이력은 파일 질의에서 선정·정렬에만. ✅ 골든 셋 단위 테스트(앱·실행 파일·폴더·파일 11개 질의 + 이력 뒤집기). ✅ `kmd index --golden`(실행 이력으로 옛/새 1위·3위 비율). ✅ Windows 볼륨 판별(`GetDriveTypeW`·`GetVolumeInformationW`). ⬜ 세그먼트 공개(지금은 대조 결과를 전체 세대로 다시 씀) ⬜ 기본값 전환 | 이 Mac 이력(19개·41질의): 옛·새 모두 1위 85.4%·3위 90.2%. **기본값 전환은 Windows 실기 `--golden` 결과를 보고** |
 | **F3** | 데몬의 notify + Dirty 큐·대조기 + 볼륨별 전략 + 폴더 이동 재배치 → 런처를 열지 않아도 수 초 안에 공개. 검증 후 **할당량 제거를 기본으로** | NTFS 실측(폴더 mtime, 대소문자 변경, 260자 경로, 10만 개 폭주), 데몬 강제 종료 복구 |
 | **F4** | 초성·한영 변환·Everything 가속·이어 치기 좁히기(측정 시) | |
 
