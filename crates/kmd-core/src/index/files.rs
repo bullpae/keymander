@@ -121,9 +121,21 @@ fn scan_directories(config: &ProviderConfig) -> Vec<(PathBuf, usize)> {
     dirs
 }
 
+/// `:scope` 폴더에서 담을 폴더 수 상한 — 파일 할당량(`max_results`)과 따로 센다.
+/// 폴더는 파일보다 훨씬 적고(파일 40만 개 드라이브에 폴더 8천 개), 폴더 이름이 빠지면
+/// 그 아래로 찾아 들어갈 길도 없어진다.
+const PRIORITY_DIR_LIMIT: usize = 50_000;
+
 /// Collect files from configured scan directories using walkdir.
 /// Each directory is scanned at its own depth (user dirs = full depth,
 /// drive roots = drive_scan_depth).
+///
+/// 할당량은 **파일에만** 걸고 폴더는 (`PRIORITY_DIR_LIMIT` 까지) 모두 담는다.
+/// 예전에는 폴더·파일을 합쳐 `max_results / 2` 개에서 깊이 우선 순회를 끊어서,
+/// `E:\MyOffice\2020년 … 2026년` 처럼 큰 폴더를 넣으면 `2021년` 안을 걷다가
+/// 상한에 닿아 `2022년` 이후는 폴더 이름조차 색인에 없었다.
+/// 파일 몫은 남은 할당량을 남은 검색 폴더 수로 나눠 뒤에 붙은 폴더도 받게 하고,
+/// 한 폴더 안에서는 얕은 것 → 최근에 고친 것 순으로 고른다 ([`collect_root`]).
 pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
     let scan_dirs = scan_directories(config);
 
@@ -132,13 +144,21 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
     }
 
     let ignore_set: HashSet<&str> = config.ignore_patterns.iter().map(|s| s.as_str()).collect();
-    let limit = config.max_results / 2; // Reserve half for general scan
+    let mut files_left = config.max_results / 2; // Reserve half for general scan
+    let mut dirs_left = PRIORITY_DIR_LIMIT;
 
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    for (dir, depth) in &scan_dirs {
-        tracing::info!("Scanning: {} (depth {})", dir.display(), depth);
+    for (i, (dir, depth)) in scan_dirs.iter().enumerate() {
+        // 앞 폴더가 덜 쓴 몫은 뒤 폴더로 넘어간다
+        let budget = files_left / (scan_dirs.len() - i);
+        tracing::info!(
+            "Scanning: {} (depth {}, files up to {})",
+            dir.display(),
+            depth,
+            budget
+        );
 
         let walker = WalkDir::new(dir)
             .max_depth(*depth)
@@ -153,11 +173,18 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
                         || super::package::parent_is_package(e.path()))
             });
 
-        walkdir_into_items(walker, &mut items, &mut seen, limit, config.use_emoji);
-
-        if items.len() >= limit {
-            break;
+        let root = collect_root(walker, &mut seen, budget, dirs_left, config.use_emoji);
+        if root.skipped_files > 0 {
+            tracing::info!(
+                "{}: 파일 {}개는 할당량을 넘어 빠짐 (launcher.max_results 로 늘릴 수 있음)",
+                dir.display(),
+                root.skipped_files
+            );
         }
+        files_left -= root.files.len();
+        dirs_left -= root.dirs.len();
+        items.extend(root.dirs);
+        items.extend(root.files);
     }
 
     tracing::info!(
@@ -165,6 +192,83 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
         items.len()
     );
     items
+}
+
+/// 검색 폴더 하나를 걸은 결과
+struct RootScan {
+    dirs: Vec<IndexItem>,
+    /// 얕은 것 → 최근 것 순
+    files: Vec<IndexItem>,
+    skipped_files: usize,
+}
+
+/// 폴더는 `dir_limit` 까지 모두, 파일은 `file_budget` 개만 고른다.
+///
+/// 깊이 우선 순회 순서대로 자르면 이름순으로 앞선 하위 폴더가 몫을 다 먹는다.
+/// 그래서 파일은 (깊이, 오래된 정도)가 가장 나쁜 것을 꺼내는 힙에 넣고 넘치면 버린다.
+/// 수정 시각은 힙이 찼고 깊이가 같을 때만 읽는다 — 더 깊은 파일은 묻지 않고 버린다.
+fn collect_root<I>(
+    walker: I,
+    seen: &mut HashSet<String>,
+    file_budget: usize,
+    dir_limit: usize,
+    use_emoji: bool,
+) -> RootScan
+where
+    I: Iterator<Item = walkdir::Result<walkdir::DirEntry>>,
+{
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    use std::time::SystemTime;
+
+    let mut dirs = Vec::new();
+    // 최댓값 = 가장 깊고 가장 오래된 파일
+    let mut heap: BinaryHeap<(usize, Reverse<SystemTime>, PathBuf)> = BinaryHeap::new();
+    let mut skipped_files = 0;
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !is_walk_candidate(&entry) {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            if dirs.len() < dir_limit {
+                if let Some(item) = entry_item(entry.path(), true, seen, use_emoji) {
+                    dirs.push(item);
+                }
+            }
+            continue;
+        }
+        if seen.contains(entry.path().to_string_lossy().as_ref()) {
+            continue;
+        }
+        let full = heap.len() >= file_budget;
+        if full && heap.peek().is_none_or(|top| entry.depth() > top.0) {
+            skipped_files += 1;
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        heap.push((entry.depth(), Reverse(mtime), entry.into_path()));
+        if heap.len() > file_budget {
+            heap.pop();
+            skipped_files += 1;
+        }
+    }
+
+    let files = heap
+        .into_sorted_vec()
+        .into_iter()
+        .filter_map(|(_, _, path)| entry_item(&path, false, seen, use_emoji))
+        .collect();
+    RootScan {
+        dirs,
+        files,
+        skipped_files,
+    }
 }
 
 // ============================================================================
@@ -662,67 +766,72 @@ fn walkdir_into_items<I>(
 {
     for entry in walker {
         let Ok(entry) = entry else { continue };
-
-        let is_file = entry.file_type().is_file();
-        let is_dir = entry.file_type().is_dir();
-
-        // Skip entries that are neither files nor directories (e.g. symlinks)
-        if !is_file && !is_dir {
+        if !is_walk_candidate(&entry) {
             continue;
         }
-        // Skip the root scan directory itself (depth 0)
-        if is_dir && entry.depth() == 0 {
+        let Some(item) = entry_item(entry.path(), entry.file_type().is_dir(), seen, use_emoji)
+        else {
             continue;
-        }
-
-        let path = entry.path();
-        let path_str = path.to_string_lossy().to_string();
-
-        // Deduplicate
-        if !seen.insert(path_str.clone()) {
-            continue;
-        }
-
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        // 숨김 규칙은 OS마다 다르다(Windows는 속성) — fsutil 참조
-        if name.is_empty() || crate::fsutil::is_hidden_walk_entry(&entry) {
-            continue;
-        }
-
-        let mut item = IndexItem {
-            name: name.clone(),
-            path: path_str.clone(),
-            kind: if is_dir {
-                ItemKind::Directory
-            } else {
-                ItemKind::File
-            },
-            source: Source::FileProvider,
-            icon: if is_dir {
-                dir_icon(use_emoji)
-            } else {
-                icon_for_path(path, use_emoji)
-            },
-            keywords: path_str,
-            icon_path: None,
         };
-        // macOS 패키지(.app 등)는 폴더가 아니라 앱/파일 하나 (docs/18 §9)
-        if is_dir {
-            if let Some(kind) = super::package::detect(path) {
-                apply_package_kind(&mut item, kind, use_emoji);
-            }
-        }
         items.push(item);
 
         if items.len() >= limit {
             break;
         }
     }
+}
+
+/// 색인에 넣을 수 있는 항목인지 — 파일·폴더만(심볼릭 링크 제외), 검색 루트 자신 제외,
+/// 숨김 제외 (숨김 규칙은 OS마다 다르다 — Windows는 속성, fsutil 참조)
+fn is_walk_candidate(entry: &walkdir::DirEntry) -> bool {
+    let ft = entry.file_type();
+    if !ft.is_file() && !ft.is_dir() {
+        return false;
+    }
+    if ft.is_dir() && entry.depth() == 0 {
+        return false;
+    }
+    let name_empty = entry.path().file_name().and_then(|n| n.to_str()).is_none();
+    !name_empty && !crate::fsutil::is_hidden_walk_entry(entry)
+}
+
+/// 경로 하나를 색인 항목으로 — 이미 담은 경로면 None
+fn entry_item(
+    path: &Path,
+    is_dir: bool,
+    seen: &mut HashSet<String>,
+    use_emoji: bool,
+) -> Option<IndexItem> {
+    let path_str = path.to_string_lossy().to_string();
+    if !seen.insert(path_str.clone()) {
+        return None;
+    }
+    let name = path.file_name()?.to_str()?.to_string();
+
+    let mut item = IndexItem {
+        name,
+        path: path_str.clone(),
+        kind: if is_dir {
+            ItemKind::Directory
+        } else {
+            ItemKind::File
+        },
+        source: Source::FileProvider,
+        icon: if is_dir {
+            dir_icon(use_emoji)
+        } else {
+            icon_for_path(path, use_emoji)
+        },
+        keywords: path_str,
+        icon_path: None,
+    };
+    // macOS 패키지(.app 등)는 폴더가 아니라 앱/파일 하나 (docs/18 §9)
+    if is_dir {
+        if let Some(kind) = super::package::detect(path) {
+            apply_package_kind(&mut item, kind, use_emoji);
+        }
+    }
+    Some(item)
 }
 
 /// 파일 확장자가 `ignore_extensions`에 들면 true (폴더는 항상 false).
@@ -1190,6 +1299,57 @@ mod tests {
         assert!(names.contains("weird.cat"), "폴더는 확장자 규칙 대상 아님");
         assert!(!names.contains("veracrypt.cat"));
         assert!(!names.contains("VERACRYPT.INF"), "대소문자 무시");
+    }
+
+    #[test]
+    fn priority_scan_keeps_every_folder_and_shares_file_quota() {
+        // E:\MyOffice\2020년 … 2026년 재현: 앞 연도 아래 파일이 할당량을 다 먹어도
+        // 뒤 연도 폴더 이름은 남고, 파일은 얕은 것부터 고르며, 뒤에 붙은 검색 폴더도 몫을 받는다
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let office = tmp.path().join("MyOffice");
+        for year in 2020..=2026 {
+            let deep = office
+                .join(format!("{year}년"))
+                .join("프로젝트")
+                .join("자료");
+            must_mkdir(&deep);
+            must_write(&office.join(format!("{year}년")).join("요약.txt"), "");
+            for n in 0..30 {
+                must_write(&deep.join(format!("doc{n}.txt")), "");
+            }
+        }
+        let other = tmp.path().join("Other");
+        must_mkdir(&other);
+        must_write(&other.join("memo.txt"), "");
+
+        let config = ProviderConfig {
+            search_paths: vec![office.clone(), other.clone()],
+            max_results: 40, // 파일 몫 20 — 검색 폴더 둘이 나눈다
+            scan_drives: false,
+            ..Default::default()
+        };
+        let items = collect_priority_files(&config);
+        let dirs: HashSet<&str> = items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Directory)
+            .map(|i| i.name.as_str())
+            .collect();
+        for year in 2020..=2026 {
+            assert!(dirs.contains(format!("{year}년").as_str()), "{year}년 폴더");
+        }
+        assert!(dirs.contains("자료"), "깊은 폴더도 할당량과 무관");
+
+        let files: Vec<&IndexItem> = items.iter().filter(|i| i.kind == ItemKind::File).collect();
+        assert!(files.len() <= 20, "파일은 할당량 안: {}", files.len());
+        let summaries = files.iter().filter(|i| i.name == "요약.txt").count();
+        assert_eq!(
+            summaries, 7,
+            "얕은 파일(연도 바로 아래)이 깊은 파일보다 먼저"
+        );
+        assert!(
+            files.iter().any(|i| i.name == "memo.txt"),
+            "뒤 검색 폴더도 몫"
+        );
     }
 
     #[test]
