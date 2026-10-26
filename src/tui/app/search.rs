@@ -19,6 +19,8 @@ pub(super) fn update_search(
 ) {
     // Borrow the cached effective query (no allocation)
     let query = state.effective_query().to_owned();
+    // 일반 검색이 아니면 엔진을 안 거치므로 이전 미완성 표시를 지운다 (일반 검색이면 다시 정해진다)
+    engine.clear_pending();
 
     if query.is_empty() {
         return handle_empty_query(state, db);
@@ -365,7 +367,8 @@ fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngi
     // 결과가 없으면 "검색 범위 밖 폴더" 제안을 보여준다. 빈 화면만 내놓으면
     // 사용자는 왜 안 나오는지 알 수 없다 — 가장 흔한 원인이 범위 누락이다.
     // (데스크톱도 같은 지점에서 같은 제안을 쓴다)
-    if results.is_empty() && !query.trim().is_empty() {
+    // 미완성(항목이 많아 퍼지가 덜 끝남)이면 빈 결과가 진짜가 아니다 — 다음 Tick 에 다시 묻는다
+    if results.is_empty() && !query.trim().is_empty() && !engine.is_pending() {
         results.extend(kmd_core::folder_suggest::suggestion_results(
             &state.config.launcher,
             state.use_emoji,

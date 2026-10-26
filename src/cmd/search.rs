@@ -12,6 +12,8 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     }
 
     let mut engine = super::create_search_engine(&config);
+    // 한 번 묻고 끝나는 CLI — 미완성 결과를 찍지 않도록 끝날 때까지 기다린다
+    engine.set_fuzzy_wait(std::time::Duration::from_secs(5));
 
     let (mode, mut results) = engine.search(query, limit);
 

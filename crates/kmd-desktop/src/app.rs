@@ -60,6 +60,8 @@ use window_resize::UNCLOAK_AFTER_RESIZE;
 
 pub const DEFAULT_WIDTH: f32 = 1000.0;
 const SEARCH_LIMIT: usize = 50;
+/// 퍼지 검색 미완성 시 다시 묻기까지 (한 프레임 남짓 — 그동안 워커가 매칭을 이어 간다)
+const SEARCH_RETRY_MS: u64 = 30;
 /// 빈 입력일 때 보여줄 최근 실행 항목 수 (TUI와 동일).
 const RECENT_DISPLAY_LIMIT: usize = 20;
 const SCORE_PLUGIN: u32 = u32::MAX;
@@ -253,6 +255,8 @@ pub enum Message {
     ClipActionFinished(Result<String, String>),
     /// `:scope` 추가·제거 후 리빌드 완료 → 새 캐시로 엔진 교체 (docs/18)
     ScopeReindexed(Result<String, String>),
+    /// 퍼지 검색 미완성 → 같은 질의로 다시 검색 — generation 이 현재 세대와 다르면 폐기
+    SearchRetry(u64),
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -682,6 +686,13 @@ impl App {
             Message::GotWindowId(id) => self.handle_got_window_id(id),
             Message::GotRawWindowId(raw_id) => self.handle_got_raw_window_id(raw_id),
             Message::WarmupTick(token) => self.handle_warmup_tick(token),
+            Message::SearchRetry(generation) => {
+                if generation == self.search_generation {
+                    self.perform_search()
+                } else {
+                    Task::none()
+                }
+            }
             Message::EnsureFocus(attempt) => self.handle_ensure_focus(attempt),
             Message::EngineReady => self.handle_engine_ready(),
             Message::EngineSwapSettled => self.handle_engine_swap_settled(),

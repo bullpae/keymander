@@ -583,10 +583,10 @@ pub fn run() -> color_eyre::Result<()> {
     let item_count = index.items.len();
     tracing::info!("{item_count}개 항목으로 검색 엔진 초기화");
 
-    let engine = Arc::new(Mutex::new(SearchEngine::with_items(
-        &config.launcher.kind_weights,
-        index.items,
-    )));
+    let mut engine = SearchEngine::with_items(&config.launcher.kind_weights, index.items);
+    // IPC 검색은 한 번 묻고 끝난다 — 다시 물을 기회가 없으니 끝날 때까지 기다린다
+    engine.set_fuzzy_wait(std::time::Duration::from_secs(1));
+    let engine = Arc::new(Mutex::new(engine));
 
     // 클립보드 히스토리 감시 (opt-in) — clip:N 붙여넣기의 데이터 소스
     crate::clipboard::spawn_watcher(
@@ -771,6 +771,17 @@ fn process_request(
         }
 
         Request::LlmAutopilot { jobs } => {
+            // URL 은 브라우저로만 연다. open_url 은 http(s) 가 아니면 파일 열기(Windows explorer)로
+            // 가므로, 검사하지 않으면 IPC 요청 하나로 임의 파일을 실행할 수 있었다 (docs/22 §3.12).
+            if let Some(bad) = jobs.iter().find(|j| !is_https_url(&j.url)) {
+                tracing::warn!(
+                    "LLM 오토파일럿: https 가 아닌 URL 거절 ({} 바이트)",
+                    bad.url.len()
+                );
+                return Response::Error {
+                    message: "LLM 오토파일럿은 https 주소만 엽니다".into(),
+                };
+            }
             let n = jobs.len();
             crate::autopilot::run_autopilot(jobs);
             Response::Ok {
@@ -1033,6 +1044,13 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     kb
 }
 
+/// `https://` 로 시작하는 주소인지 (대소문자 무시) — IPC 로 받은 URL 을 열기 전에 확인한다
+fn is_https_url(url: &str) -> bool {
+    url.trim_start()
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+}
+
 fn write_runtime_files(port: u16, token: &str) -> color_eyre::Result<()> {
     // 런타임 파일은 포터블 모드와 무관하게 OS 표준 사용자 디렉터리에 둔다
     // (토큰 노출 방지 — ipc::runtime_dir 문서 참조)
@@ -1067,6 +1085,17 @@ fn cleanup_runtime_files() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 오토파일럿_url_은_https_만() {
+        assert!(is_https_url("https://chatgpt.com/?q=hi"));
+        assert!(is_https_url("HTTPS://claude.ai/new"));
+        assert!(!is_https_url("http://example.com"));
+        assert!(!is_https_url("C:\\Windows\\System32\\calc.exe"));
+        assert!(!is_https_url("file:///etc/passwd"));
+        assert!(!is_https_url("https:"));
+        assert!(!is_https_url("ms-settings:"));
+    }
 
     #[test]
     fn 연결_슬롯은_상한까지만_내주고_drop하면_반납한다() {
