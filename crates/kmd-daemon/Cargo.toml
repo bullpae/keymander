@@ -54,6 +54,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     # 훅 워치독의 GetTickCount (훅 생존 하트비트)
     "Win32_System_SystemInformation",
+    # 볼륨 분리 알림을 받을 숨은 창의 WNDCLASSW (fs_watch, hbrBackground 필드)
+    "Win32_Graphics_Gdi",
 ] }
 # 현재 위치(`:길` 기본 출발지, docs/20) — WinRT Windows.Devices.Geolocation
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation", "Win32_System_WinRT"] }
