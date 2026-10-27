@@ -1,6 +1,6 @@
 # 22. 파일 검색 엔진 — 수십만 개를 세 OS에서 똑같이 빠르게
 
-> 상태: **설계 v4.1, F0 출시(v0.18.1)·F1·F2 구현** (2026-10-26, 브랜치 `bullpae/filesearch-f1`·`-f2`) — **IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트**.
+> 상태: **설계 v4.1, F0 출시(v0.18.1)·F1·F2 출시(v0.19.0), v0.19.1 부터 기본 켜짐·F3·F4 일부** (2026-10-27) — **IPC 없는 내장 검색 + 불변 스냅숏(mmap) + 변경분 세그먼트**.
 > v1~v3.1 은 "데몬이 색인을 들고 런처가 IPC 로 묻는" 구조였다. 보안·차단 환경 검토 끝에 파일 검색에서 IPC 를 뺐다(§7).
 > 계기: Windows 10 사용자 보고 — `:scope` 로 `E:\MyOffice` (파일 약 40만, 폴더 약 8,200)를 넣었더니
 > `2022년` 이후 폴더가 검색되지 않음. 직접 원인은 커밋 08ed07c 에서 고쳤다(§2.1). 이 문서는 근본 구조를 다룬다.
@@ -330,7 +330,7 @@ mtime 대조 ──────┼─▶ 정규화 ─▶ Dirty 큐 ─▶ 대�
 
 ```toml
 [launcher.file_search]
-engine = "auto"          # auto(새 엔진, 실패 시 옛 경로) | legacy
+engine = "auto"          # auto(새 엔진, 실패 시 옛 경로) | off  — v0.19.1 부터 기본 auto, 옛 "legacy" 는 auto 로 읽음
 indexer = "auto"         # auto(데몬, 없으면 런처) | daemon | launcher | off
 max_files = 1000000
 stale_minutes = 10       # 런처 인덱서가 대조를 시작하는 manifest 나이
@@ -343,7 +343,7 @@ accelerator = "none"     # none | everything (F4)
 |---|---|---|
 | **F0** ✅ (`bullpae/scope-quota`) | 08ed07c + `search_fuzzy` 완료 확인(tick 반복 상한 50ms, 넘기면 `is_pending` + 빈 결과 → 데스크톱 30ms 뒤 재검색·TUI Tick 재검색, CLI·데몬은 끝까지 대기) + `filter_contains` HashSet 제거·상위만 복제 + `LlmAutopilot` URL https 만 | 실측(40만): `2` 50건·`zzzz` 0건(이전 결과 남지 않음), "보고서 최종" 188→80ms(목표 10배는 미달 — 긴 경로 선형 스캔 자체가 남은 비용, F1 에서 해소) |
 | **F1** ✅ (`bullpae/filesearch-f1`, 기본 꺼짐 `engine = "auto"`) | `crates/kmd-core/src/filesearch/`: table(열 배열)·snapshot(세대 파일 + `files.current`, 헤더·오프셋·부모 순서 검증, mmap)·query(토큰별 부분 문자열·단어 시작·머리글자·subsequence, 문자 가방, 폴더 마스크, 싼 점수 → 상위 5천 nucleo 다듬기, 실행 이력은 선정에만)·scan(할당량 없음, `max_files`)·reconcile(폴더 시각 → 바뀐 폴더 재나열 → 새 표, 결과를 새 세대로 공개). `Index::build` 가 스냅숏도 공개. 데스크톱·TUI·`kmd search` 가 옛 파일 결과를 새 결과로 바꿔 합침(점수는 `×3 + kind 가중` 임시 — F2 rank::combine) | 실측(M 시리즈, 40만 합성, 4스레드): 대부분 0.5~4.5ms, `*.hwp` 6ms, 열기+검증 0.1ms, 실제 폴더(3천 개) 대조 1ms. **남은 것**: Windows 실측, bag 로 비ASCII 블롭 memmem 최적화(현재 행별 memmem), 상주 스레드 풀(현재 질의마다 scope 스레드) |
-| **F2** 🟡 (`bullpae/filesearch-f2`) | ✅ `crate::rank`: 한 척도 공식(품질 + kind_weights÷4 + 최근 + 이력 최대 60 − 깊이), `rank::merge` 가 옛 결과(앱 등)를 이름 품질로 다시 매기고 파일 결과와 합침(플러그인 항목은 그대로), nucleo·이력은 파일 질의에서 선정·정렬에만. ✅ 골든 셋 단위 테스트(앱·실행 파일·폴더·파일 11개 질의 + 이력 뒤집기). ✅ `kmd index --golden`(실행 이력으로 옛/새 1위·3위 비율). ✅ Windows 볼륨 판별(`GetDriveTypeW`·`GetVolumeInformationW`). ⬜ 세그먼트 공개(지금은 대조 결과를 전체 세대로 다시 씀) ⬜ 기본값 전환 | 이 Mac 이력(19개·41질의): 옛·새 모두 1위 85.4%·3위 90.2%. Windows 실기(2026-10-27, 이력 3개·6질의 — 표본이 작다): 옛·새 모두 1위 66.7%·3위 100%. 이 측정에서 Windows 이력 경로 대소문자 비교 버그를 찾아 고침(`history::path_key`). CLI 1회 실행 옛 ~470ms → 새 ~125ms. **기본값 전환은 이력이 더 쌓인 뒤 다시 `--golden`** |
+| **F2** ✅ (`bullpae/filesearch-f2`, 기본값 전환 `bullpae/filesearch-default`) | ✅ `crate::rank`: 한 척도 공식(품질 + kind_weights÷4 + 최근 + 이력 최대 60 − 깊이), `rank::merge` 가 옛 결과(앱 등)를 이름 품질로 다시 매기고 파일 결과와 합침(플러그인 항목은 그대로), nucleo·이력은 파일 질의에서 선정·정렬에만. ✅ 골든 셋 단위 테스트(앱·실행 파일·폴더·파일 11개 질의 + 이력 뒤집기). ✅ `kmd index --golden`(실행 이력으로 옛/새 1위·3위 비율). ✅ Windows 볼륨 판별(`GetDriveTypeW`·`GetVolumeInformationW`). ✅ **기본값 전환(v0.19.1)** — `engine` 기본 `"auto"`, 끄기는 `"off"`. 저장된 옛 기본값 `"legacy"` 는 auto 로 읽는다(설정 저장이 기본값까지 파일에 써서, 고르지 않은 사람도 `"legacy"` 를 갖고 있다). `kmd index --stats` 에 검색 중인 엔진 표시. 세그먼트 공개는 F3 로 | 이 Mac 이력(19개·41질의): 옛·새 모두 1위 85.4%·3위 90.2%. Windows 실기(2026-10-27, 이력 3개·6질의 — 표본이 작다): 옛·새 모두 1위 66.7%·3위 100%. 이 측정에서 Windows 이력 경로 대소문자 비교 버그를 찾아 고침(`history::path_key`). CLI 1회 실행 옛 ~470ms → 새 ~125ms. Windows 실사용 확인 뒤 기본값 전환 |
 | **F3** 🟡 | ✅ 데몬 5분 주기 갱신(`filesearch::refresh`: 폴더 시각 대조 → 새 세대, 검색 폴더가 바뀌면 전체 스캔) ✅ 런처 대조 결과 공개는 5분 간격(`PUBLISH_MIN_AGE`) ✅ 마운트 해제된 검색 폴더는 오프라인(시각 0)으로 남기고 다시 나타나면 대조가 색인. ✅ 폴더 시각을 믿을 수 없는 볼륨(exFAT·FAT·네트워크)은 데몬 5분 갱신에서 폴더를 전부 다시 나열(`reconcile::relist`), 달라진 게 없으면 세대를 쓰지 않음 — Windows VeraCrypt exFAT 실측: 추가·이름 변경·삭제 모두 폴더 시각 불변(NTFS 는 모두 갱신), 5분 뒤 새 파일·지운 파일 반영 확인. ⬜ notify 즉시 반영(수 초) ⬜ 변경분 세그먼트 ⬜ 폴더 이동 재배치. 검증 후 **할당량 제거를 기본으로** | 10만 파일 실측(macOS): 스캔 217ms, 전체 공개 33ms(7MB), 대조 변경 없음 1ms·파일 1개 추가 4ms. notify 는 데몬 본문 감시가 VeraCrypt 해제를 막는 문제(§보안 폴더 보류)와 함께 다룬다 |
 | **F4** 🟡 | ✅ 초성 검색(`hangul::is_choseong_query`·`choseong_string`, 새 엔진 토큰 종류 + 문자 가방에 초성 자모 비트, 옛 엔진 contains) ✅ 한영 오타 변환(`hangul::qwerty_to_hangul`, 완성 음절로만 조합될 때, 원래 질의가 그대로 든 결과가 없을 때만 — 데스크톱·TUI) ⬜ Everything 가속 ⬜ 이어 치기 좁히기 ⬜ 마지막 미완성 음절(`보고ㅅ`) | |
 

@@ -133,7 +133,7 @@ pub struct App {
     full_engine_loaded: bool,
     /// 실행 이력 frecency 맵 — 부팅 시 1회 로드해 키 입력마다의 DB 조회를 제거
     frecency: kmd_core::history::FrecencyMap,
-    /// 새 파일 검색 엔진 색인 (docs/22) — `launcher.file_search.engine = "auto"` 이고 스냅숏이 있을 때만
+    /// 새 파일 검색 엔진 색인 (docs/22) — `launcher.file_search.engine` 이 `"off"` 가 아니고 스냅숏이 있을 때만
     file_index: Option<Arc<kmd_core::filesearch::FileIndex>>,
     /// 파일 검색 후보 선정용 실행 이력 (frecency 에서 이름 → 경로)
     file_boost: Arc<kmd_core::filesearch::Boost>,

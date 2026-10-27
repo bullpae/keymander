@@ -158,7 +158,7 @@ toggle_preview = "ctrl+p"
 - 한국어는 공백 단위 토큰 + 접두어 매칭 — 어절 중간 부분어("고용보험료"에서
   "보험료")는 현재 미지원, 재현율 부족 시 형태소 색인 도입 예정 (docs/15 P4)
 
-### 4.2.2 [launcher.file_search] — 새 파일 검색 엔진 (docs/22, 시험 단계)
+### 4.2.2 [launcher.file_search] — 파일 검색 엔진 (docs/22)
 
 `max_results` 할당량 없이 검색 폴더 안 파일·폴더를 모두 색인한다. 색인은 스냅숏 파일로 남고
 런처는 그 파일을 매핑만 해서(40만 개 0.1ms 안팎) 직접 검색한다 — 데몬과 통신하지 않는다.
@@ -166,18 +166,19 @@ toggle_preview = "ctrl+p"
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| engine | String | "legacy" | `"auto"` = 새 엔진으로 파일 검색(스냅숏이 없거나 깨지면 옛 엔진). 순위 통합(F2) 전까지 기본은 legacy |
+| engine | String | "auto" | `"auto"` = 새 엔진으로 파일 검색(스냅숏이 없거나 깨지면 옛 엔진), `"off"` = 옛 엔진만. v0.19.0 까지의 기본값 `"legacy"` 는 `"auto"` 로 읽는다 |
 | max_files | usize | 1000000 | 파일 수 안전 상한. 넘으면 로그에 "색인 불완전". 폴더는 세지 않는다 |
 
-- 켜는 법: `kmd config set launcher.file_search.engine auto` → `kmd index --rebuild`
-- 확인: `kmd index --stats` 의 "File index" 줄(세대·폴더·파일 수·검색 폴더별 상태)
-- 켜기 전 비교: `kmd index --golden` — 실행 이력의 항목마다 질의(앞 세 글자·첫 단어·머리글자)를 만들어
+- v0.19.1 부터 기본으로 켜진다. 스냅숏은 데몬이 시작할 때(또는 `kmd index --rebuild`) 만들고, 그 전까지는 옛 엔진으로 검색한다
+- 끄는 법: `kmd config set launcher.file_search.engine off`
+- 확인: `kmd index --stats` 의 "File search"(어느 엔진으로 검색 중인지)·"File index"(세대·폴더·파일 수·검색 폴더별 상태) 줄
+- 비교: `kmd index --golden` — 실행 이력의 항목마다 질의(앞 세 글자·첫 단어·머리글자)를 만들어
   옛 엔진과 새 엔진에서 몇 위에 오는지 1위·3위 안 비율로 보여 준다
 - 켜면 순위도 바뀐다: 앱·실행 파일·폴더·파일을 이름 일치 품질 중심의 한 공식으로 매긴다(docs/22 §3.7)
 - 저장 위치: 로밍되지 않는 사용자 데이터 폴더 `filesearch/` (Windows `%LOCALAPPDATA%\kmd\filesearch`,
   macOS `~/Library/Application Support/kmd/filesearch`). 포터블 모드여도 포터블 폴더에 두지 않는다
 - FAT32·exFAT·네트워크 볼륨(UNC·매핑된 드라이브, SMB·NFS)은 폴더 시각을 믿을 수 없어 열 때 대조에서 빠지고
-  색인 재빌드 때만 갱신된다
+  데몬의 5분 갱신에서 폴더를 전부 다시 나열한다
 
 ### 4.3 [launcher.kind_weights]
 

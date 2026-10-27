@@ -58,7 +58,7 @@ pub struct AppState {
     /// 맵 구축을 돌았다(데스크톱은 같은 자리에서 미리 로드한 맵을 쓴다).
     /// 시작 시 1회 로드하고, 실행을 기록한 직후에만 다시 읽는다.
     pub(super) frecency: kmd_core::history::FrecencyMap,
-    /// 새 파일 검색 엔진 색인 (docs/22) — `launcher.file_search.engine = "auto"` 일 때만
+    /// 새 파일 검색 엔진 색인 (docs/22) — `launcher.file_search.engine` 이 `"off"` 가 아닐 때만
     pub(super) file_index: Option<kmd_core::filesearch::FileIndex>,
     pub(super) file_boost: kmd_core::filesearch::Boost,
     /// 열 때 대조 결과 채널 — Tick 마다 확인한다 (pending_shell 과 같은 방식)

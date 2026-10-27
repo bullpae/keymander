@@ -32,7 +32,7 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
         if let Some(index) =
             kmd_core::index::store::try_load_cached(&bin_path, &json_path, expected_version)
         {
-            print_stats(&index);
+            print_stats(&index, &config.launcher.file_search);
         } else {
             println!("No index found. Run `kmd index --rebuild` to create one.");
         }
@@ -53,7 +53,7 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
             if let Some(index) =
                 kmd_core::index::store::try_load_cached(&bin_path, &json_path, expected_version)
             {
-                print_stats(&index);
+                print_stats(&index, &config.launcher.file_search);
             }
             return Ok(());
         }
@@ -107,11 +107,11 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
             }
         }
 
-        print_stats(&index);
+        print_stats(&index, &config.launcher.file_search);
     } else {
         let index = super::load_or_build_index(&config.launcher, config.general.emoji_icons);
         println!("Index loaded from cache.");
-        print_stats(&index);
+        print_stats(&index, &config.launcher.file_search);
         println!("\nUse `kmd index --rebuild` to refresh.");
     }
 
@@ -119,16 +119,24 @@ pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
 }
 
 /// 새 파일 검색 엔진 스냅숏 (docs/22) — 세대·항목 수·검색 폴더별 상태
-fn print_file_index_stats() {
+fn print_file_index_stats(config: &kmd_core::config::FileSearchConfig) {
     use kmd_core::filesearch::{snapshot, table::Kind};
+    if !config.enabled() {
+        println!("\n  File search:      옛 엔진 (launcher.file_search.engine = \"off\")");
+        return;
+    }
     let dir = snapshot::default_dir();
     let Ok(snap) = snapshot::Snapshot::open_current(&dir) else {
+        println!(
+            "\n  File search:      새 엔진 — 스냅숏이 아직 없어 옛 엔진으로 검색 중 (`kmd index --rebuild` 로 만든다)"
+        );
         return;
     };
+    println!("\n  File search:      새 엔진 (docs/22)");
     let t = snap.table();
     let dirs = (0..t.len()).filter(|&r| t.kind(r) == Kind::Dir).count();
     println!(
-        "\n  File index (docs/22): 세대 {}, 폴더 {}, 파일 {} — {}",
+        "  File index:       세대 {}, 폴더 {}, 파일 {} — {}",
         snap.generation(),
         dirs,
         t.len() - dirs,
@@ -138,13 +146,13 @@ fn print_file_index_stats() {
         let note = if root.mtime_reliable {
             "열 때 대조"
         } else {
-            "폴더 시각을 믿을 수 없는 볼륨 — 주기 재빌드로만 갱신"
+            "폴더 시각을 믿을 수 없는 볼륨 — 데몬 5분 갱신에서 다시 나열"
         };
         println!("    {}  ({note})", root.path_buf().display());
     }
 }
 
-fn print_stats(index: &kmd_core::Index) {
+fn print_stats(index: &kmd_core::Index, file_search: &kmd_core::config::FileSearchConfig) {
     use kmd_core::index::Source;
     use std::collections::HashMap;
 
@@ -176,7 +184,7 @@ fn print_stats(index: &kmd_core::Index) {
     println!("  PATH executables: {}", path_exes);
     println!("  Files:            {}", files);
     println!("  System commands:  {}", sys_cmds);
-    print_file_index_stats();
+    print_file_index_stats(file_search);
 
     // Show top file extensions
     if files > 0 {

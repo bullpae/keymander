@@ -4,6 +4,16 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-10-27
+
+### Changed
+- **새 파일 검색 엔진을 기본으로 켠다** (docs/22). 검색 폴더 안 파일·폴더를 할당량 없이 색인하고, 앱·실행 파일·폴더·파일을
+  한 공식으로 매긴다. 스냅숏은 데몬이 시작할 때 만들고, 그 전이나 스냅숏이 깨지면 옛 엔진으로 검색한다.
+  - 끄려면 `kmd config set launcher.file_search.engine off`.
+  - v0.19.0 까지의 기본값 `"legacy"` 가 config.toml 에 저장돼 있어도 새 엔진으로 읽는다 — 설정을 저장하면 기본값까지
+    파일에 써져서, 고르지 않은 사람도 이 값을 갖고 있다.
+  - `kmd index --stats` 가 어느 엔진으로 검색 중인지 보여 준다.
+
 ## [0.19.0] — 2026-10-27
 
 ### Fixed
