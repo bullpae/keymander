@@ -87,7 +87,7 @@ pub fn merge(
         if r.item.source == Source::Plugin {
             continue;
         }
-        if let Some((freq, at)) = frecency.get(&r.item.path) {
+        if let Some((freq, at)) = crate::history::lookup(frecency, &r.item.path) {
             r.score = r.score.saturating_add(frecency_points(*freq, at));
         }
     }
