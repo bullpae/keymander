@@ -58,7 +58,10 @@ fn make_test_app() -> App {
         kmd_core::single_instance::InstanceAction::Acquired(g) => g,
         _ => panic!("Guard 획득 실패"),
     };
-    let config = kmd_core::Config::default();
+    let mut config = kmd_core::Config::default();
+    // 새 파일 검색 엔진은 실제 스냅숏(%LOCALAPPDATA%\kmd\filesearch 등)을 연다 — 데몬이 돌고 있는 PC 에서
+    // 그 파일들이 결과에 섞이지 않게 끈다
+    config.launcher.file_search.engine = "off".into();
     let window_state = WindowState::default();
     let (app, _task) = App::new_for_test(guard, config, window_state, test_db_path);
     app
