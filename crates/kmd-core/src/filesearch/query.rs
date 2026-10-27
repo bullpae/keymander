@@ -38,6 +38,8 @@ const Q_ACRONYM: u32 = 25;
 pub(crate) const Q_SUBSEQ: u32 = 10;
 /// 단어가 자기 이름이 아니라 조상 폴더에만 있을 때
 pub(crate) const Q_ANCESTOR: u32 = 6;
+/// 치는 중인 마지막 음절로 맞으면(`보곳` → 보고서) 같은 자리의 그대로 일치보다 이만큼 낮게
+const Q_PARTIAL_PENALTY: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
@@ -149,13 +151,17 @@ pub(crate) struct Token {
     kind: TokKind,
     bag: u64,
     finder: memmem::Finder<'static>,
+    /// 마지막 토큰이 치는 중인 음절로 끝나면(`보곳`·`보고ㅅ`) 그 해석 — 그대로 일치와 둘 중 나은 쪽
+    partial: Option<crate::hangul::PartialSyllable>,
 }
 
 fn tokens_of(query: &str, fuzzy_mode: bool) -> Vec<Token> {
-    query
-        .split_whitespace()
-        .take(MAX_TOKENS)
-        .map(|w| {
+    let words: Vec<&str> = query.split_whitespace().take(MAX_TOKENS).collect();
+    let last = words.len().saturating_sub(1);
+    words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
             let text = fold(w).into_bytes();
             let kind = if crate::hangul::is_choseong_query(w) {
                 TokKind::Choseong
@@ -168,11 +174,16 @@ fn tokens_of(query: &str, fuzzy_mode: bool) -> Vec<Token> {
             };
             let bag = char_bag(&String::from_utf8_lossy(&text));
             let finder = memmem::Finder::new(&text).into_owned();
+            // 가방은 그대로 쓴다 — `보곳`·`보고ㅅ` 의 가방은 "보고 + 초성 ㅅ 음절" 이름의 가방에 든다
+            let partial = (i == last && kind == TokKind::Substr)
+                .then(|| crate::hangul::split_partial(&String::from_utf8_lossy(&text)))
+                .flatten();
             Token {
                 text,
                 kind,
                 bag,
                 finder,
+                partial,
             }
         })
         .collect()
@@ -275,6 +286,39 @@ fn worker_count(rows: usize) -> usize {
 
 /// 이름 하나에 토큰 하나 — 0 이면 불일치
 fn match_quality(name: &[u8], tok: &Token) -> u32 {
+    let literal = literal_quality(name, tok);
+    match &tok.partial {
+        Some(p) if literal < Q_EXACT => literal.max(partial_quality(name, p)),
+        _ => literal,
+    }
+}
+
+/// 치는 중인 마지막 음절 — `보곳` 은 `보고` 뒤에 초성 ㅅ 음절이 오는 자리
+fn partial_quality(name: &[u8], p: &crate::hangul::PartialSyllable) -> u32 {
+    let Ok(name_str) = std::str::from_utf8(name) else {
+        return 0;
+    };
+    let stem_len = stem(name).len();
+    let mut best = 0;
+    for (pos, end) in crate::hangul::partial_matches(name_str, p) {
+        let q = if pos == 0 && (end == name.len() || end == stem_len) {
+            Q_EXACT
+        } else if pos == 0 {
+            Q_PREFIX
+        } else if is_word_start(name, pos) {
+            Q_WORD
+        } else {
+            Q_SUBSTR
+        };
+        best = best.max(q);
+        if q == Q_EXACT {
+            break;
+        }
+    }
+    best.saturating_sub(Q_PARTIAL_PENALTY)
+}
+
+fn literal_quality(name: &[u8], tok: &Token) -> u32 {
     if tok.kind == TokKind::Choseong {
         return choseong_quality(name, tok);
     }
@@ -563,6 +607,30 @@ mod tests {
         // 여러 단어: 초성 + 조상 폴더
         assert_eq!(names(&b, "2026년 ㅂㄱㅅ").len(), 3);
         assert!(names(&b, "ㅎㅎㅎ").is_empty());
+    }
+
+    #[test]
+    fn 치는_중인_마지막_음절() {
+        let b = office();
+        // 두벌식으로 `보고서` 를 치는 도중의 `보곳` — 결과가 비지 않는다
+        for q in ["보곳", "보고ㅅ"] {
+            let got = names(&b, q);
+            assert_eq!(got.len(), 21, "{q}: {got:?}");
+            assert!(got.iter().all(|n| n.starts_with("보고서")));
+        }
+        assert_eq!(names(&b, "2026년 보곳").len(), 3, "마지막 토큰만");
+        assert!(names(&b, "보곳 2026년").is_empty(), "앞 토큰은 그대로");
+
+        // 그대로 일치가 같은 자리의 치는 중 해석보다 앞선다
+        let q = |name: &str, query: &str| {
+            let toks = query_tokens(query);
+            token_quality(fold(name).as_bytes(), &toks[0])
+        };
+        assert_eq!(q("보고서.hwp", "보곳"), Q_EXACT - Q_PARTIAL_PENALTY);
+        assert_eq!(q("주간 보고서", "보곳"), Q_WORD - Q_PARTIAL_PENALTY);
+        assert_eq!(q("복사.txt", "복"), Q_PREFIX);
+        assert_eq!(q("보관함", "복"), Q_PREFIX - Q_PARTIAL_PENALTY);
+        assert_eq!(q("복", "복"), Q_EXACT);
     }
 
     #[test]

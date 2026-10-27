@@ -691,6 +691,57 @@ pub fn choseong_string(s: &str) -> String {
         .collect()
 }
 
+/// 치는 중인 마지막 음절 — `보고ㅅ`·`보곳` 은 둘 다 "보고 + 초성 ㅅ" 으로 `보고서` 를 찾는다.
+///
+/// 두벌식 입력기로 `보고서` 를 치면 `보곳` 을 거친다(ㅅ 이 받침에 붙었다가 ㅓ 를 치면 다음 음절로 간다).
+/// 그 사이에 결과가 비지 않게 질의 끝의 받침·자음을 "다음 글자의 초성" 으로도 읽는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartialSyllable {
+    /// 마지막 글자 앞부분 + 받침을 뗀 마지막 음절 (`보곳` → `보고`, `닭` → `달`)
+    pub head: String,
+    /// 다음 글자의 초성 번호 (`ㄱ`=0 … `ㅎ`=18)
+    pub cho: u32,
+}
+
+/// 질의 끝이 받침 있는 음절(`보곳`·`닭`)이거나 음절 뒤 자음(`보고ㅅ`)이면 [`PartialSyllable`].
+/// 초성만인 질의(`ㅂㄱㅅ`)·자음 하나는 `None` — 초성 검색이 맡는다.
+pub fn split_partial(s: &str) -> Option<PartialSyllable> {
+    let mut chars = s.chars();
+    let last = chars.next_back()?;
+    let rest = chars.as_str();
+    if let Some(cho) = choseong_index(last) {
+        let prev = rest.chars().next_back()?;
+        decompose_syllable(prev)?;
+        return Some(PartialSyllable {
+            head: rest.to_string(),
+            cho,
+        });
+    }
+    let (l, v, t) = decompose_syllable(last)?;
+    let (keep, moved) = match decompose_jong(t) {
+        Some((keep, moved)) => (keep, moved),
+        None => (0, t),
+    };
+    let cho = jong_to_cho(moved)?;
+    let mut head = rest.to_string();
+    head.push(compose_syllable(l, v, keep));
+    Some(PartialSyllable { head, cho })
+}
+
+/// `hay` 안에서 [`PartialSyllable`] 이 맞는 자리들 — (시작 바이트, 끝 바이트), 끝은 초성이 맞은 음절 뒤
+pub fn partial_matches<'a>(
+    hay: &'a str,
+    p: &'a PartialSyllable,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    hay.match_indices(p.head.as_str())
+        .filter_map(move |(pos, h)| {
+            let end = pos + h.len();
+            let next = hay[end..].chars().next()?;
+            let (cho, _, _) = decompose_syllable(next)?;
+            (cho == p.cho).then_some((pos, end + next.len_utf8()))
+        })
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -721,6 +772,40 @@ mod tests {
         assert!(!is_choseong_query("ㄳㄱ"), "받침 전용 겹자음");
         assert_eq!(choseong_string("보고서_2026.hwp"), "ㅂㄱㅅ_2026.hwp");
         assert_eq!(choseong_index('ㅎ'), Some(18));
+    }
+
+    #[test]
+    fn 치는_중인_마지막_음절() {
+        let p = |head: &str, cho: char| {
+            Some(PartialSyllable {
+                head: head.to_string(),
+                cho: choseong_index(cho).unwrap(),
+            })
+        };
+        assert_eq!(split_partial("보곳"), p("보고", 'ㅅ'));
+        assert_eq!(split_partial("보고ㅅ"), p("보고", 'ㅅ'));
+        assert_eq!(split_partial("복"), p("보", 'ㄱ'));
+        assert_eq!(
+            split_partial("닭"),
+            p("달", 'ㄱ'),
+            "겹받침은 뒤 자음만 넘긴다"
+        );
+        assert_eq!(split_partial("2026 있"), p("2026 이", 'ㅆ'));
+        assert_eq!(split_partial("보고"), None, "받침 없음");
+        assert_eq!(split_partial("ㅂㄱㅅ"), None, "초성 검색");
+        assert_eq!(split_partial("ㅅ"), None);
+        assert_eq!(split_partial("abc"), None);
+        assert_eq!(split_partial(""), None);
+
+        let q = split_partial("보곳").unwrap();
+        let hits: Vec<_> = partial_matches("주간_보고서.hwp", &q).collect();
+        assert_eq!(hits, vec![(7, 16)]);
+        assert_eq!(
+            partial_matches("보고_최종", &q).count(),
+            0,
+            "다음 글자 초성이 다름"
+        );
+        assert_eq!(partial_matches("보고", &q).count(), 0, "다음 글자 없음");
     }
 
     use super::*;

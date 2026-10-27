@@ -419,6 +419,8 @@ impl SearchEngine {
                     })
                     .collect();
             }
+            // 치는 중인 마지막 음절(`보곳` → 보고서) — 이름에서만 본다
+            let partial = crate::hangul::split_partial(query_lower);
             return self
                 .all_items
                 .iter()
@@ -427,6 +429,9 @@ impl SearchEngine {
                     lc.name.contains(query_lower)
                         || lc.path.contains(query_lower)
                         || lc.keywords.contains(query_lower)
+                        || partial.as_ref().is_some_and(|p| {
+                            crate::hangul::partial_matches(&lc.name, p).next().is_some()
+                        })
                 })
                 .take(limit)
                 .map(|(item, _)| SearchResult {
@@ -445,6 +450,7 @@ impl SearchEngine {
         const ALL_SEGMENTS_BONUS: u32 = 80; // 전 토큰 세그먼트 정확 일치 보너스
 
         let token_count = tokens.len() as u32;
+        let last_partial = tokens.last().and_then(|t| crate::hangul::split_partial(t));
 
         // 점수는 행 번호와 함께만 모으고, 항목 복제는 상위 `limit` 개만 —
         // 흔한 단어("보고서")면 수십만 개가 통과해 전부 복제하는 비용이 컸다.
@@ -457,7 +463,7 @@ impl SearchEngine {
                 let mut total_score: u32 = 0;
                 let mut exact_segments: u32 = 0;
 
-                for token in &tokens {
+                for (i, token) in tokens.iter().enumerate() {
                     let t = token.as_str();
                     // 우선순위 기반 점수 — 최고 점수만 적용.
                     // 세그먼트 정확 일치는 경로 포함의 부분집합이라 포함부터 본다 — 예전에는
@@ -474,6 +480,12 @@ impl SearchEngine {
                         total_score += NAME_CONTAINS;
                     } else if lc.keywords.contains(t) {
                         total_score += KW_CONTAINS;
+                    } else if i + 1 == tokens.len()
+                        && last_partial.as_ref().is_some_and(|p| {
+                            crate::hangul::partial_matches(&lc.name, p).next().is_some()
+                        })
+                    {
+                        total_score += NAME_CONTAINS;
                     } else {
                         return None; // AND 조건: 하나라도 미매칭이면 제외
                     }
@@ -953,6 +965,23 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].item.name, "카카오톡");
         assert_eq!(engine.search("ㅋㅋㅇ", 10).1.len(), 2);
+    }
+
+    #[test]
+    fn 치는_중인_마지막_음절도_찾는다() {
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("카카오톡", "/Applications/KakaoTalk.app", ""),
+            make_item("카카오맵", "/Applications/KakaoMap.app", ""),
+            make_item("보고서.hwp", "/docs/2026/보고서.hwp", ""),
+        ]);
+        // `카카오톡` 을 치는 도중의 `카카옽` → 카카오 + 초성 ㅌ
+        let r = engine.search("카카옽", 10).1;
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].item.name, "카카오톡");
+        assert_eq!(engine.search("카카오ㅁ", 10).1[0].item.name, "카카오맵");
+        // 여러 단어: 마지막 토큰만
+        assert_eq!(engine.search("2026 보곳", 10).1.len(), 1);
     }
 
     #[test]
