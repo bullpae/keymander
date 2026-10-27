@@ -198,8 +198,10 @@ pub struct LauncherConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FileSearchConfig {
-    /// `"legacy"`(지금 엔진만) | `"auto"`(새 엔진으로 파일 검색, 스냅숏이 없거나 깨지면 legacy).
-    /// 순위 통합(F2) 전까지 기본은 legacy.
+    /// `"auto"`(기본 — 새 엔진으로 파일 검색, 스냅숏이 없거나 깨지면 옛 엔진) | `"off"`(옛 엔진만).
+    ///
+    /// v0.19.0 까지 기본값이던 `"legacy"` 는 `"auto"` 로 읽는다. 설정을 저장하면 기본값까지 파일에
+    /// 쓰이므로, 그 시절 저장한 사람의 config.toml 에는 고르지 않은 `"legacy"` 가 들어 있다.
     pub engine: String,
     /// 색인할 파일 수 안전 상한 (기본 100만). 넘으면 "색인 불완전"을 남긴다. 폴더는 세지 않는다.
     pub max_files: usize,
@@ -208,16 +210,16 @@ pub struct FileSearchConfig {
 impl Default for FileSearchConfig {
     fn default() -> Self {
         Self {
-            engine: "legacy".to_string(),
+            engine: "auto".to_string(),
             max_files: 1_000_000,
         }
     }
 }
 
 impl FileSearchConfig {
-    /// 새 엔진을 쓰는지
+    /// 새 엔진을 쓰는지 — `"off"` 만 끈다
     pub fn enabled(&self) -> bool {
-        self.engine.eq_ignore_ascii_case("auto")
+        !self.engine.eq_ignore_ascii_case("off")
     }
 }
 

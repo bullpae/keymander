@@ -516,7 +516,9 @@ fn spawn_index_refresher(
 
         let mut elapsed_secs: u64 = 0;
         let mut interval_min = boot_cfg.launcher.index_refresh_minutes;
-        let mut since_file_refresh: u64 = 0;
+        // 첫 파일 색인 갱신은 시작 10초 뒤 — 스냅숏이 없으면(업그레이드 직후 등) 여기서 만든다.
+        // 전체 인덱스 캐시가 신선하면 Index::build 를 건너뛰어, 기다리면 5분 동안 옛 엔진으로 검색한다.
+        let mut since_file_refresh: u64 = FILE_INDEX_REFRESH_SECS.saturating_sub(10);
         loop {
             if shutdown.load(Ordering::Relaxed) {
                 return;

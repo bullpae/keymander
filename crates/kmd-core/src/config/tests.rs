@@ -420,6 +420,7 @@ fn test_default_config() {
     let config = Config::default();
     assert_eq!(config.general.render_fps, 30);
     assert_eq!(config.launcher.file_search_provider, "auto");
+    assert!(config.launcher.file_search.enabled());
     assert!(config.keybindings.global_hotkey.is_empty());
     assert_eq!(config.launcher.kind_weights.directory, 80);
     assert!(config.launcher.index_directories);
@@ -612,4 +613,17 @@ fn 스위치를_켜면_목록은_기본값에_더해진다() {
         ".git은 중복이라 한 번만"
     );
     assert!(eff.contains(&"plugins".to_string()));
+}
+
+#[test]
+fn test_file_search_engine_values() {
+    let engine = |v: &str| FileSearchConfig {
+        engine: v.to_string(),
+        ..FileSearchConfig::default()
+    };
+    assert!(engine("auto").enabled());
+    // v0.19.0 까지의 기본값이 저장된 것 — 새 기본(auto)으로 읽는다
+    assert!(engine("legacy").enabled());
+    assert!(!engine("off").enabled());
+    assert!(!engine("OFF").enabled());
 }
