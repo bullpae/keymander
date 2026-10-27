@@ -18,6 +18,15 @@ use crate::search::SearchResult;
 pub use query::Boost;
 use table::{Kind, Table, TableBuilder};
 
+/// 한 프로세스 안에서 새 세대를 만드는 일(주기 갱신·감시 반영·전체 스캔)을 한 번에 하나씩 —
+/// 둘이 같은 세대를 읽고 따로 고쳐 쓰면 나중 것이 먼저 것의 변경을 덮는다.
+/// 다른 프로세스(런처의 열 때 대조)와는 세대 파일을 `create_new` 로 써서 겹쳐 쓰지 않는다.
+static PUBLISH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn publish_guard() -> std::sync::MutexGuard<'static, ()> {
+    PUBLISH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 열 때 대조 결과를 새 세대로 남기는 최소 간격
 pub const PUBLISH_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
@@ -146,6 +155,7 @@ pub fn hit_item(t: &Table<'_>, row: usize, use_emoji: bool) -> IndexItem {
 pub fn refresh(
     config: &crate::config::LauncherConfig,
 ) -> Result<Option<reconcile::ReconcileStats>, snapshot::SnapshotError> {
+    let _guard = publish_guard();
     refresh_in(
         &snapshot::default_dir(),
         &scan::ScanConfig::from_launcher(config),
@@ -177,9 +187,60 @@ fn refresh_in(
 }
 
 /// 전체 스캔 → 새 세대 공개. 색인 재빌드(데몬 주기·`kmd index --rebuild`·`:scope`)에서 부른다.
+/// 데몬 감시 반영 (F3) — 이벤트가 난 폴더만 다시 읽는다. 이름이 생기거나 지워졌을 때만 새 세대를
+/// 쓴다: 내려받는 파일처럼 수정 시각만 계속 바뀌는 경우 몇 초마다 수십 MB 를 다시 쓰지 않게
+/// (시각은 주기 갱신이 반영한다). 스냅숏이 없거나 검색 폴더 목록이 바뀌었으면 [`refresh`] 와 같이 전체 스캔.
+pub fn apply_dirty(
+    config: &crate::config::LauncherConfig,
+    dirs: &[std::path::PathBuf],
+) -> Result<Option<reconcile::ReconcileStats>, snapshot::SnapshotError> {
+    let _guard = publish_guard();
+    apply_dirty_in(
+        &snapshot::default_dir(),
+        &scan::ScanConfig::from_launcher(config),
+        dirs,
+    )
+}
+
+fn apply_dirty_in(
+    dir: &Path,
+    cfg: &scan::ScanConfig,
+    dirs: &[std::path::PathBuf],
+) -> Result<Option<reconcile::ReconcileStats>, snapshot::SnapshotError> {
+    let Ok(snap) = snapshot::Snapshot::open_current(dir) else {
+        rebuild_in(dir, cfg)?;
+        return Ok(None);
+    };
+    let roots: Vec<_> = snap.table().roots.iter().map(|r| r.path_buf()).collect();
+    if roots != cfg.roots {
+        drop(snap);
+        rebuild_in(dir, cfg)?;
+        return Ok(None);
+    }
+    let Some((b, stats)) = reconcile::relist_dirs(&snap.table(), cfg, dirs) else {
+        return Ok(None);
+    };
+    if stats.added == 0 && stats.removed == 0 {
+        return Ok(None);
+    }
+    drop(snap);
+    snapshot::publish(dir, &b)?;
+    Ok(Some(stats))
+}
+
+/// 색인이 쓰는 데이터 폴더 — 감시가 자기 쓰기(스냅숏·로그)에 다시 반응하지 않게 거른다
+pub fn data_dirs() -> Vec<std::path::PathBuf> {
+    let mut v = vec![crate::Config::standard_data_dir()];
+    if let Some(parent) = snapshot::default_dir().parent() {
+        v.push(parent.to_path_buf());
+    }
+    v
+}
+
 pub fn rebuild(
     config: &crate::config::LauncherConfig,
 ) -> Result<scan::ScanStats, snapshot::SnapshotError> {
+    let _guard = publish_guard();
     rebuild_in(
         &snapshot::default_dir(),
         &scan::ScanConfig::from_launcher(config),
@@ -206,6 +267,47 @@ fn rebuild_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 감시_반영은_이름이_생기거나_지워질_때만_새_세대() {
+        let data = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let r = tree.path();
+        std::fs::create_dir_all(r.join("a")).unwrap();
+        std::fs::write(r.join("a/x.txt"), "").unwrap();
+        let cfg = scan::ScanConfig {
+            roots: vec![r.to_path_buf()],
+            depth: 6,
+            ignore: Vec::new(),
+            ignore_ext: Default::default(),
+            max_files: 1_000_000,
+        };
+        let dirty = [r.join("a")];
+        assert!(apply_dirty_in(data.path(), &cfg, &dirty).unwrap().is_none());
+        assert_eq!(
+            snapshot::current_generation(data.path()),
+            Some(1),
+            "없으면 만든다"
+        );
+
+        // 내용만 바뀜(수정 시각) — 새 세대를 쓰지 않는다
+        let x = r.join("a/x.txt");
+        let m = std::fs::metadata(&x).unwrap().modified().unwrap();
+        filetime::set_file_mtime(
+            &x,
+            filetime::FileTime::from_system_time(m + std::time::Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert!(apply_dirty_in(data.path(), &cfg, &dirty).unwrap().is_none());
+        assert_eq!(snapshot::current_generation(data.path()), Some(1));
+
+        std::fs::write(r.join("a/y.txt"), "").unwrap();
+        let stats = apply_dirty_in(data.path(), &cfg, &dirty)
+            .unwrap()
+            .expect("새 이름");
+        assert_eq!((stats.added, stats.removed), (1, 0));
+        assert_eq!(snapshot::current_generation(data.path()), Some(2));
+    }
 
     #[test]
     fn 주기_갱신은_없으면_만들고_바뀌면_새_세대_검색_폴더가_바뀌면_다시_스캔() {

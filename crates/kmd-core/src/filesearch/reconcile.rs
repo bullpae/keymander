@@ -43,6 +43,74 @@ pub fn relist(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Reconcil
     reconcile_with(t, cfg, true)
 }
 
+/// 감시가 알려 준 폴더만 다시 읽는다 (F3). 표에 없는 폴더(방금 생긴 폴더 등)는 표에 있는 가장
+/// 가까운 조상을 다시 읽는다 — 새 폴더는 그 조상의 새 자식으로 붙으며 아래까지 걷는다.
+pub fn relist_dirs(
+    t: &Table<'_>,
+    cfg: &ScanConfig,
+    dirs: &[std::path::PathBuf],
+) -> Option<(TableBuilder, ReconcileStats)> {
+    let mut known: HashMap<std::path::PathBuf, Container> = t
+        .roots
+        .iter()
+        .enumerate()
+        .map(|(r, root)| (root.path_buf(), Container::Root(r as u16)))
+        .collect();
+    for row in 0..t.len() {
+        if t.kind(row) == Kind::Dir && (t.depth(row) as usize) < cfg.depth {
+            known.insert(t.path(row), Container::Dir(row as u32));
+        }
+    }
+    // 감시는 실제 경로로 알려 준다(macOS FSEvents 는 심볼릭 링크를 풀고 `/var` → `/private/var`).
+    // 검색 폴더가 링크면 실제 경로 접두를 검색 폴더 경로로 바꿔 찾는다
+    let aliases: Vec<(std::path::PathBuf, std::path::PathBuf)> = t
+        .roots
+        .iter()
+        .filter_map(|root| {
+            let path = root.path_buf();
+            let real = std::fs::canonicalize(&path).ok()?;
+            (real != path).then_some((real, path))
+        })
+        .collect();
+    let mut changed = Vec::new();
+    let mut new_mtime = HashMap::new();
+    for dir in dirs {
+        let found = dir
+            .ancestors()
+            .find_map(|a| known.get(a).copied())
+            .or_else(|| {
+                aliases.iter().find_map(|(real, root)| {
+                    let rel = dir.strip_prefix(real).ok()?;
+                    root.join(rel)
+                        .ancestors()
+                        .find_map(|a| known.get(a).copied())
+                })
+            });
+        let Some(c) = found else {
+            continue; // 검색 폴더 밖
+        };
+        if new_mtime.contains_key(&c) {
+            continue;
+        }
+        let path = match c {
+            Container::Root(r) => t.roots[r as usize].path_buf(),
+            Container::Dir(row) => t.path(row as usize),
+        };
+        let m = if path.is_dir() {
+            mtime_of(&path)
+        } else {
+            OFFLINE
+        };
+        changed.push(c);
+        new_mtime.insert(c, m);
+    }
+    let stats = ReconcileStats {
+        checked_dirs: changed.len(),
+        ..ReconcileStats::default()
+    };
+    apply(t, cfg, changed, new_mtime, stats)
+}
+
 fn reconcile_with(
     t: &Table<'_>,
     cfg: &ScanConfig,
@@ -50,6 +118,17 @@ fn reconcile_with(
 ) -> Option<(TableBuilder, ReconcileStats)> {
     let mut stats = ReconcileStats::default();
     let (changed, new_mtime) = changed_containers(t, cfg, &mut stats, relist_unreliable);
+    apply(t, cfg, changed, new_mtime, stats)
+}
+
+/// 바뀐 폴더(`changed`)를 다시 읽어 새 표를 만든다. 실제로 달라진 것이 없으면 `None`.
+fn apply(
+    t: &Table<'_>,
+    cfg: &ScanConfig,
+    changed: Vec<Container>,
+    new_mtime: HashMap<Container, i64>,
+    mut stats: ReconcileStats,
+) -> Option<(TableBuilder, ReconcileStats)> {
     if changed.is_empty() {
         return None;
     }
@@ -460,5 +539,57 @@ mod tests {
         );
         // 한 번 반영한 뒤에는 다시 바뀐 것이 없다
         assert!(reconcile(&t, &c).is_none());
+    }
+
+    #[test]
+    fn 감시가_알려_준_폴더만_다시_읽어도_새로_스캔한_것과_같다() {
+        // 폴더 시각을 보지 않는다 — exFAT 처럼 시각이 그대로여도 감시 이벤트로 반영된다
+        let tmp = tempfile::tempdir().unwrap();
+        let r = tmp.path();
+        for y in ["2025년", "2026년"] {
+            std::fs::create_dir_all(r.join(y).join("자료")).unwrap();
+            std::fs::write(r.join(y).join("자료/보고서.hwp"), "").unwrap();
+        }
+        std::fs::write(r.join("old.txt"), "").unwrap();
+        let c = cfg(r);
+        let (base, _) = build_table(&c);
+
+        std::fs::write(r.join("2026년/자료/새파일.txt"), "").unwrap();
+        std::fs::rename(r.join("old.txt"), r.join("new.txt")).unwrap();
+        std::fs::remove_dir_all(r.join("2025년")).unwrap();
+        std::fs::create_dir_all(r.join("2027년/계획")).unwrap();
+        std::fs::write(r.join("2027년/계획/초안.md"), "").unwrap();
+
+        // 이벤트 경로의 부모들 — 새 폴더 안(표에 없음)은 가장 가까운 조상(검색 폴더)으로
+        let dirty = vec![
+            r.join("2026년/자료"),
+            r.to_path_buf(),
+            r.join("2025년/자료"),
+            r.join("2027년/계획"),
+            tmp.path().parent().unwrap().join("검색 폴더 밖"),
+        ];
+        let (after, stats) = relist_dirs(&base.table(), &c, &dirty).expect("바뀐 것 있음");
+        assert_eq!(names(&after), names(&build_table(&c).0));
+        assert!(stats.added >= 4 && stats.removed >= 4, "{stats:?}");
+        assert!(relist_dirs(&after.table(), &c, &dirty).is_none());
+        assert!(relist_dirs(&after.table(), &c, &[]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 검색_폴더가_링크면_실제_경로로_온_이벤트도_반영() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("자료")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let c = cfg(&link);
+        let (base, _) = build_table(&c);
+
+        std::fs::write(real.join("자료/새파일.txt"), "").unwrap();
+        let event_dir = std::fs::canonicalize(real.join("자료")).unwrap();
+        let (after, stats) = relist_dirs(&base.table(), &c, &[event_dir]).expect("반영");
+        assert_eq!(stats.added, 1);
+        assert_eq!(names(&after), names(&build_table(&c).0));
     }
 }

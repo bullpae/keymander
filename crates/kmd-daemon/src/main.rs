@@ -6,6 +6,7 @@
 mod autopilot;
 mod autostart;
 mod clipboard;
+mod fs_watch;
 mod keybind;
 mod location;
 mod server;
