@@ -320,6 +320,12 @@ impl EngineState {
         self.mouse_keys_held.clear();
     }
 
+    /// 키맵이 켜져 있는지 (toggle_keymap으로 끈 상태면 false)
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn is_keymap_enabled(&self) -> bool {
+        self.keymap_enabled
+    }
+
     /// 현재 코드 모드로 OS에 주입돼 있는 트리거 키 (레이어 chord 또는
     /// tap-hold의 hold 수정자). 어댑터가 stop 시 stuck-modifier를 방지하기
     /// 위해 해제(up 주입)에 사용한다.

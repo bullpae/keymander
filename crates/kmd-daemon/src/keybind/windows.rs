@@ -897,6 +897,87 @@ fn execute_slow_action(action: BindAction) {
     }
 }
 
+// ── CapsLock 토글 정리 ──────────────────────────────────────────────────────
+//
+// CapsLock이 레이어 트리거면 물리 CapsLock은 전부 억제되므로, OS 대문자 잠금은
+// 원래 켤 수도 끌 수도 없는 상태여야 한다. 그런데 훅이 입력 경로에 없는 틈
+// (Modern Standby 복귀 직후 훅 상실, 잠금 화면·UAC 보안 데스크톱, 관리자 권한
+// 전경 창)에 눌린 CapsLock은 OS로 새어 토글을 켠다. 그 뒤로는 데몬이 CapsLock을
+// 계속 삼켜서 데몬을 멈추기 전까지 대문자만 입력됐다 (2026-10-27 실사고).
+// 대응: 토글이 켜져 있으면 CapsLock press를 주입해 끈다. 켜는 방향은 절대 없다.
+// 주입 이벤트는 LLKHF_INJECTED로 우리 훅을 그대로 통과한다.
+
+/// 현재 config에서 CapsLock 토글이 "도달 불가"인지 — start()에서 정한다.
+static CAPSLOCK_TOGGLE_UNREACHABLE: AtomicBool = AtomicBool::new(false);
+
+fn action_sends_capslock(action: &BindAction) -> bool {
+    match action {
+        BindAction::SendKey(k) => *k == VKey::CapsLock,
+        BindAction::SendCombo { key, .. } => *key == VKey::CapsLock,
+        BindAction::Macro(steps) => steps.iter().any(|step| match step {
+            MacroStep::KeyPress(k) | MacroStep::KeyRelease(k) => *k == VKey::CapsLock,
+            MacroStep::Combo { key, .. } => *key == VKey::CapsLock,
+        }),
+        BindAction::Launch(_) | BindAction::Mouse(_) | BindAction::ClipPaste(_) => false,
+    }
+}
+
+/// CapsLock이 레이어 트리거이고, 어떤 바인딩도 CapsLock을 보내지 않으면 true.
+/// 사용자가 tap_action="CapsLock" 등으로 토글을 일부러 쓰는 구성은 건드리지 않는다.
+fn capslock_toggle_unreachable(config: &KeybindConfig) -> bool {
+    let is_trigger = config
+        .layers
+        .iter()
+        .any(|l| l.matches_trigger(VKey::CapsLock));
+    let sends_capslock = config.remaps.values().any(action_sends_capslock)
+        || config.combos.iter().any(|(_, a)| action_sends_capslock(a))
+        || config
+            .double_taps
+            .iter()
+            .any(|d| action_sends_capslock(&d.action))
+        || config
+            .tap_holds
+            .iter()
+            .any(|t| t.key == VKey::CapsLock || t.tap == Some(VKey::CapsLock))
+        || config.layers.iter().any(|l| {
+            l.tap_action == Some(VKey::CapsLock)
+                || l.mappings.values().any(action_sends_capslock)
+                || l.double_tap_mappings.values().any(|d| {
+                    action_sends_capslock(&d.single_action)
+                        || action_sends_capslock(&d.double_action)
+                })
+        });
+    is_trigger && !sends_capslock
+}
+
+/// 대문자 잠금이 켜져 있으면 끈다. 실제로 껐으면 true.
+/// 훅 콜백에서도 불리므로 로그를 남기지 않는다 (호출부가 필요 시 기록).
+fn clear_stray_capslock_toggle() -> bool {
+    if !CAPSLOCK_TOGGLE_UNREACHABLE.load(Ordering::Relaxed) {
+        return false;
+    }
+    if unsafe { GetKeyState(VK_CAPITAL as i32) } & 1 == 0 {
+        return false;
+    }
+    send_key_press(VK_CAPITAL).is_ok()
+}
+
+/// 훅 설치·재설치 직후 — 키맵이 켜져 있을 때만 새어 들어간 토글을 정리한다.
+fn clear_stray_capslock_after_install(context: &'static str) {
+    let enabled = HOOK_STATE.get().is_some_and(|state| {
+        let (guard, recovered) = lock_engine(state);
+        let enabled = guard.is_keymap_enabled();
+        drop(guard);
+        if let Some(cleanup) = recovered {
+            apply_hook_loss_cleanup(cleanup);
+        }
+        enabled
+    });
+    if enabled && clear_stray_capslock_toggle() {
+        tracing::warn!("{context}: 켜져 있던 Caps Lock 해제 (CapsLock = 레이어 트리거)");
+    }
+}
+
 fn recover_engine_after_injection_failure() {
     let mut stop_mouse = false;
     if let Some(state) = HOOK_STATE.get() {
@@ -987,7 +1068,15 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
             drop(guard);
             CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
         }
-        KeyDecision::Suppress => 1,
+        KeyDecision::Suppress => {
+            drop(guard);
+            // 트리거로 억제한 CapsLock down — 새어 켜진 대문자 잠금이 있으면 끈다.
+            // 키맵이 꺼져 있으면 CapsLock은 PassThrough라 여기 오지 않는다.
+            if vkey == VKey::CapsLock && is_down {
+                clear_stray_capslock_toggle();
+            }
+            1
+        }
         KeyDecision::Execute { action, .. } => {
             drop(guard);
             match action_lane(&action) {
@@ -1130,6 +1219,8 @@ unsafe fn reinstall_hook(hook: &mut HHOOK) -> Result<(), String> {
         "키보드 훅 재설치 완료 (누적 {n}회) — OS가 훅을 조용히 제거했음 \
          (Modern Standby 복귀 / LowLevelHooksTimeout 초과 등)"
     );
+    // 훅이 빠진 동안 CapsLock이 OS로 새어 토글이 켜졌을 수 있다.
+    clear_stray_capslock_after_install("훅 재설치");
     Ok(())
 }
 
@@ -1395,6 +1486,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         // OnceLock은 최초 1회만 set 가능하므로, 재시작 시에는 기존 Arc 내부의
         // 상태를 새 config로 교체한다 — 그렇지 않으면 stop/start 후에도
         // 이전 설정이 계속 적용된다.
+        CAPSLOCK_TOGGLE_UNREACHABLE.store(capslock_toggle_unreachable(&config), Ordering::Relaxed);
         let new_state = EngineState::new(config);
         if let Some(existing) = HOOK_STATE.get() {
             match existing.lock() {
@@ -1523,6 +1615,8 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                 HOOK_LAST_SEEN.store(nonzero_tick(GetTickCount()), Ordering::Relaxed);
                 HOOK_REINSTALL_PENDING.store(false, Ordering::SeqCst);
                 HOOK_GENERATION.fetch_add(1, Ordering::SeqCst);
+                // 데몬이 꺼져 있던 동안(재시작 틈 포함) 켜진 토글 정리
+                clear_stray_capslock_after_install("훅 설치");
 
                 // PostThreadMessageW가 안정적으로 동작하도록 메시지 큐를 먼저 만든다.
                 // stop()이 WM_QUIT를 보낼 수 있도록 그 뒤에만 스레드 ID를 공개한다.
@@ -1657,6 +1751,62 @@ mod tests {
         for &k in VKey::ALL {
             assert_eq!(vk_to_vkey(vkey_to_vk(k)), Some(k), "{k:?} 왕복 불일치");
         }
+    }
+
+    // ── CapsLock 토글 정리 대상 판정 ──
+
+    fn layer_with_trigger(trigger: VKey) -> super::super::Layer {
+        super::super::Layer {
+            name: "nav".into(),
+            trigger,
+            trigger_aliases: Vec::new(),
+            tap_action: None,
+            tap_hold_ms: 200,
+            unmapped: super::super::UnmappedBehavior::Plain,
+            mappings: std::collections::HashMap::new(),
+            double_tap_mappings: std::collections::HashMap::new(),
+        }
+    }
+
+    fn config_with_layer(layer: super::super::Layer) -> KeybindConfig {
+        let mut cfg = KeybindConfig::empty();
+        cfg.layers.push(layer);
+        cfg
+    }
+
+    #[test]
+    fn capslock_트리거면_토글_정리_대상() {
+        let cfg = config_with_layer(layer_with_trigger(VKey::CapsLock));
+        assert!(capslock_toggle_unreachable(&cfg));
+    }
+
+    #[test]
+    fn capslock_트리거가_아니면_정리하지_않음() {
+        let cfg = config_with_layer(layer_with_trigger(VKey::LAlt));
+        assert!(!capslock_toggle_unreachable(&cfg));
+        assert!(!capslock_toggle_unreachable(&KeybindConfig::empty()));
+    }
+
+    #[test]
+    fn capslock을_보내는_바인딩이_있으면_정리하지_않음() {
+        // 탭 = CapsLock — 사용자가 토글을 일부러 쓰는 구성
+        let mut layer = layer_with_trigger(VKey::CapsLock);
+        layer.tap_action = Some(VKey::CapsLock);
+        assert!(!capslock_toggle_unreachable(&config_with_layer(layer)));
+
+        // 다른 키를 CapsLock으로 리맵
+        let mut cfg = config_with_layer(layer_with_trigger(VKey::CapsLock));
+        cfg.remaps
+            .insert(VKey::F12, BindAction::SendKey(VKey::CapsLock));
+        assert!(!capslock_toggle_unreachable(&cfg));
+
+        // 레이어 매핑의 매크로 안에 CapsLock
+        let mut layer = layer_with_trigger(VKey::CapsLock);
+        layer.mappings.insert(
+            VKey::C,
+            BindAction::Macro(vec![MacroStep::KeyPress(VKey::CapsLock)]),
+        );
+        assert!(!capslock_toggle_unreachable(&config_with_layer(layer)));
     }
 
     // ── 합성 입력 순서 / 실패 정리 ──

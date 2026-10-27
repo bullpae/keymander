@@ -140,6 +140,7 @@ pub fn hit_item(t: &Table<'_>, row: usize, use_emoji: bool) -> IndexItem {
 }
 
 /// 데몬 주기 갱신 — 폴더 시각으로 바뀐 폴더만 다시 읽어 새 세대를 공개한다(공개 간격 제한 없음).
+/// 폴더 시각을 믿을 수 없는 볼륨은 폴더를 전부 다시 나열하고, 달라진 것이 있을 때만 공개한다.
 /// 스냅숏이 없거나 검색 폴더 목록이 바뀌었으면(`:scope`) 전체 스캔. 런처를 오래 열지 않아도
 /// 색인이 뒤처지지 않게 하고, 런처의 열 때 대조가 할 일을 줄인다.
 pub fn refresh(
@@ -165,7 +166,9 @@ fn refresh_in(
         rebuild_in(dir, cfg)?;
         return Ok(None);
     }
-    let Some((b, stats)) = reconcile::reconcile(&snap.table(), cfg) else {
+    // 데몬은 런처와 달리 창 표시를 막지 않으니, 폴더 시각을 믿을 수 없는 볼륨(exFAT·네트워크)도
+    // 여기서 다시 나열한다 — 아니면 그 볼륨은 6시간 전체 재빌드 때만 새 파일이 보였다
+    let Some((b, stats)) = reconcile::relist(&snap.table(), cfg) else {
         return Ok(None);
     };
     drop(snap);

@@ -76,7 +76,7 @@ impl Boost {
         let full = full.to_string_lossy();
         paths
             .iter()
-            .find(|(p, _)| *p == full)
+            .find(|(p, _)| crate::history::same_path(p, &full))
             .map_or(0, |&(_, b)| b)
     }
 }

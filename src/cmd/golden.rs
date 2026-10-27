@@ -46,7 +46,11 @@ pub fn run() -> Result<()> {
     }
     entries.sort_by_key(|e| std::cmp::Reverse(e.frequency));
     let mut seen = HashSet::new();
-    entries.retain(|e| std::path::Path::new(&e.value).exists() && seen.insert(e.value.clone()));
+    // Windows 는 대소문자만 다른 이력(`d:\util\x` · `D:\Util\x`)을 한 항목으로 센다
+    entries.retain(|e| {
+        std::path::Path::new(&e.value).exists()
+            && seen.insert(kmd_core::history::path_key(&e.value).into_owned())
+    });
     entries.truncate(MAX_ITEMS);
     if entries.is_empty() {
         println!("실행 이력이 없습니다 — 런처로 몇 가지를 열어 본 뒤 다시 실행하세요.");
@@ -163,7 +167,9 @@ fn queries_for(name: &str) -> Vec<String> {
 }
 
 fn position(results: &[SearchResult], path: &str) -> Option<usize> {
-    results.iter().position(|r| r.item.path == path)
+    results
+        .iter()
+        .position(|r| kmd_core::history::same_path(&r.item.path, path))
 }
 
 fn rank_label(p: Option<usize>) -> String {

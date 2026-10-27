@@ -75,12 +75,23 @@ fn daemon_log_stdio() -> (std::process::Stdio, std::process::Stdio) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    preserve_previous_log(&path);
     if let Ok(file) = std::fs::File::create(&path) {
         if let Ok(clone) = file.try_clone() {
             return (file.into(), clone.into());
         }
     }
     (std::process::Stdio::null(), std::process::Stdio::null())
+}
+
+/// 직전 실행의 로그를 `daemon.log.old`로 한 세대 보존한다. 문제가 생겨
+/// 재시작하면 바로 그 증거(훅 재설치 기록 등)가 지워지던 것을 막는다.
+/// 빈 로그로 이전 기록을 덮어쓰지 않도록 내용이 있을 때만 옮긴다.
+fn preserve_previous_log(path: &std::path::Path) {
+    let has_content = std::fs::metadata(path).is_ok_and(|m| m.len() > 0);
+    if has_content {
+        let _ = std::fs::rename(path, path.with_extension("log.old"));
+    }
 }
 
 /// 데몬 재시작 — 실행 중이면 정상 종료(IPC Shutdown) 후 다시 시작한다.

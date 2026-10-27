@@ -1,6 +1,6 @@
 [package]
 name = "kmd-desktop"
-version = "0.18.1"
+version = "0.19.0"
 edition = "2021"
 description = "keymander Desktop — GPU-accelerated launcher with iced"
 license = "MIT"

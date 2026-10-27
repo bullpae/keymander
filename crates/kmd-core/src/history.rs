@@ -29,14 +29,46 @@ const LAUNCHED_BASE_BOOST: u32 = 50;
 /// 부팅 시 한 번 로드한 맵으로 부스트한다 (`boost_results_with_map`).
 pub type FrecencyMap = HashMap<String, (u32, String)>;
 
+/// 같은 경로인지 비교할 때 쓰는 키.
+///
+/// Windows 경로는 대소문자를 가리지 않는데, 이력에는 사용자가 친 그대로
+/// (`d:\util\VeraCrypt`) 남기도 해서 색인의 `D:\Util\VeraCrypt` 와 정확히
+/// 비교하면 실행 이력이 영영 반영되지 않았다. Windows 에서만 소문자·`\`로
+/// 맞추고 끝의 `\`를 뗀다(드라이브 루트 `c:\` 는 유지). 다른 OS 는 그대로.
+pub fn path_key(path: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) {
+        let mut key = path.to_lowercase().replace('/', "\\");
+        while key.len() > 3 && key.ends_with('\\') {
+            key.pop();
+        }
+        std::borrow::Cow::Owned(key)
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    }
+}
+
+/// 두 경로가 같은 항목인지 — [`path_key`] 기준
+pub fn same_path(a: &str, b: &str) -> bool {
+    a == b || path_key(a) == path_key(b)
+}
+
+/// 경로의 이력 찾기. 정확히 같은 키가 먼저, 없으면 [`path_key`] 로 맞춘 키.
+pub fn lookup<'a>(map: &'a FrecencyMap, path: &str) -> Option<&'a (u32, String)> {
+    map.get(path).or_else(|| match path_key(path) {
+        std::borrow::Cow::Owned(key) => map.get(&key),
+        std::borrow::Cow::Borrowed(_) => None,
+    })
+}
+
 /// DB에서 부스트용 frecency 맵을 로드한다.
 ///
 /// 같은 value가 여러 item_type 행으로 있으면 빈도는 합산하고 시각은 최신을 쓴다
 /// (예전엔 나중 행이 앞 행을 덮어써 frecency가 낮게 잡혔다).
+/// 키는 [`path_key`] — Windows 에서 대소문자만 다른 행도 한 항목으로 합친다.
 pub fn load_boost_map(db: &Database) -> FrecencyMap {
     let mut map = FrecencyMap::new();
     for h in db.query_history(HISTORY_BOOST_LIMIT) {
-        map.entry(h.value)
+        map.entry(path_key(&h.value).into_owned())
             .and_modify(|(freq, at)| {
                 *freq = freq.saturating_add(h.frequency);
                 if h.executed_at > *at {
@@ -57,7 +89,7 @@ pub fn boost_results(results: &mut [SearchResult], db: &Database) {
 /// 미리 로드한 frecency 맵으로 부스트 — 검색 핫패스에서 DB 조회를 피한다.
 pub fn boost_results_with_map(results: &mut [SearchResult], freq_map: &FrecencyMap) {
     for result in results.iter_mut() {
-        if let Some((freq, executed_at)) = freq_map.get(&result.item.path) {
+        if let Some((freq, executed_at)) = lookup(freq_map, &result.item.path) {
             let boost = LAUNCHED_BASE_BOOST
                 .saturating_add(frecency_score(*freq, executed_at))
                 .min(FRECENCY_BOOST_CAP);
@@ -220,6 +252,26 @@ mod tests {
         assert_eq!(via_map[0].item.path, "b", "이력 있는 b가 부스트되어 1등");
         assert_eq!(via_map[0].item.path, via_db[0].item.path);
         assert_eq!(via_map[0].score, via_db[0].score);
+    }
+
+    #[test]
+    fn 대소문자만_다른_windows_경로도_이력이_붙는다() {
+        // 이력엔 친 그대로 `d:\util\VeraCrypt`, 색인엔 `D:\Util\VeraCrypt` (2026-10-27 실측)
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        record_launch(&db, ItemKind::Directory, r"d:\util\VeraCrypt", None);
+        record_launch(&db, ItemKind::Directory, r"d:\Util\VeraCrypt\", None);
+        let map = load_boost_map(&db);
+        let hit = lookup(&map, r"D:\Util\VeraCrypt");
+        if cfg!(windows) {
+            assert_eq!(map.len(), 1, "대소문자·끝 \\ 만 다른 행은 한 항목");
+            assert_eq!(hit.map(|(f, _)| *f), Some(2));
+            assert!(same_path(r"C:\Users\Me", "c:/users/me/"));
+            assert_eq!(path_key(r"C:\"), r"c:\");
+        } else {
+            assert!(hit.is_none(), "대소문자 구분 FS 에서는 다른 경로");
+            assert!(!same_path("/Users/Me", "/users/me"));
+        }
     }
 
     #[test]

@@ -4,7 +4,9 @@
 //! (NTFS·APFS·ext4 공통). 그래서 파일 40만 개가 아니라 폴더 행만 stat 해 바뀐 폴더를
 //! 찾고, 그 폴더만 다시 읽어 새 표를 만든다. 폴더 2만 개 확인이 4스레드 11ms 다.
 //!
-//! 폴더 시각을 믿을 수 없는 볼륨(FAT·네트워크, [`RootInfo::mtime_reliable`])은 건너뛴다.
+//! 폴더 시각을 믿을 수 없는 볼륨(FAT·네트워크, [`RootInfo::mtime_reliable`])은 열 때
+//! 대조에서 건너뛴다. 데몬의 주기 갱신([`relist`])만 그 볼륨의 폴더를 전부 다시 읽는다 —
+//! exFAT 는 파일을 넣고·바꾸고·지워도 폴더 시각이 그대로다(2026-10-27 Windows 실측).
 //! 파일 **내용**만 바뀐 경우는 폴더 시각이 그대로라 감지되지 않는다 — 이름 검색에는
 //! 영향이 없고 "최근 수정" 가중만 늦다.
 
@@ -32,12 +34,25 @@ pub struct ReconcileStats {
 
 /// 바뀐 것이 없으면 `None`. 있으면 바뀐 폴더를 반영한 새 표.
 pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, ReconcileStats)> {
+    reconcile_with(t, cfg, false)
+}
+
+/// [`reconcile`] + 폴더 시각을 믿을 수 없는 볼륨의 폴더를 시각과 무관하게 전부 다시 읽는다.
+/// 폴더 수만큼 디렉터리를 나열하므로 런처를 열 때가 아니라 데몬의 주기 갱신에서만 부른다.
+pub fn relist(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, ReconcileStats)> {
+    reconcile_with(t, cfg, true)
+}
+
+fn reconcile_with(
+    t: &Table<'_>,
+    cfg: &ScanConfig,
+    relist_unreliable: bool,
+) -> Option<(TableBuilder, ReconcileStats)> {
     let mut stats = ReconcileStats::default();
-    let (changed, new_mtime) = changed_containers(t, cfg, &mut stats);
+    let (changed, new_mtime) = changed_containers(t, cfg, &mut stats, relist_unreliable);
     if changed.is_empty() {
         return None;
     }
-    stats.changed_dirs = changed.len();
 
     // 바뀐 폴더의 지금 자식 목록
     let mut listings: HashMap<Container, HashMap<Vec<u8>, super::scan::Child>> = HashMap::new();
@@ -62,6 +77,8 @@ pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Recon
     let mut removed = vec![false; n];
     let mut mtime_update: HashMap<usize, i64> = HashMap::new();
     let mut seen: HashMap<Container, HashSet<Vec<u8>>> = HashMap::new();
+    // 자식이 실제로 빠지거나 늘어난 폴더 — "폴더 n개 바뀜" 진단용
+    let mut touched: HashSet<Container> = HashSet::new();
     for (row, gone) in removed.iter_mut().enumerate() {
         let p = t.parent[row];
         let c = if p == NO_PARENT {
@@ -81,7 +98,10 @@ pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Recon
                 }
             }
             // 사라졌거나 파일↔폴더가 바뀜 → 지우고(바뀐 것은 새로 붙는다)
-            _ => *gone = true,
+            _ => {
+                *gone = true;
+                touched.insert(c);
+            }
         }
     }
     for (&c, &m) in &new_mtime {
@@ -96,6 +116,9 @@ pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Recon
     for (&c, &m) in &new_mtime {
         if let Container::Root(r) = c {
             let root = &mut b.roots[r as usize];
+            if root.mtime == m {
+                continue; // 시각 그대로 다시 나열만 한 검색 폴더 — 볼륨 판별도 그대로
+            }
             root.mtime = m;
             // 다시 마운트되면 볼륨이 바뀌었을 수 있다(같은 드라이브 문자에 다른 볼륨)
             root.mtime_reliable = m != OFFLINE && mtime_reliable(&root.path_buf());
@@ -153,6 +176,9 @@ pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Recon
             .filter(|(name, _)| known.is_none_or(|k| !k.contains(*name)))
             .collect();
         fresh.sort_by(|a, b| a.0.cmp(b.0)); // 결과가 실행마다 같도록
+        if !fresh.is_empty() {
+            touched.insert(c);
+        }
         for (_, ch) in fresh {
             if !ch.is_dir && scan_stats.files >= cfg.max_files {
                 continue;
@@ -183,17 +209,42 @@ pub fn reconcile(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Recon
         }
     }
     stats.added = b.len() - before;
+
+    // 다시 읽었지만 실제로 달라진 것이 없으면(믿을 수 없는 볼륨을 다시 나열한 경우) 새 세대를
+    // 쓰지 않는다 — 5분마다 수십 MB 를 다시 쓰지 않게
+    let mtime_changed = mtime_update.iter().any(|(&row, &m)| m != t.mtime[row]);
+    let roots_changed = b
+        .roots
+        .iter()
+        .zip(t.roots.iter())
+        .any(|(a, b)| a.mtime != b.mtime || a.mtime_reliable != b.mtime_reliable);
+    if stats.added == 0 && stats.removed == 0 && !mtime_changed && !roots_changed {
+        return None;
+    }
+    stats.changed_dirs = changed
+        .iter()
+        .filter(|&&c| {
+            touched.contains(&c)
+                || match c {
+                    Container::Root(r) => new_mtime.get(&c) != Some(&t.roots[r as usize].mtime),
+                    Container::Dir(row) => new_mtime.get(&c) != Some(&t.mtime[row as usize]),
+                }
+        })
+        .count();
     Some((b, stats))
 }
 
-/// 시각이 바뀐 검색 폴더·폴더 행과 그 새 시각
+/// 시각이 바뀐 검색 폴더·폴더 행과 그 새 시각. `relist_unreliable` 이면 폴더 시각을 믿을 수
+/// 없는 볼륨의 검색 폴더·폴더 행은 시각과 무관하게 모두 "바뀜"으로 낸다(다시 나열 대상).
 fn changed_containers(
     t: &Table<'_>,
     cfg: &ScanConfig,
     stats: &mut ReconcileStats,
+    relist_unreliable: bool,
 ) -> (Vec<Container>, HashMap<Container, i64>) {
     let mut changed = Vec::new();
     let mut new_mtime = HashMap::new();
+    let mut relist_roots = vec![false; t.roots.len()];
     for (r, root) in t.roots.iter().enumerate() {
         let path = root.path_buf();
         let online = path.is_dir();
@@ -201,13 +252,27 @@ fn changed_containers(
         // 상관없이 통째로 다시 읽는다. 사라진 폴더도 마찬가지로 자식을 모두 지운다.
         let came_back = root.mtime == OFFLINE && online;
         let went_away = root.mtime != OFFLINE && !online;
-        if !(came_back || went_away || root.mtime_reliable) {
+        let relist = relist_unreliable && !root.mtime_reliable && online && !came_back;
+        relist_roots[r] = relist;
+        if !(came_back || went_away || root.mtime_reliable || relist) {
             continue;
         }
         let m = if online { mtime_of(&path) } else { OFFLINE };
-        if m != root.mtime {
+        if m != root.mtime || relist {
             changed.push(Container::Root(r as u16));
             new_mtime.insert(Container::Root(r as u16), m);
+        }
+    }
+
+    // 다시 나열할 볼륨의 폴더 행 — 시각을 보지 않고 모두
+    for row in 0..t.len() {
+        if t.kind(row) == Kind::Dir
+            && relist_roots[t.root_id[row] as usize]
+            && (t.depth(row) as usize) < cfg.depth
+        {
+            let c = Container::Dir(row as u32);
+            changed.push(c);
+            new_mtime.insert(c, mtime_of(&t.path(row)));
         }
     }
 
@@ -309,6 +374,48 @@ mod tests {
         assert_eq!(gone.len(), 0, "마운트 해제되면 결과에서 빠진다");
         assert_eq!(gone.roots[0].mtime, OFFLINE);
         assert!(reconcile(&gone.table(), &c).is_none());
+    }
+
+    #[test]
+    fn 폴더_시각을_못_믿는_볼륨은_다시_나열해야_보이고_안_바뀌었으면_none() {
+        // exFAT(VeraCrypt O:) 는 파일을 넣어도 폴더 시각이 그대로다 (2026-10-27 실측)
+        let tmp = tempfile::tempdir().unwrap();
+        let r = tmp.path();
+        std::fs::create_dir_all(r.join("2026/자료")).unwrap();
+        std::fs::write(r.join("2026/자료/보고서.hwp"), "").unwrap();
+        let c = cfg(r);
+        let (mut base, _) = build_table(&c);
+        base.roots[0].mtime_reliable = false;
+
+        assert!(
+            relist(&base.table(), &c).is_none(),
+            "바뀐 것 없으면 새 세대 없음"
+        );
+
+        // 폴더 시각을 되돌려 exFAT 처럼 — 열 때 대조로는 못 본다
+        let keep = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+        let (m_root, m_sub) = (keep(r), keep(&r.join("2026/자료")));
+        std::fs::write(r.join("2026/자료/새파일.txt"), "").unwrap();
+        std::fs::remove_file(r.join("2026/자료/보고서.hwp")).unwrap();
+        std::fs::create_dir(r.join("2027")).unwrap();
+        filetime::set_file_mtime(r, filetime::FileTime::from_system_time(m_root)).unwrap();
+        let sub = r.join("2026/자료");
+        filetime::set_file_mtime(&sub, filetime::FileTime::from_system_time(m_sub)).unwrap();
+        assert!(
+            reconcile(&base.table(), &c).is_none(),
+            "런처의 열 때 대조는 건너뛴다"
+        );
+
+        let (after, stats) = relist(&base.table(), &c).expect("다시 나열하면 보인다");
+        let mut fresh = build_table(&c).0;
+        fresh.roots[0].mtime_reliable = false;
+        assert_eq!(names(&after), names(&fresh));
+        assert_eq!((stats.added, stats.removed), (2, 1), "{stats:?}");
+        assert_eq!(
+            stats.changed_dirs, 2,
+            "검색 폴더(2027 추가)·자료(파일 교체)"
+        );
+        assert!(relist(&after.table(), &c).is_none());
     }
 
     #[test]
