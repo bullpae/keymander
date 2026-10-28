@@ -379,6 +379,13 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
         crate::clipboard::capture_foreground_app();
     }
     let resolved = resolve_launch_cmd(cmd);
+    // 런처가 아직 뜨는 중이면 또 띄우지 않는다. 백신 검사로 프로세스 생성이 수 초 막히는 동안
+    // 누른 횟수만큼 프로세스가 쌓였다가 한꺼번에 떠서 서로 토글해 꺼 버린다.
+    let track = crate::clipboard::launch_captures_foreground(cmd);
+    if track && !LAUNCHER_STARTING.try_begin(std::time::Instant::now()) {
+        tracing::info!("런처가 아직 뜨는 중 — 다시 띄우지 않음: {resolved}");
+        return;
+    }
     tracing::info!("프로그램 실행: {resolved}");
     std::thread::spawn(move || {
         use kmd_core::process::HideConsole;
@@ -388,15 +395,63 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
-        if let Err(e) = std::process::Command::new(&resolved)
+        match std::process::Command::new(&resolved)
             .env(kmd_core::keystats::LAUNCH_AT_ENV, at.to_string())
             .hide_console()
             .spawn()
         {
-            tracing::error!("프로그램 실행 실패: {resolved} — {e}");
+            Ok(child) => {
+                if track {
+                    wait_until_ready(&child);
+                }
+            }
+            Err(e) => tracing::error!("프로그램 실행 실패: {resolved} — {e}"),
+        }
+        if track {
+            LAUNCHER_STARTING.finish();
         }
     });
 }
+
+/// 런처 실행 중복 막기 — 띄운 프로세스가 입력을 받을 수 있게 될 때까지(창 생성) "뜨는 중"
+struct LaunchGate(Mutex<Option<std::time::Instant>>);
+
+/// 뜨는 중 표시가 이보다 오래되면 무시한다 — 자식이 멈췄어도 다시 띄울 수 있게
+const LAUNCH_GATE_MAX: std::time::Duration = std::time::Duration::from_secs(15);
+
+impl LaunchGate {
+    /// 뜨는 중이 아니면 표시하고 true
+    fn try_begin(&self, now: std::time::Instant) -> bool {
+        let mut started = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if started.is_some_and(|t| now.duration_since(t) < LAUNCH_GATE_MAX) {
+            return false;
+        }
+        *started = Some(now);
+        true
+    }
+
+    fn finish(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+static LAUNCHER_STARTING: LaunchGate = LaunchGate(Mutex::new(None));
+
+/// 자식이 첫 메시지 루프에 들어갈 때까지(= 창을 만들었다) 기다린다. 백신 검사로 막힌 동안 여기서 머문다
+#[cfg(windows)]
+fn wait_until_ready(child: &std::process::Child) {
+    use std::os::windows::io::AsRawHandle;
+    // SAFETY: child 가 살아 있는 동안 그 프로세스 핸들은 유효하다
+    unsafe {
+        windows_sys::Win32::System::Threading::WaitForInputIdle(
+            child.as_raw_handle() as _,
+            LAUNCH_GATE_MAX.as_millis() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_until_ready(_child: &std::process::Child) {}
 
 // ── 붙여넣기 주입 (확장 능력 스파이크, docs/11) ──────────────────────────────
 //
@@ -1097,6 +1152,23 @@ mod tests {
         assert_eq!(VKey::from_name("esc"), Some(VKey::Escape));
         assert_eq!(VKey::from_name("pgup"), Some(VKey::PageUp));
         assert_eq!(VKey::from_name("unknown"), None);
+    }
+
+    #[test]
+    fn 런처가_뜨는_중이면_다시_띄우지_않고_멈췄으면_다시_띄운다() {
+        let gate = LaunchGate(Mutex::new(None));
+        let t0 = std::time::Instant::now();
+        assert!(gate.try_begin(t0));
+        assert!(
+            !gate.try_begin(t0 + std::time::Duration::from_secs(3)),
+            "뜨는 중"
+        );
+        assert!(
+            gate.try_begin(t0 + LAUNCH_GATE_MAX),
+            "너무 오래 걸리면 멈춘 것"
+        );
+        gate.finish();
+        assert!(gate.try_begin(t0 + LAUNCH_GATE_MAX), "떴으면 다시");
     }
 
     /// kmd-core effective_keymap(단일 소스) 경유로 프리셋 → 엔진 설정 변환
