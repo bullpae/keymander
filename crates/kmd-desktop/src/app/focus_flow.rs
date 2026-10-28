@@ -113,6 +113,37 @@ impl App {
         }
     }
 
+    pub(super) fn mark_window_shown(&mut self) {
+        if !self.window_shown {
+            self.window_shown = true;
+            self._guard.mark_window_shown();
+        }
+    }
+
+    /// Windows 는 창이 맨 앞에 올라와도 `Focused` 이벤트가 오지 않을 때가 있다(늦게 뜬 창을
+    /// `force_foreground` 로 올린 경우 등). 그러면 표시 마커가 없어 다시 누른 핫키가 창을 닫지 못하고
+    /// 계속 미뤄진다 — 맨 앞인 것을 직접 확인해 마커를 남긴다. 종료 신호 폴링(300ms)마다 부른다.
+    pub(super) fn mark_shown_if_foreground(&mut self) {
+        #[cfg(target_os = "windows")]
+        if !self.window_shown {
+            if let Some(raw_id) = self.raw_window_id {
+                if crate::platform::is_our_window_foreground(raw_id) {
+                    self.mark_window_shown();
+                }
+            }
+        }
+    }
+
+    /// 부팅 중에 핫키를 다시 눌렀다 — 늦게 뜬 창이 포커스를 못 받았을 수 있으니 앞으로 가져온다
+    pub(super) fn handle_focus_request(&mut self) -> Task<Message> {
+        let Some(raw_id) = self.raw_window_id else {
+            return Task::none(); // 창이 아직 없다 — 창이 생기면 스스로 포커스를 가져온다
+        };
+        tracing::info!("다시 누른 핫키 — 창을 앞으로");
+        crate::platform::force_foreground(raw_id);
+        iced::widget::operation::focus::<Message>(self.input_id.clone())
+    }
+
     pub(super) fn handle_window_event(&mut self, event: window::Event) -> Task<Message> {
         match event {
             window::Event::Focused => {
@@ -120,8 +151,8 @@ impl App {
                 self.window_focused = true;
                 // 창이 실제로 화면에 떠 포커스를 받은 시점 — 이제부터 이
                 // 인스턴스가 토글(핫키로 닫기) 대상이 된다. 이 마커가 없으면
-                // 콜드 스타트 중 재-핫키가 부팅 중인 창을 죽인다. (멱등)
-                self._guard.mark_window_shown();
+                // 콜드 스타트 중 재-핫키가 부팅 중인 창을 죽인다.
+                self.mark_window_shown();
                 // 부팅 안정화 구간이면 이미 initial_boot_tasks에서 포커스를 줬으므로 skip
                 if self.is_boot_settled() {
                     self.log_ime_state("WindowEvent:Focused:skip_boot_settling");

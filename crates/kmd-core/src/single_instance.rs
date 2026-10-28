@@ -18,6 +18,8 @@ const LOCK_FILE: &str = "kmd.lock";
 const QUIT_SIGNAL: &str = "kmd.quit";
 /// 창이 실제로 표시됐음을 알리는 마커 — 이게 있어야 토글(핫키로 닫기) 대상이 된다
 const SHOWN_MARKER: &str = "kmd.shown";
+/// 부팅 중인 인스턴스에 "앞으로 나와라" 요청 — 늦게 뜬 창이 포커스를 못 받았을 때 다시 누르면 가져온다
+const FOCUS_SIGNAL: &str = "kmd.focus";
 
 /// How many iterations to wait for the other instance to exit.
 const TOGGLE_WAIT_ITERATIONS: u32 = 40;
@@ -73,6 +75,11 @@ impl Guard {
     pub fn mark_window_shown(&self) {
         let _ = fs::write(self.lock_path.with_file_name(SHOWN_MARKER), b"1");
     }
+
+    /// 다른 실행이 "앞으로 나와라"를 요청했는지 — 있으면 지우고 true
+    pub fn take_focus_request(&self) -> bool {
+        fs::remove_file(self.lock_path.with_file_name(FOCUS_SIGNAL)).is_ok()
+    }
 }
 
 impl Drop for Guard {
@@ -81,6 +88,7 @@ impl Drop for Guard {
         let _ = fs::remove_file(&self.lock_path);
         let _ = fs::remove_file(&self.quit_signal_path);
         let _ = fs::remove_file(self.lock_path.with_file_name(SHOWN_MARKER));
+        let _ = fs::remove_file(self.lock_path.with_file_name(FOCUS_SIGNAL));
         #[cfg(windows)]
         if self.win_mutex != 0 {
             unsafe {
@@ -165,7 +173,7 @@ fn acquire_or_toggle_mutex(
     let wait = unsafe { WaitForSingleObject(handle, 0) };
     if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
         // 소유 성공 → 우리가 단일 인스턴스. PID는 진단/디바운스용으로 기록.
-        let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER)); // 크래시 잔여물
+        clear_crash_leftovers(lock_path);
         let _ = fs::write(lock_path, std::process::id().to_string());
         return Some(InstanceAction::Acquired(Guard {
             lock_path: lock_path.to_path_buf(),
@@ -187,7 +195,8 @@ fn acquire_or_toggle_mutex(
     }
     if should_defer_toggle(lock_path, STARTUP_GRACE_MS) {
         unsafe { CloseHandle(handle) };
-        return Some(InstanceAction::SignalledExisting); // 부팅 중 — 종료 신호 없이 물러남
+        request_focus(lock_path); // 부팅 중 — 종료 대신 앞으로 나오라고만
+        return Some(InstanceAction::SignalledExisting);
     }
 
     let _ = fs::write(quit_signal_path, "quit");
@@ -232,7 +241,7 @@ fn acquire_or_toggle_flock(
         // flock 획득 → 다른 인스턴스 없음 (또는 이전 인스턴스 크래시)
         // 크래시가 남긴 표시 마커는 여기서 청소한다 (살아있는 인스턴스가 있으면
         // 이 분기에 못 들어오므로 남의 마커를 지울 일이 없다).
-        let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER));
+        clear_crash_leftovers(lock_path);
         let mut f = &lock_file;
         let _ = lock_file.set_len(0);
         let _ = f.seek(std::io::SeekFrom::Start(0));
@@ -249,7 +258,8 @@ fn acquire_or_toggle_flock(
         return Some(InstanceAction::SignalledExisting);
     }
     if should_defer_toggle(lock_path, STARTUP_GRACE_MS) {
-        return Some(InstanceAction::SignalledExisting); // 부팅 중 — 종료 신호 없이 물러남
+        request_focus(lock_path); // 부팅 중 — 종료 대신 앞으로 나오라고만
+        return Some(InstanceAction::SignalledExisting);
     }
 
     let _ = fs::write(quit_signal_path, "quit");
@@ -278,7 +288,8 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
                     return InstanceAction::SignalledExisting;
                 }
                 if should_defer_toggle(lock_path, STARTUP_GRACE_MS) {
-                    return InstanceAction::SignalledExisting; // 부팅 중 — 종료 신호 없이 물러남
+                    request_focus(lock_path); // 부팅 중 — 종료 대신 앞으로 나오라고만
+                    return InstanceAction::SignalledExisting;
                 }
 
                 let _ = fs::write(quit_signal_path, "quit");
@@ -301,7 +312,7 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
     }
 
     let our_pid = std::process::id();
-    let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER)); // 크래시 잔여물
+    clear_crash_leftovers(lock_path);
     let _ = fs::write(lock_path, our_pid.to_string());
 
     InstanceAction::Acquired(Guard {
@@ -320,6 +331,18 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
 /// 안 뜨는" 레이스의 근본 원인. 표시 마커가 없고 잠금이 기동 유예 안이면
 /// 토글하지 않고 조용히 물러난다. 유예를 넘겼는데도 마커가 없으면 멈춘
 /// 인스턴스로 보고 토글(회수)을 허용한다.
+/// 부팅 중인 인스턴스에 앞으로 나오라고 요청한다 — 콜드 스타트가 백신 검사 등으로 수 초 늦어지면
+/// 늦게 뜬 창이 포커스를 못 받는다. 그동안 다시 누른 핫키를 버리지 않고 이 요청으로 쓴다.
+fn request_focus(lock_path: &Path) {
+    let _ = fs::write(lock_path.with_file_name(FOCUS_SIGNAL), b"1");
+}
+
+/// 새로 잠금을 얻었을 때 — 이전 인스턴스가 크래시로 남긴 마커·요청을 지운다
+fn clear_crash_leftovers(lock_path: &Path) {
+    let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER));
+    let _ = fs::remove_file(lock_path.with_file_name(FOCUS_SIGNAL));
+}
+
 fn should_defer_toggle(lock_path: &Path, grace_ms: u64) -> bool {
     !lock_path.with_file_name(SHOWN_MARKER).exists() && is_recent_lock(lock_path, grace_ms)
 }
@@ -412,6 +435,11 @@ mod tests {
             !guard.should_quit(),
             "부팅 중(마커 없음)에는 종료 신호가 오면 안 됨"
         );
+        assert!(
+            guard.take_focus_request(),
+            "부팅 중에 다시 누르면 앞으로 나오라는 요청이 와야 함"
+        );
+        assert!(!guard.take_focus_request(), "요청은 한 번 읽으면 사라짐");
 
         // 창 표시 후에는 정상 토글 — 종료 신호가 와야 함
         guard.mark_window_shown();

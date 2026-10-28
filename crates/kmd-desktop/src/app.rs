@@ -168,6 +168,8 @@ pub struct App {
     window_state: WindowState,
     state_dirty: bool,
     window_focused: bool,
+    /// 창 표시 마커를 남겼는지 (단일 인스턴스 토글 대상)
+    window_shown: bool,
     last_query_changed_at: std::time::Instant,
     app_started_at: std::time::Instant,
     ime_trace_seq: u64,
@@ -399,6 +401,7 @@ impl App {
             window_state,
             state_dirty: false,
             window_focused: true,
+            window_shown: false,
             last_query_changed_at: std::time::Instant::now(),
             app_started_at: std::time::Instant::now(),
             ime_trace_seq: 0,
@@ -585,6 +588,10 @@ impl App {
             self.window_state.save();
             return exit_launcher();
         }
+        if self._guard.take_focus_request() {
+            return self.handle_focus_request();
+        }
+        self.mark_shown_if_foreground();
         Task::none()
     }
 
