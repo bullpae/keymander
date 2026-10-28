@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-10-28
+
 ### Added
 - **파일이 바뀌면 수 초 안에 검색에 반영** (docs/22 F3) — 데몬이 검색 폴더를 감시해 바뀐 폴더만 다시 읽는다.
   exFAT·VeraCrypt 볼륨처럼 폴더 시각이 안 바뀌는 곳도 5분을 기다리지 않는다. 파일 내용만 바뀐 경우(수정 시각)는
