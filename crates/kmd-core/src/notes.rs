@@ -25,6 +25,8 @@ use crate::query_prefix::{prefix_of, QueryPrefix};
 use timers::{format_span, Kind, Timer, TimerStore};
 
 pub const NOTE_ALIASES: &[&str] = &[":memo", ":메모", ":m", ":ㅡ"];
+/// 찾기 전용 — 저장 행이 없어 Enter 가 새 메모를 만들지 않는다
+pub const SEARCH_ALIASES: &[&str] = &[":메모찾기", ":ms", ":ㅡㄴ"];
 pub const TODO_ALIASES: &[&str] = &[":todo", ":할일", ":td", ":ㅅㅇ"];
 pub const TIMER_ALIASES: &[&str] = &[":timer", ":타이머"];
 pub const POMO_ALIASES: &[&str] = &[":pomo", ":뽀모도로", ":뽀모"];
@@ -47,6 +49,8 @@ pub const MEMO_SEED: &str = ":m ";
 
 /// 목록에 보여 줄 메모 수
 const RESULT_LIMIT: usize = 50;
+/// 찾은 줄을 보여 줄 길이
+const MATCH_LINE_CHARS: usize = 60;
 const TRASH_DIR: &str = ".trash";
 const CACHE_FILE: &str = "notes-index.json";
 
@@ -598,9 +602,15 @@ impl NoteStore {
     }
 }
 
-/// `:m` `:td` `:timer` `:pomo` 뒤의 글
+/// `:m` `:ms` `:td` `:timer` `:pomo` 뒤의 글
 pub fn strip_command(query: &str) -> &str {
-    for aliases in [NOTE_ALIASES, TODO_ALIASES, TIMER_ALIASES, POMO_ALIASES] {
+    for aliases in [
+        SEARCH_ALIASES,
+        NOTE_ALIASES,
+        TODO_ALIASES,
+        TIMER_ALIASES,
+        POMO_ALIASES,
+    ] {
         for alias in aliases {
             if let Some(rest) = query.strip_prefix(alias) {
                 if rest.is_empty() || rest.starts_with(' ') {
@@ -621,7 +631,11 @@ pub fn selected_id(item: &IndexItem) -> Option<&str> {
 pub fn is_notes_query(query: &str) -> bool {
     matches!(
         prefix_of(query),
-        QueryPrefix::Notes | QueryPrefix::Todo | QueryPrefix::Timer | QueryPrefix::Pomodoro
+        QueryPrefix::Notes
+            | QueryPrefix::NoteSearch
+            | QueryPrefix::Todo
+            | QueryPrefix::Timer
+            | QueryPrefix::Pomodoro
     )
 }
 
@@ -720,6 +734,7 @@ impl NoteSession {
             QueryPrefix::Todo => self.todo_rows(&text, &now, use_emoji),
             QueryPrefix::Timer => self.timer_rows(&text, &now, use_emoji),
             QueryPrefix::Pomodoro => self.pomo_rows(&text, &now, use_emoji),
+            QueryPrefix::NoteSearch => self.search_rows(&text, &now, use_emoji),
             _ => self.note_rows(&text, &now, use_emoji),
         }
     }
@@ -762,13 +777,7 @@ impl NoteSession {
         let configured = self.store.is_configured();
         match self.notes() {
             Ok(notes) => {
-                items.extend(search(notes, text).into_iter().take(RESULT_LIMIT).map(|n| {
-                    if n.is_todo() {
-                        todo_row(n, now, use_emoji)
-                    } else {
-                        note_row(n, now, use_emoji)
-                    }
-                }));
+                items.extend(found_rows(notes, text, now, use_emoji));
                 if text.is_empty() {
                     items.extend(hint_rows(notes.is_empty(), configured, use_emoji));
                 }
@@ -776,6 +785,37 @@ impl NoteSession {
             Err(e) => items.push(read_error_row(e, use_emoji)),
         }
         items
+    }
+
+    /// `:ms` — 찾기만 한다. 첫 결과가 선택돼 있어 Enter 는 복사다
+    fn search_rows(
+        &mut self,
+        text: &str,
+        now: &DateTime<Local>,
+        use_emoji: bool,
+    ) -> Vec<IndexItem> {
+        if self.editing.is_some() {
+            return vec![self.edit_row(text, "Enter 저장 · 입력을 모두 지우면 취소", use_emoji)];
+        }
+        match self.notes() {
+            Ok(notes) => {
+                let items = found_rows(notes, text, now, use_emoji);
+                if !items.is_empty() {
+                    return items;
+                }
+                vec![row(
+                    "맞는 메모가 없습니다",
+                    if notes.is_empty() {
+                        "`:m 내용` 을 치고 Enter 로 저장합니다"
+                    } else {
+                        "다른 단어나 초성으로 찾아 보세요"
+                    },
+                    NOTE_NOOP_MARKER,
+                    icon_info(use_emoji),
+                )]
+            }
+            Err(e) => vec![read_error_row(e, use_emoji)],
+        }
     }
 
     fn todo_rows(&mut self, text: &str, now: &DateTime<Local>, use_emoji: bool) -> Vec<IndexItem> {
@@ -827,8 +867,8 @@ impl NoteSession {
                         )
                     } else {
                         row(
-                            TODO_KEY_HINT,
-                            "완료한 일 보기: :td done",
+                            "완료한 일 보기",
+                            ":td done",
                             NOTE_NOOP_MARKER,
                             icon_info(use_emoji),
                         )
@@ -951,6 +991,9 @@ impl NoteSession {
             QueryPrefix::Todo => self.commit_todo(text),
             QueryPrefix::Timer => self.commit_timer(text),
             QueryPrefix::Pomodoro => self.start_focus(text, None),
+            QueryPrefix::NoteSearch if self.editing.is_none() => {
+                Err("찾기에서는 저장하지 않습니다".to_string())
+            }
             _ => self.commit_note(text),
         }
     }
@@ -1132,6 +1175,73 @@ impl NoteSession {
     }
 }
 
+/// 상태 줄에 보일 고른 행의 단축키 안내
+pub fn key_hint(item: &IndexItem, query: &str) -> Option<&'static str> {
+    if selected_id(item).is_some() {
+        return Some(if prefix_of(query) == QueryPrefix::Todo {
+            TODO_KEY_HINT
+        } else {
+            KEY_HINT
+        });
+    }
+    item.keywords
+        .starts_with(NOTE_TIMER_MARKER)
+        .then_some(TIMER_KEY_HINT)
+}
+
+fn found_rows(
+    notes: &[Note],
+    text: &str,
+    now: &DateTime<Local>,
+    use_emoji: bool,
+) -> Vec<IndexItem> {
+    search(notes, text)
+        .into_iter()
+        .take(RESULT_LIMIT)
+        .map(|n| {
+            let mut item = if n.is_todo() {
+                todo_row(n, now, use_emoji)
+            } else {
+                note_row(n, now, use_emoji)
+            };
+            // 찾은 까닭이 첫 줄 밖에 있으면 그 줄을 보여 준다 — 복사하지 않아도 IP 같은 값을 읽는다
+            if let Some(line) = matched_line(n, text) {
+                item.path = format!("{line} · {}", item.path);
+            }
+            item
+        })
+        .collect()
+}
+
+/// 질의 단어가 가장 많이 든 줄. 첫 줄(제목)은 이미 보이므로 뺀다
+fn matched_line(note: &Note, text: &str) -> Option<String> {
+    let normalized = crate::textenc::nfc(text).to_lowercase();
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let title = note.title();
+    let (hits, line) = note
+        .body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && l.trim_start_matches('#').trim_start() != title)
+        .map(|l| {
+            let hay = crate::textenc::nfc(l).to_lowercase();
+            (tokens.iter().filter(|t| hay.contains(**t)).count(), l)
+        })
+        .max_by_key(|(hits, _)| *hits)?;
+    if hits == 0 {
+        return None;
+    }
+    Some(if line.chars().count() > MATCH_LINE_CHARS {
+        let cut: String = line.chars().take(MATCH_LINE_CHARS - 1).collect();
+        format!("{cut}…")
+    } else {
+        line.to_string()
+    })
+}
+
 fn day_key(now: &DateTime<Local>) -> String {
     now.format("%Y-%m-%d").to_string()
 }
@@ -1176,6 +1286,11 @@ const UNDO_KEY: &str = "Ctrl+Z";
 const CANCEL_KEY: &str = "⌘D";
 #[cfg(not(target_os = "macos"))]
 const CANCEL_KEY: &str = "Ctrl+Del";
+
+#[cfg(target_os = "macos")]
+const TIMER_KEY_HINT: &str = "⌘D 끄기 · ⌘Z 되돌리기";
+#[cfg(not(target_os = "macos"))]
+const TIMER_KEY_HINT: &str = "Ctrl+Del 끄기 · Ctrl+Z 되돌리기";
 
 #[cfg(target_os = "macos")]
 const KEY_HINT: &str = "Enter 복사 · ⌘E 수정 · ⌘D 삭제 · ⌘Z 되돌리기";
@@ -1266,13 +1381,6 @@ fn hint_rows(empty: bool, configured: bool, use_emoji: bool) -> Vec<IndexItem> {
         rows.push(row(
             "아직 메모가 없습니다",
             "`:m 내용` 을 치고 Enter",
-            NOTE_NOOP_MARKER,
-            icon_info(use_emoji),
-        ));
-    } else {
-        rows.push(row(
-            KEY_HINT,
-            "#태그도 글자 그대로 찾습니다",
             NOTE_NOOP_MARKER,
             icon_info(use_emoji),
         ));
@@ -1500,7 +1608,8 @@ mod tests {
         s.leave();
         let rows = s.results(":memo", false);
         assert_eq!(rows[0].name, "첫 메모");
-        assert_eq!(rows[1].name, KEY_HINT);
+        assert_eq!(key_hint(&rows[0], ":m"), Some(KEY_HINT));
+        assert_eq!(key_hint(&rows[1], ":m"), None, "안내 행");
     }
 
     #[test]
@@ -1775,6 +1884,63 @@ mod tests {
     }
 
     #[test]
+    fn 찾기는_저장하지_않고_첫_결과가_맨_위() {
+        let (_d, store) = store();
+        store
+            .add("NAS 정보\n나스 IP 192.168.0.10\n포트 5000", Local::now())
+            .unwrap();
+        store.add("회의록", Local::now()).unwrap();
+        let mut s = NoteSession::new(store.clone());
+
+        let rows = s.results(":ms 나스 IP", false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "NAS 정보");
+        assert!(
+            rows[0].path.starts_with("나스 IP 192.168.0.10 · "),
+            "{}",
+            rows[0].path
+        );
+        let id = selected_id(&rows[0]).unwrap().to_string();
+        let a = s.commit(":ms 나스 IP", Some(&id)).unwrap();
+        assert!(a.copy.unwrap().contains("192.168.0.10"));
+
+        let none = s.results(":ms 없는말", false);
+        assert_eq!(none[0].name, "맞는 메모가 없습니다");
+        assert_eq!(none[0].keywords, NOTE_NOOP_MARKER);
+        assert!(s.commit(":ms 없는말", None).is_err());
+        assert_eq!(store.load().unwrap().len(), 2, "찾다가 메모가 늘지 않는다");
+        assert_eq!(s.results(":ms", false).len(), 2, "빈 찾기는 전체");
+    }
+
+    #[test]
+    fn 찾기에서_고른_메모를_고칠_수_있다() {
+        let (_d, store) = store();
+        let id = store.add("옛 내용", Local::now()).unwrap();
+        let mut s = NoteSession::new(store.clone());
+        assert_eq!(
+            s.begin_edit(&id).unwrap(),
+            EditStart::Inline(":m 옛 내용".into())
+        );
+        s.commit(":m 새 내용", None).unwrap();
+        assert_eq!(store.load().unwrap()[0].body, "새 내용");
+    }
+
+    #[test]
+    fn 맞은_줄() {
+        let n = note("제목\n나스 IP 1.2.3.4\nIP 만 있는 줄");
+        assert_eq!(
+            matched_line(&n, "나스 ip").as_deref(),
+            Some("나스 IP 1.2.3.4")
+        );
+        assert_eq!(matched_line(&n, "제목"), None, "제목은 이미 보인다");
+        assert_eq!(matched_line(&n, ""), None);
+        let long = note(&format!("제목\n값 {}", "가".repeat(100)));
+        let line = matched_line(&long, "값").unwrap();
+        assert_eq!(line.chars().count(), MATCH_LINE_CHARS);
+        assert!(line.ends_with('…'));
+    }
+
+    #[test]
     fn 받은_글을_메모로_저장() {
         let (_d, store) = store();
         let mut s = NoteSession::new(store.clone());
@@ -1791,5 +1957,6 @@ mod tests {
         assert_eq!(strip_command(":td 할 일 @내일"), "할 일 @내일");
         assert_eq!(strip_command(":timer 10분"), "10분");
         assert_eq!(strip_command(":pomo"), "");
+        assert_eq!(strip_command(":ms 나스 IP"), "나스 IP");
     }
 }

@@ -11,6 +11,7 @@ All notable changes to keymander are documented here.
   Obsidian 같은 앱에서도 열린다. 지운 메모는 `.trash/` 로 간다. CLI: `kmd memo`(`kmd m`) add·ls·show·edit·rm·dir.
   CapsLock+`;` 로 런처를 메모 입력 상태로 바로 연다. 이때는 입력 소스를 영문으로 바꾸지 않아 한글을 그대로 칠 수 있다.
   `;` 클립보드 목록에서 Ctrl+S(⌘S) 로 항목을 메모로 저장한다.
+  `:ms 단어` 는 찾기 전용이라 Enter 가 바로 복사이고 새 메모를 만들지 않는다. 찾은 단어가 든 줄이 목록에 보인다.
 - **할 일** (docs/23) — `:td 보고서 쓰기 @내일 9시` 로 추가하고 `:td` 로 기한 순으로 본다. Enter 완료, Ctrl+P 뽀모도로.
   같은 메모 폴더에 머리말이 붙은 Markdown 파일로 저장된다. CLI: `kmd todo`.
 - **타이머·리마인더** (docs/23) — `:timer 10분 라면`. 할 일의 `@` 시각이 되면 데몬이 맨 위에 알림 창을 띄운다. 데몬을 다시 켜거나 노트북이 깨어나면

@@ -51,6 +51,8 @@ pub enum QueryPrefix {
     Say,
     /// `:m` / `:memo` / `:메모` — 메모 (docs/23)
     Notes,
+    /// `:ms` / `:메모찾기` — 메모 찾기 전용 (docs/23)
+    NoteSearch,
     /// `:td` / `:todo` / `:할일` — 할 일 (docs/23)
     Todo,
     /// `:timer` / `:타이머` — 타이머 (docs/23)
@@ -221,6 +223,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":m ",
         icon_emoji: "\u{1F4DD}",
         icon_ascii: "[MEMO]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::NoteSearch,
+        aliases: crate::notes::SEARCH_ALIASES,
+        title: ":ms  Find notes (메모 찾기)",
+        usage: "Type :ms words  (Enter copies the first match, never saves)",
+        seed: ":ms ",
+        icon_emoji: "\u{1F50D}",
+        icon_ascii: "[FIND]",
     },
     CommandSpec {
         prefix: QueryPrefix::Todo,
@@ -824,6 +835,8 @@ mod tests {
         assert_eq!(prefix_of("!ip"), QueryPrefix::Shell);
         assert_eq!(prefix_of(">ip"), QueryPrefix::Shell);
         // 클립보드 히스토리 (docs/12 흐름 B) — 시길 `;`와 `:clip` 별칭
+        assert_eq!(prefix_of(":ms 나스 IP"), QueryPrefix::NoteSearch);
+        assert_eq!(prefix_of(":메모찾기"), QueryPrefix::NoteSearch);
         assert_eq!(prefix_of(":td 할 일"), QueryPrefix::Todo);
         assert_eq!(prefix_of(":ㅅㅇ"), QueryPrefix::Todo);
         assert_eq!(prefix_of(":t spell"), QueryPrefix::Transform);
@@ -972,6 +985,7 @@ mod tests {
             QueryPrefix::Dojo,
             QueryPrefix::FolderSearch,
             QueryPrefix::Notes,
+            QueryPrefix::NoteSearch,
             QueryPrefix::Todo,
             QueryPrefix::Timer,
             QueryPrefix::Pomodoro,

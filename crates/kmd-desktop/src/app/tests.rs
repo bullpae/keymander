@@ -1778,3 +1778,33 @@ fn 클립보드_항목에서만_메모_저장_단축키가_먹는다() {
     app.handle_clip_text_for_note(Err("만료".into()));
     assert_eq!(app.status_message.as_deref(), Some("만료"));
 }
+
+#[test]
+fn 메모_찾기는_엔터가_복사고_새_메모를_만들지_않는다() {
+    let mut app = make_test_app();
+    app.query = ":m NAS 정보".into();
+    let _ = app.perform_search();
+    let _ = app.launch_selected();
+    app.notes.leave();
+
+    app.query = ":ms nas".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results.len(), 1);
+    assert_eq!(app.results[0].item.name, "NAS 정보");
+    assert_eq!(app.selected, 0);
+
+    app.query = ":ms 없는말".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "맞는 메모가 없습니다");
+    let _ = app.launch_selected();
+    app.notes.leave();
+    app.query = ":ms".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results.len(), 1, "Enter 를 눌러도 메모가 늘지 않는다");
+
+    let d = keyboard::Key::Character("d".into());
+    assert!(app
+        .handle_notes_key(&d, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(app.results[0].item.name, "맞는 메모가 없습니다");
+}

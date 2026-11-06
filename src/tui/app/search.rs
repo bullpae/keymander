@@ -62,9 +62,11 @@ pub(super) fn update_search(
         QueryPrefix::Transform => handle_transform_query(&query, state),
         QueryPrefix::Prompt => handle_prompt_query(&query, state),
         QueryPrefix::Say => handle_say_query(&query, state),
-        QueryPrefix::Notes | QueryPrefix::Todo | QueryPrefix::Timer | QueryPrefix::Pomodoro => {
-            super::notes::handle_notes_query(&query, state)
-        }
+        QueryPrefix::Notes
+        | QueryPrefix::NoteSearch
+        | QueryPrefix::Todo
+        | QueryPrefix::Timer
+        | QueryPrefix::Pomodoro => super::notes::handle_notes_query(&query, state),
         QueryPrefix::Calc => handle_calc_query(&query, state),
         QueryPrefix::Emoji => handle_emoji_query(&query, state),
         QueryPrefix::Settings => handle_settings_query(state),

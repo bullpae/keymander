@@ -70,9 +70,11 @@ impl App {
                 post_task = self.handle_route_query(trimmed, generation);
             }
             Prefix::Say => self.handle_say_query(trimmed),
-            Prefix::Notes | Prefix::Todo | Prefix::Timer | Prefix::Pomodoro => {
-                self.handle_notes_query(trimmed)
-            }
+            Prefix::Notes
+            | Prefix::NoteSearch
+            | Prefix::Todo
+            | Prefix::Timer
+            | Prefix::Pomodoro => self.handle_notes_query(trimmed),
             Prefix::General => {
                 self.handle_main_search(trimmed);
                 // 항목이 많아 퍼지 검색이 시간 안에 안 끝났다 — 잠시 뒤 같은 질의로 다시 묻는다.
