@@ -236,7 +236,7 @@ flowchart TD
 | 이름 | Prefix | 기능 |
 |------|--------|------|
 | kmd-todo | `:todo` | 할일 관리 (SQLite) |
-| kmd-memo | `:memo` | 메모 관리 (SQLite) |
+| kmd-memo | `:memo` | 메모 관리 (SQLite) — **네이티브로 구현**(`:m`, [23](23_notes.md)), 플러그인 아님 |
 | kmd-clipboard | `:clip` | 클립보드 히스토리 |
 | kmd-snippet | `:snip` | 텍스트 스니펫 확장 |
 

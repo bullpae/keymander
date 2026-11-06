@@ -40,6 +40,7 @@ mod context_action;
 mod engine_boot;
 mod focus_flow;
 mod launch;
+mod notes;
 mod results;
 mod say;
 mod scope;
@@ -190,6 +191,8 @@ pub struct App {
     scope_undo: Option<std::path::PathBuf>,
     /// 범위 변경 후 엔진 교체가 끝나면 상태줄에 남길 결과
     scope_report: Option<scope::ScopeReport>,
+    /// `:m` 메모 (docs/23)
+    notes: kmd_core::notes::NoteSession,
     /// `:say` 런처 한 줄 카드 (docs/21)
     say_card: say::SayCardSlot,
     /// 입버릇 문장·상태 파일 위치
@@ -343,6 +346,9 @@ impl App {
         // 검색 핫패스(키 입력마다)에서 DB를 조회하지 않도록 부팅 시 1회 로드
         let frecency = kmd_core::history::load_boost_map(&db);
         let config_for_quick = config.clone();
+        let notes = kmd_core::notes::NoteSession::new(kmd_core::notes::NoteStore::from_config(
+            &config.notes,
+        ));
         // 스냅숏은 매핑만 하므로(0.1ms 안팎) 부팅 길에서 바로 연다. 열 때 대조는 뒤에서.
         let file_index = config
             .launcher
@@ -412,6 +418,7 @@ impl App {
             status_message: None,
             scope_undo: None,
             scope_report: None,
+            notes,
             say_card: say::SayCardSlot::default(),
             say_store: say::default_say_store(),
             say_revealed: None,
@@ -680,6 +687,9 @@ impl App {
                 // 복사 전용) — text_input on_submit 대신 여기서 일괄 처리한다.
                 if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
                     return self.handle_submit(&modifiers);
+                }
+                if let Some(task) = self.handle_notes_key(&key, &modifiers) {
+                    return task;
                 }
                 if let Some(task) = self.handle_scope_key(&key, &modifiers) {
                     return task;

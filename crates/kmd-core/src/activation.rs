@@ -26,6 +26,8 @@ pub enum Activation {
     PromptCommit,
     /// `:say` 확정 — 현재 질의를 다시 해석해 적용·저장. 값은 항목에 실린 문장 id (docs/21)
     SayCommit(Option<String>),
+    /// `:m` 확정 — 값이 있으면 그 메모 복사, 없으면 입력을 저장 (docs/23)
+    NoteCommit(Option<String>),
     /// 폴더 제안 → search_paths에 추가 (마커는 항목 keywords)
     FolderSuggest,
     /// `:scope` 추가 — 이 폴더를 검색 범위에 넣고 바로 인덱싱 (docs/18)
@@ -93,6 +95,15 @@ pub fn classify(item: &IndexItem) -> Activation {
     }
     if let Some(seed) = kw.strip_prefix(crate::say::command::SAY_SEED_MARKER) {
         return Activation::SetQuery(seed.to_string());
+    }
+    if kw == crate::notes::NOTE_COMMIT_MARKER {
+        return Activation::NoteCommit(None);
+    }
+    if let Some(id) = kw.strip_prefix(crate::notes::NOTE_ITEM_MARKER) {
+        return Activation::NoteCommit(Some(id.to_string()));
+    }
+    if kw == crate::notes::NOTE_NOOP_MARKER {
+        return Activation::Noop;
     }
     if kw.starts_with(crate::folder_suggest::SUGGEST_MARKER) {
         return Activation::FolderSuggest;

@@ -23,6 +23,7 @@ pub(super) fn update_search(
     engine.clear_pending();
 
     if query.is_empty() {
+        state.notes.leave();
         return handle_empty_query(state, db);
     }
 
@@ -36,6 +37,9 @@ pub(super) fn update_search(
     let query = kmd_core::query_prefix::normalize_slash_command(&query).unwrap_or(query);
 
     let prefix = kmd_core::query_prefix::prefix_of(&query);
+    if prefix != QueryPrefix::Notes {
+        state.notes.leave();
+    }
 
     // :e / :emoji 키워드 입력에서만 내장 한글 조합 자동 활성화.
     // 별칭 뒤에 공백이 온 뒤(":e fire")부터 켠다 — 쿼리가 ":e"인 순간 켜면
@@ -58,6 +62,7 @@ pub(super) fn update_search(
         QueryPrefix::Transform => handle_transform_query(&query, state),
         QueryPrefix::Prompt => handle_prompt_query(&query, state),
         QueryPrefix::Say => handle_say_query(&query, state),
+        QueryPrefix::Notes => super::notes::handle_notes_query(&query, state),
         QueryPrefix::Calc => handle_calc_query(&query, state),
         QueryPrefix::Emoji => handle_emoji_query(&query, state),
         QueryPrefix::Settings => handle_settings_query(state),

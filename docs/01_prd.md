@@ -336,5 +336,5 @@ gantt
 - 테마 핫 리로드 + TOML 외부 테마 (F15~F17) — 먼저 **TUI가 `general.theme`를
   읽게** 해야 한다. 현재는 설정만 있고 읽지 않는다
 - export/import (설정+DB 아카이브) (F10)
-- 공식 플러그인 kmd-todo / kmd-memo (F20) — Script Plugin 배선 결정에 종속
+- 메모·할 일 — 플러그인이 아니라 **네이티브로** ([23_notes.md](23_notes.md), `:m` 구현, `:td` 설계)
 - 플러그인 레지스트리/마켓플레이스 — 🧊 **보류**(docs/17 §3)

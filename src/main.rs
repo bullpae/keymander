@@ -128,6 +128,12 @@ enum Commands {
         #[command(subcommand)]
         action: Option<SayAction>,
     },
+    /// Notes: quick memos saved as Markdown files (same as :m in the launcher)
+    #[command(alias = "m")]
+    Memo {
+        #[command(subcommand)]
+        action: Option<MemoAction>,
+    },
     /// Show version information
     Version,
     /// Upgrade keymander (stops the daemon/launcher, upgrades, restarts the daemon)
@@ -170,6 +176,31 @@ enum SealAction {
         /// Code printed by `kmd dojo seal export` (KMD1-...)
         code: String,
     },
+}
+
+#[derive(Subcommand)]
+enum MemoAction {
+    /// Add a memo: kmd memo add 떠오른 생각 (- reads several lines from stdin)
+    Add {
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// List memos, newest first, optionally only those matching words
+    #[command(alias = "ls")]
+    List {
+        query: Vec<String>,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Print a whole memo (by id or a word only it has)
+    Show { query: String },
+    /// Open a memo in your editor
+    Edit { query: String },
+    /// Move a memo to the .trash folder
+    #[command(alias = "remove")]
+    Rm { query: String },
+    /// Show the notes folder, or move notes to a shared folder (off = back to this device)
+    Dir { path: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -500,6 +531,16 @@ fn main() -> color_eyre::Result<()> {
                 PromptAction::List => cmd::prompt::Action::List,
                 PromptAction::Add { name, body } => cmd::prompt::Action::Add { name, body },
                 PromptAction::Remove { name } => cmd::prompt::Action::Remove { name },
+            }))?;
+        }
+        Some(Commands::Memo { action }) => {
+            cmd::memo::run(action.map(|a| match a {
+                MemoAction::Add { text } => cmd::memo::Action::Add { text },
+                MemoAction::List { query, limit } => cmd::memo::Action::List { query, limit },
+                MemoAction::Show { query } => cmd::memo::Action::Show { query },
+                MemoAction::Edit { query } => cmd::memo::Action::Edit { query },
+                MemoAction::Rm { query } => cmd::memo::Action::Remove { query },
+                MemoAction::Dir { path } => cmd::memo::Action::Dir { path },
             }))?;
         }
         Some(Commands::Say { action }) => {

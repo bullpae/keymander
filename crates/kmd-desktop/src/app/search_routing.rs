@@ -16,6 +16,7 @@ impl App {
         self.status_message = None;
 
         if trimmed.is_empty() {
+            self.notes.leave();
             self.clear_results_state(kmd_core::SearchMode::Fuzzy);
             // 빈 화면 대신 최근 실행 항목 — 처음 연 사람에게 유일한 학습 단서다.
             let mut recent = kmd_core::query_prefix::recent_items(
@@ -37,7 +38,11 @@ impl App {
         let prev_signature = self.last_results_signature;
         let mut post_task: Task<Message> = Task::none();
 
-        match prefix_of(trimmed) {
+        let prefix = prefix_of(trimmed);
+        if prefix != Prefix::Notes {
+            self.notes.leave();
+        }
+        match prefix {
             Prefix::Web => self.handle_web_query(trimmed),
             Prefix::Transform => self.handle_transform_query(trimmed),
             Prefix::Prompt => self.handle_prompt_query(trimmed),
@@ -65,6 +70,7 @@ impl App {
                 post_task = self.handle_route_query(trimmed, generation);
             }
             Prefix::Say => self.handle_say_query(trimmed),
+            Prefix::Notes => self.handle_notes_query(trimmed),
             Prefix::General => {
                 self.handle_main_search(trimmed);
                 // 항목이 많아 퍼지 검색이 시간 안에 안 끝났다 — 잠시 뒤 같은 질의로 다시 묻는다.

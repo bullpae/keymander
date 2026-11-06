@@ -49,6 +49,8 @@ pub enum QueryPrefix {
     Route,
     /// `:say` / `:입버릇` — 영어 문장 노출·타이핑 연습 (docs/21)
     Say,
+    /// `:m` / `:memo` / `:메모` — 메모 (docs/23)
+    Notes,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
     General,
 }
@@ -204,6 +206,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":say ",
         icon_emoji: "\u{1F4AC}",
         icon_ascii: "[EN]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Notes,
+        aliases: crate::notes::NOTE_ALIASES,
+        title: ":m  Notes (메모)",
+        usage: "Type :m text and Enter to save  (:m alone lists, :m word finds)",
+        seed: ":m ",
+        icon_emoji: "\u{1F4DD}",
+        icon_ascii: "[MEMO]",
     },
     CommandSpec {
         prefix: QueryPrefix::Help,
@@ -780,6 +791,12 @@ mod tests {
         assert_eq!(prefix_of("!ip"), QueryPrefix::Shell);
         assert_eq!(prefix_of(">ip"), QueryPrefix::Shell);
         // 클립보드 히스토리 (docs/12 흐름 B) — 시길 `;`와 `:clip` 별칭
+        assert_eq!(prefix_of(":m"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":m 떠오른 생각"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":ㅡ 내용"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":메모"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":map 판교역"), QueryPrefix::Route);
+        assert_ne!(prefix_of(":mx"), QueryPrefix::Notes);
         assert_eq!(prefix_of(";"), QueryPrefix::Clipboard);
         assert_eq!(prefix_of(";계좌"), QueryPrefix::Clipboard);
         assert_eq!(prefix_of(":clip"), QueryPrefix::Clipboard);
@@ -915,6 +932,7 @@ mod tests {
             QueryPrefix::Keys,
             QueryPrefix::Dojo,
             QueryPrefix::FolderSearch,
+            QueryPrefix::Notes,
         ] {
             assert!(covered.contains(&p), "레지스트리에 없는 명령: {p:?}");
         }

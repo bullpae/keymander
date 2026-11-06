@@ -4,6 +4,12 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **메모** (docs/23) — 런처에서 `:m 떠오른 생각` 을 치고 Enter 면 저장하고 창이 닫힌다. `:m` 은 최근 메모,
+  `:m 단어` 는 찾기(초성·한영 오타 포함). 메모에서 Enter 복사, Ctrl+E(⌘E) 수정, Ctrl+Del(⌘D) 삭제, Ctrl+Z(⌘Z) 되돌리기.
+  메모 하나가 Markdown 파일 하나라 `kmd memo dir <공유 폴더>` 로 클라우드 드라이브에 두면 기기끼리 맞춰지고
+  Obsidian 같은 앱에서도 열린다. 지운 메모는 `.trash/` 로 간다. CLI: `kmd memo`(`kmd m`) add·ls·show·edit·rm·dir.
+
 ## [0.19.2] — 2026-10-28
 
 ### Added
