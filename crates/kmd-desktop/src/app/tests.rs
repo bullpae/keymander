@@ -1704,3 +1704,16 @@ fn 메모_수정_중_다른_검색으로_가면_취소() {
     let _ = app.perform_search();
     assert_eq!(app.results[0].item.name, "새 메모: 새것");
 }
+
+#[test]
+fn 메모_키로_열면_메모_입력에서_시작하고_입력_소스를_두어둔다() {
+    let mut app = make_test_app();
+    assert!(!app.keep_input_source);
+    let _ = app.start_memo();
+    assert!(app.keep_input_source);
+    assert_eq!(app.query, ":m ");
+    assert!(app
+        .results
+        .iter()
+        .any(|r| r.item.name == "아직 메모가 없습니다"));
+}

@@ -244,7 +244,7 @@ static PREV_APP_TARGET: AtomicIsize = AtomicIsize::new(0);
 /// 실행만 해당한다. 다른 launch 바인딩(브라우저·에디터 등)이 캡처하면 런처 사용
 /// 중 흐름 B의 붙여넣기 대상이 엉뚱한 앱으로 덮어써진다.
 pub fn launch_captures_foreground(cmd: &str) -> bool {
-    cmd == "kmd-desktop"
+    crate::keybind::launch_parts(cmd).0 == "kmd-desktop"
 }
 
 /// 런처(kmd-desktop)를 띄우기 직전에 호출 — 현재 전경 앱을 기억한다.

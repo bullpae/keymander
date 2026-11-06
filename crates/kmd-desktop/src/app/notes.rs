@@ -10,6 +10,15 @@ fn is_letter(c: &str, ascii: &str, jamo: &str) -> bool {
 }
 
 impl App {
+    /// `kmd-desktop --memo` — `:m ` 입력으로 시작한다
+    pub(super) fn start_memo(&mut self) -> Task<Message> {
+        self.keep_input_source = true;
+        self.query = notes::MEMO_SEED.to_string();
+        let task = self.perform_search();
+        let cursor = iced::widget::operation::move_cursor_to_end::<Message>(self.input_id.clone());
+        Task::batch([task, cursor])
+    }
+
     pub(super) fn handle_notes_query(&mut self, query: &str) {
         let items = self.notes.results(query, self.use_emoji);
         self.apply_contains_items(items);

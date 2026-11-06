@@ -184,6 +184,8 @@ pub struct App {
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
+    /// `--memo` 로 열렸다 — 하던 입력 그대로 적도록 입력 소스를 영문으로 바꾸지 않는다
+    keep_input_source: bool,
     /// 상태바에 잠깐 띄울 알림 (저장 실패 등). 다음 검색에서 지워진다.
     /// 이벤트는 검색 결과가 아니므로 결과 목록에 끼워 넣지 않는다.
     status_message: Option<String>,
@@ -296,7 +298,12 @@ impl App {
         config: kmd_core::Config,
         window_state: WindowState,
     ) -> (Self, Task<Message>) {
-        Self::new_with_db_path(guard, config, window_state, None)
+        let (mut app, boot) = Self::new_with_db_path(guard, config, window_state, None);
+        if std::env::args().any(|arg| arg == kmd_core::notes::MEMO_ARG) {
+            let memo = app.start_memo();
+            return (app, Task::batch([boot, memo]));
+        }
+        (app, boot)
     }
 
     #[cfg(test)]
@@ -415,6 +422,7 @@ impl App {
             focus_request_count: 0,
             boot_focus_done: false,
             reset_ime_on_launch: reset_ime,
+            keep_input_source: false,
             status_message: None,
             scope_undo: None,
             scope_report: None,

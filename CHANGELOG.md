@@ -9,6 +9,7 @@ All notable changes to keymander are documented here.
   `:m 단어` 는 찾기(초성·한영 오타 포함). 메모에서 Enter 복사, Ctrl+E(⌘E) 수정, Ctrl+Del(⌘D) 삭제, Ctrl+Z(⌘Z) 되돌리기.
   메모 하나가 Markdown 파일 하나라 `kmd memo dir <공유 폴더>` 로 클라우드 드라이브에 두면 기기끼리 맞춰지고
   Obsidian 같은 앱에서도 열린다. 지운 메모는 `.trash/` 로 간다. CLI: `kmd memo`(`kmd m`) add·ls·show·edit·rm·dir.
+  CapsLock+`;` 로 런처를 메모 입력 상태로 바로 연다. 이때는 입력 소스를 영문으로 바꾸지 않아 한글을 그대로 칠 수 있다.
 
 ## [0.19.2] — 2026-10-28
 

@@ -25,6 +25,11 @@ pub const NOTE_ITEM_MARKER: &str = "kmd:note:item:";
 /// 안내 행
 pub const NOTE_NOOP_MARKER: &str = "kmd:note:noop";
 
+/// `kmd-desktop --memo` — 런처를 `:m ` 상태로 연다. 레이어 키가 부른다 (N1.1)
+pub const MEMO_ARG: &str = "--memo";
+/// `--memo` 로 열었을 때의 입력
+pub const MEMO_SEED: &str = ":m ";
+
 /// 목록에 보여 줄 메모 수
 const RESULT_LIMIT: usize = 50;
 const TRASH_DIR: &str = ".trash";

@@ -55,12 +55,12 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 ;; Alt는 트리거가 아니므로 defsrc에 넣지 않는다 — 앱의 Alt 단축키가
 ;; 손대지 않은 채로 통과한다 (docs/13).
 (defsrc
-  caps ralt lsft spc  e    s    d    f    w    r    t    g    h    j    k    l    n    m    i    o    .    /
+  caps ralt lsft spc  e    s    d    f    w    r    t    g    h    j    k    l    n    m    i    o    .    /    ;
 )
 
 ;; ── 3. 기본 레이어 ──────────────────────────────────────────
 (deflayer default
-  @nav-mod @mouse-mod lsft spc  e    s    d    f    w    r    t    g    h    j    k    l    n    m    i    o    .    /
+  @nav-mod @mouse-mod lsft spc  e    s    d    f    w    r    t    g    h    j    k    l    n    m    i    o    .    /    ;
 )
 
 ;; ── 4. 네비게이션 레이어 ────────────────────────────────────
@@ -71,13 +71,14 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 ;;    o        = 다음 단어(1탭) / 줄 끝(2탭)     ← 약지
 ;;    .        = Backspace      / = Delete   (둘 다 연타 그대로)
 ;;    Space    = kmd-desktop 실행
+;;    ;        = kmd-desktop 을 :m 메모 입력으로 실행 (docs/23)
 ;;    Shift    = 통과 (Shift+네비 = 선택 확장)
 ;;
 ;;    레이어 불변식: 오발사해도 무해한 액션(이동·글자 삭제·런처)만 둔다.
 ;;    붙여넣기·줄 복사·줄 삭제·단어 삭제는 넣지 않는다 — CapsLock과 LShift가
 ;;    같은 새끼손가락 인접 키라 오타 비용이 비싸다 (docs/16 §3).
 (deflayer navigation
-  _  _  _  @launch-kmd  _  _  _  _  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc del
+  _  _  _  @launch-kmd  _  _  _  _  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc del @launch-memo
 )
 
 ;; ── 5. 마우스 레이어 ────────────────────────────────────────
@@ -90,13 +91,14 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 ;;    j/k/l    = 좌/우/중 클릭 (오른손 별칭)   LShift = 저속 정밀 모드
 ;;    나머지 키는 차단 (오타 방지)
 (deflayer mouse
-  XX _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r mlft mrgt @ms-wu @ms-wd XX mlft mrgt mmid XX XX XX XX XX XX
+  XX _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r mlft mrgt @ms-wu @ms-wd XX mlft mrgt mmid XX XX XX XX XX XX XX
 )
 
 ;; ── 6. 기능 정의 ────────────────────────────────────────────
 (defalias
   ;; --- keymander 실행 (CapsLock+Space) ---
   launch-kmd (cmd kmd-desktop)
+  launch-memo (cmd kmd-desktop --memo)
 
   ;; --- 복합 기능 (tap-dance) ---
   ;; 200ms 이내에 연타하면 두 번째 기능이 실행됩니다.
@@ -559,6 +561,8 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     // 가장 높은 키라, 두 글자 지우려는 탭-탭이 다른 액션으로 오발사된다.
     mappings.insert("/".into(), "Delete".into());
     mappings.insert("Space".into(), "launch:kmd-desktop".into());
+    // 메모 바로 열기 (docs/23) — 오른손 새끼 홈 행의 미할당 자리. 오발사해도 런처가 뜰 뿐이다.
+    mappings.insert(";".into(), "launch:kmd-desktop --memo".into());
     // P(붙여넣기)/Y(줄 복사)/U(줄 삭제)/,(단어 삭제)는 제거됨 (2026-08-12).
     // CapsLock과 LShift는 같은 새끼손가락 인접 키라 한글 Shift 조합(ㅖ=Shift+P 등)
     // 오타가 클립보드 붙여넣기·줄 삭제 같은 비싼 오발사로 이어졌다.
@@ -1580,6 +1584,7 @@ mod tests {
             "bspc" => "backspace",
             "del" => "delete",
             "@launch-kmd" => "launch:kmd-desktop",
+            "@launch-memo" => "launch:kmd-desktop--memo", // engine_target 이 공백을 뗀다
             "@i-dt" => "wordleft|linestart",
             "@o-dt" => "wordright|lineend",
             "@ms-u" => "mouse:up",

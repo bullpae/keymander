@@ -45,6 +45,7 @@ M = "PageDown"
 "." = "Backspace"
 "/" = "Delete"
 Space = "launch:kmd-desktop"
+";" = "launch:kmd-desktop --memo"                # 런처를 :m 메모 입력으로 연다
 
 # 단어/줄 이동 = I/O (중지+약지). 위 행은 손바닥에서 멀어지는 신전 동작이라
 # 긴 손가락이 유리하다 — 적합도는 중지 ≥ 약지 > 검지. 검지가 강한 건 누르는
