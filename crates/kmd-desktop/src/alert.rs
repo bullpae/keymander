@@ -53,7 +53,7 @@ fn look(kind: &str, t: &DesktopTheme) -> (&'static str, Color) {
     use kmd_core::notes::timers::{ALERT_BREAK, ALERT_FOCUS, ALERT_REMINDER};
     match kind {
         ALERT_FOCUS => ("\u{1F345}", t.red),
-        ALERT_BREAK => ("\u{2615}\u{FE0F}", t.green),
+        ALERT_BREAK => ("\u{1F375}", t.green),
         ALERT_REMINDER => ("\u{1F514}", t.yellow),
         _ => ("\u{23F1}\u{FE0F}", t.teal),
     }
