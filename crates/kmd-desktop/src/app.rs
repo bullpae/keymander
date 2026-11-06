@@ -40,6 +40,7 @@ mod context_action;
 mod engine_boot;
 mod focus_flow;
 mod launch;
+mod notes;
 mod results;
 mod say;
 mod scope;
@@ -183,6 +184,8 @@ pub struct App {
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
+    /// `--memo` 로 열렸다 — 하던 입력 그대로 적도록 입력 소스를 영문으로 바꾸지 않는다
+    keep_input_source: bool,
     /// 상태바에 잠깐 띄울 알림 (저장 실패 등). 다음 검색에서 지워진다.
     /// 이벤트는 검색 결과가 아니므로 결과 목록에 끼워 넣지 않는다.
     status_message: Option<String>,
@@ -190,6 +193,8 @@ pub struct App {
     scope_undo: Option<std::path::PathBuf>,
     /// 범위 변경 후 엔진 교체가 끝나면 상태줄에 남길 결과
     scope_report: Option<scope::ScopeReport>,
+    /// `:m` 메모 (docs/23)
+    notes: kmd_core::notes::NoteSession,
     /// `:say` 런처 한 줄 카드 (docs/21)
     say_card: say::SayCardSlot,
     /// 입버릇 문장·상태 파일 위치
@@ -259,6 +264,8 @@ pub enum Message {
     },
     /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
     ClipActionFinished(Result<String, String>),
+    /// 메모로 저장할 클립보드 항목 전체 글 (docs/23)
+    ClipTextForNote(Result<String, String>),
     /// `:scope` 추가·제거 후 리빌드 완료 → 새 캐시로 엔진 교체 (docs/18)
     ScopeReindexed(Result<String, String>),
     /// 퍼지 검색 미완성 → 같은 질의로 다시 검색 — generation 이 현재 세대와 다르면 폐기
@@ -293,7 +300,12 @@ impl App {
         config: kmd_core::Config,
         window_state: WindowState,
     ) -> (Self, Task<Message>) {
-        Self::new_with_db_path(guard, config, window_state, None)
+        let (mut app, boot) = Self::new_with_db_path(guard, config, window_state, None);
+        if std::env::args().any(|arg| arg == kmd_core::notes::MEMO_ARG) {
+            let memo = app.start_memo();
+            return (app, Task::batch([boot, memo]));
+        }
+        (app, boot)
     }
 
     #[cfg(test)]
@@ -343,6 +355,9 @@ impl App {
         // 검색 핫패스(키 입력마다)에서 DB를 조회하지 않도록 부팅 시 1회 로드
         let frecency = kmd_core::history::load_boost_map(&db);
         let config_for_quick = config.clone();
+        let notes = kmd_core::notes::NoteSession::new(kmd_core::notes::NoteStore::from_config(
+            &config.notes,
+        ));
         // 스냅숏은 매핑만 하므로(0.1ms 안팎) 부팅 길에서 바로 연다. 열 때 대조는 뒤에서.
         let file_index = config
             .launcher
@@ -409,9 +424,11 @@ impl App {
             focus_request_count: 0,
             boot_focus_done: false,
             reset_ime_on_launch: reset_ime,
+            keep_input_source: false,
             status_message: None,
             scope_undo: None,
             scope_report: None,
+            notes,
             say_card: say::SayCardSlot::default(),
             say_store: say::default_say_store(),
             say_revealed: None,
@@ -681,6 +698,9 @@ impl App {
                 if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
                     return self.handle_submit(&modifiers);
                 }
+                if let Some(task) = self.handle_notes_key(&key, &modifiers) {
+                    return task;
+                }
                 if let Some(task) = self.handle_scope_key(&key, &modifiers) {
                     return task;
                 }
@@ -746,6 +766,10 @@ impl App {
                 self.handle_route_search_finished(generation, result)
             }
             Message::ScopeReindexed(result) => self.handle_scope_reindexed(result),
+            Message::ClipTextForNote(result) => {
+                self.handle_clip_text_for_note(result);
+                Task::none()
+            }
             Message::ClipActionFinished(result) => match result {
                 Ok(message) => {
                     tracing::info!("{message}");

@@ -580,11 +580,19 @@ impl App {
         }
         let status_text = match &self.status_message {
             Some(msg) => msg.clone(),
-            None => format!(
-                "{}  \u{00B7}  {} results",
-                self.search_mode.label(),
-                self.results.len()
-            ),
+            // 메모 행을 고르면 쓸 수 있는 키를 보여 준다 (docs/23)
+            None => match self
+                .results
+                .get(self.selected)
+                .and_then(|r| kmd_core::notes::key_hint(&r.item, self.query.trim()))
+            {
+                Some(hint) => hint.to_string(),
+                None => format!(
+                    "{}  \u{00B7}  {} results",
+                    self.search_mode.label(),
+                    self.results.len()
+                ),
+            },
         };
 
         let left = text(status_text).size(u.status_font).color(t.overlay);

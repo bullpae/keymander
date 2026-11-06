@@ -366,6 +366,16 @@ pub fn resolve_launch_cmd(name: &str) -> String {
     safe_name.to_string()
 }
 
+/// `launch:` 값 → (프로그램 이름, 인자). 이름에 공백이 있는 프로그램이 있을 수 있어
+/// 일반 분리는 하지 않고, 런처의 메모 인자만 알아본다.
+pub(crate) fn launch_parts(cmd: &str) -> (&str, Option<&'static str>) {
+    let memo = kmd_core::notes::MEMO_ARG;
+    match cmd.strip_suffix(memo).map(str::trim_end) {
+        Some("kmd-desktop") => ("kmd-desktop", Some(memo)),
+        _ => (cmd, None),
+    }
+}
+
 /// Launch 액션 실행 — 느린 worker 에서 부른다. `delay` 뒤 별도 스레드에서 띄운다.
 ///
 /// 자식에게 실행 시각(`KMD_LAUNCH_AT_MS`)을 넘긴다. 데스크톱 런처는 이것으로
@@ -378,7 +388,8 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
     if crate::clipboard::launch_captures_foreground(cmd) {
         crate::clipboard::capture_foreground_app();
     }
-    let resolved = resolve_launch_cmd(cmd);
+    let (name, arg) = launch_parts(cmd);
+    let resolved = resolve_launch_cmd(name);
     // 런처가 아직 뜨는 중이면 또 띄우지 않는다. 백신 검사로 프로세스 생성이 수 초 막히는 동안
     // 누른 횟수만큼 프로세스가 쌓였다가 한꺼번에 떠서 서로 토글해 꺼 버린다.
     let track = crate::clipboard::launch_captures_foreground(cmd);
@@ -396,6 +407,7 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
         match std::process::Command::new(&resolved)
+            .args(arg)
             .env(kmd_core::keystats::LAUNCH_AT_ENV, at.to_string())
             .hide_console()
             .spawn()
@@ -1371,6 +1383,12 @@ mod tests {
 
     #[test]
     fn test_parse_action_launch() {
+        assert_eq!(
+            launch_parts("kmd-desktop --memo"),
+            ("kmd-desktop", Some("--memo"))
+        );
+        assert_eq!(launch_parts("kmd-desktop"), ("kmd-desktop", None));
+        assert_eq!(launch_parts("other --memo"), ("other --memo", None));
         let action = parse_action("launch:kmd-desktop").unwrap();
         match action {
             BindAction::Launch(cmd) => assert_eq!(cmd, "kmd-desktop"),

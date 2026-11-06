@@ -58,6 +58,9 @@ pub(super) fn handle_key(
         // `:scope` — Ctrl+Del 제거, Ctrl+Z 되돌리기 (docs/18)
         (KeyCode::Delete, KeyModifiers::CONTROL) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
             flush_composer(state);
+            if super::notes::delete_selected(state, engine, db) {
+                return;
+            }
             if super::scope::scope_remove_selected(state, engine) {
                 let msg = state.status_message.take();
                 update_search(state, engine, db);
@@ -66,6 +69,9 @@ pub(super) fn handle_key(
         }
         (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
             flush_composer(state);
+            if super::notes::undo_delete(state, engine, db) {
+                return;
+            }
             if super::scope::scope_undo(state, engine) {
                 let msg = state.status_message.take();
                 update_search(state, engine, db);
@@ -78,8 +84,15 @@ pub(super) fn handle_key(
                 drill_back(state);
             }
         }
+        (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+            flush_composer(state);
+            super::notes::edit_selected(state, engine, db);
+        }
         (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
             flush_composer(state);
+            if super::notes::focus_selected(state, engine, db) {
+                return;
+            }
             state.show_preview = !state.show_preview;
         }
         (KeyCode::Enter, _) => {

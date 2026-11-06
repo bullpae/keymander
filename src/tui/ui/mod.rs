@@ -115,6 +115,22 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
         return;
     }
 
+    // 메모 행을 고르면 쓸 수 있는 키를 보여 준다 (docs/23)
+    if let Some(hint) = state
+        .results
+        .get(state.selected_index)
+        .and_then(|r| kmd_core::notes::key_hint(&r.item, state.query.trim()))
+    {
+        let line = Line::from(vec![Span::styled(
+            format!(" {hint} "),
+            theme.status_count_style(),
+        )]);
+        let status = ratatui::widgets::Paragraph::new(line)
+            .style(ratatui::style::Style::default().bg(theme.mantle));
+        frame.render_widget(status, area);
+        return;
+    }
+
     let mode_label = state.search_mode_label();
     let result_count = state.results.len();
 
