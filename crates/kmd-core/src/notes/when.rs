@@ -1,6 +1,6 @@
 //! 시간 표현 읽기 — `10분`, `1시간 30분`, `내일 9시`, `오후 3시 30분`, `11/7`, `월요일` (docs/23)
 
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Weekday};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Weekday};
 
 /// 저장 형식 (지역 시간). 사람이 파일을 열어 읽고 고칠 수 있게 시간대를 적지 않는다
 const STORED: &str = "%Y-%m-%dT%H:%M";
@@ -161,7 +161,14 @@ pub fn parse_due(text: &str, now: NaiveDateTime) -> Option<NaiveDateTime> {
         .or_else(|| text.strip_suffix('후'))
         .unwrap_or(text);
     if let Some(secs) = parse_duration(relative) {
-        return Some(now + Duration::seconds(secs));
+        // 저장은 분 단위다 — 내림하면 `1분 뒤` 가 최대 59초 일찍 울리므로 다음 분으로 올린다
+        let at = now + Duration::seconds(secs);
+        let spare = i64::from(at.second());
+        return Some(if spare == 0 && at.nanosecond() == 0 {
+            at
+        } else {
+            at + Duration::seconds(60 - spare) - Duration::nanoseconds(i64::from(at.nanosecond()))
+        });
     }
 
     let today = now.date();
@@ -393,6 +400,14 @@ mod tests {
         assert_eq!(due("30분 뒤"), "2026-11-06T14:30");
         assert_eq!(due("2시간 후"), "2026-11-06T16:00");
         assert_eq!(due("1시간"), "2026-11-06T15:00");
+        let with_secs = now() + Duration::seconds(20);
+        let t = parse_due("1분 뒤", with_secs).unwrap();
+        assert_eq!(
+            format_stored(t),
+            "2026-11-06T14:02",
+            "일찍 울리지 않게 올린다"
+        );
+        assert!(t >= with_secs + Duration::seconds(60));
     }
 
     #[test]
