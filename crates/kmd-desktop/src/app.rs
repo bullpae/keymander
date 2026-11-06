@@ -264,6 +264,8 @@ pub enum Message {
     },
     /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
     ClipActionFinished(Result<String, String>),
+    /// 메모로 저장할 클립보드 항목 전체 글 (docs/23)
+    ClipTextForNote(Result<String, String>),
     /// `:scope` 추가·제거 후 리빌드 완료 → 새 캐시로 엔진 교체 (docs/18)
     ScopeReindexed(Result<String, String>),
     /// 퍼지 검색 미완성 → 같은 질의로 다시 검색 — generation 이 현재 세대와 다르면 폐기
@@ -764,6 +766,10 @@ impl App {
                 self.handle_route_search_finished(generation, result)
             }
             Message::ScopeReindexed(result) => self.handle_scope_reindexed(result),
+            Message::ClipTextForNote(result) => {
+                self.handle_clip_text_for_note(result);
+                Task::none()
+            }
             Message::ClipActionFinished(result) => match result {
                 Ok(message) => {
                     tracing::info!("{message}");

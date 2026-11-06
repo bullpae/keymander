@@ -557,7 +557,10 @@ leading `/` (e.g. `/help`, `/calc 2+3`). Unknown `:command` input shows an
 | `:keymap` / `:km` | Keymap control | `:km on`, `:km off` | Keymap status, on/off, profile switch |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
 | `:version` / `:ver` / `:v` | Version info | `:version` | Show app/core/target/os versions |
-| `:m` / `:memo` / `:메모` | Notes | `:m 떠오른 생각 #아이디어`, `:m 회의` | Enter saves and closes; `:m` lists, `:m word` finds. Enter on a note copies, Ctrl+E edits, Ctrl+Del deletes, Ctrl+Z undoes. One Markdown file per note; `kmd memo dir <folder>` shares them between devices |
+| `:m` / `:memo` / `:메모` | Notes | `:m 떠오른 생각 #아이디어`, `:m 회의` | Enter saves and closes; `:m` lists, `:m word` finds. Enter on a note copies, Ctrl+E edits, Ctrl+Del deletes, Ctrl+Z undoes. One Markdown file per note; `kmd memo dir <folder>` shares them between devices. CapsLock+`;` opens it directly; Ctrl+S in `;` saves a clipboard item as a note |
+| `:td` / `:todo` / `:할일` | To-do | `:td 보고서 @내일 9시` | Enter saves; `:td` lists by due time. Enter on a task marks it done. The daemon shows an alert window when it is due |
+| `:timer` / `:타이머` | Timer | `:timer 10분 라면` | Rings even after a restart or sleep (late alerts say so). `:timer` lists, Ctrl+Del stops |
+| `:pomo` / `:뽀모` | Pomodoro | `:pomo 보고서` | Focus 25 min, then a 5 min break starts by itself |
 | `:say` / `:입버릇` | English habit | `:say`, `:say add I'm on it \| 하고 있어요` | One English sentence under the empty launcher + typing recall ([SayHabit](https://github.com/bullpae/SayHabit) companion, off by default) |
 | `:help` / `:h` | Help | `:help` | Show all available commands |
 | `!command` / `>command` | Shell | `!ip`, `>echo hello` | Run shell command |

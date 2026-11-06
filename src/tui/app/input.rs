@@ -90,6 +90,9 @@ pub(super) fn handle_key(
         }
         (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
             flush_composer(state);
+            if super::notes::focus_selected(state, engine, db) {
+                return;
+            }
             state.show_preview = !state.show_preview;
         }
         (KeyCode::Enter, _) => {

@@ -1,4 +1,4 @@
-//! `:m` 메모 (TUI). 판단은 `kmd_core::notes`, 여기는 화면 (docs/23)
+//! `:m`·`:td`·`:timer`·`:pomo` (TUI). 판단은 `kmd_core::notes`, 여기는 화면 (docs/23)
 
 use super::*;
 
@@ -42,8 +42,7 @@ pub(super) fn commit_note_command(
 }
 
 fn in_notes(state: &AppState) -> bool {
-    kmd_core::query_prefix::prefix_of(state.query.trim())
-        == kmd_core::query_prefix::QueryPrefix::Notes
+    notes::is_notes_query(state.query.trim())
 }
 
 fn selected_id(state: &AppState) -> Option<String> {
@@ -51,22 +50,28 @@ fn selected_id(state: &AppState) -> Option<String> {
     notes::selected_id(item).map(str::to_string)
 }
 
-/// Ctrl+Del / Ctrl+D. 메모 행이 아니면 false
+/// Ctrl+Del / Ctrl+D. 메모·타이머 행이 아니면 false
 pub(super) fn delete_selected(
     state: &mut AppState,
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) -> bool {
-    let Some(id) = selected_id(state) else {
+    let Some(item) = state
+        .results
+        .get(state.selected_index)
+        .map(|r| r.item.clone())
+    else {
         return false;
     };
-    let result = state.notes.delete(&id);
+    let Some(result) = state.notes.delete_item(&item) else {
+        return false;
+    };
     update_search(state, engine, db);
     state.status_message = Some(result.unwrap_or_else(|e| format!("\u{274C} {e}")));
     true
 }
 
-/// Ctrl+Z. `:m` 이 아니거나 되돌릴 것이 없으면 false
+/// Ctrl+Z. 메모 명령이 아니거나 되돌릴 것이 없으면 false
 pub(super) fn undo_delete(
     state: &mut AppState,
     engine: &mut SearchEngine,
@@ -75,11 +80,35 @@ pub(super) fn undo_delete(
     if !in_notes(state) {
         return false;
     }
-    let Some(result) = state.notes.undo_delete() else {
+    let Some(result) = state.notes.undo_last() else {
         return false;
     };
     update_search(state, engine, db);
     state.status_message = Some(result.unwrap_or_else(|e| format!("\u{274C} {e}")));
+    true
+}
+
+/// Ctrl+P. 할 일 행이면 뽀모도로를 시작하고 true
+pub(super) fn focus_selected(
+    state: &mut AppState,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) -> bool {
+    let Some(item) = state
+        .results
+        .get(state.selected_index)
+        .map(|r| r.item.clone())
+    else {
+        return false;
+    };
+    let Some(result) = state.notes.start_focus_item(&item) else {
+        return false;
+    };
+    update_search(state, engine, db);
+    state.status_message = Some(match result {
+        Ok(applied) => applied.message,
+        Err(e) => format!("\u{274C} {e}"),
+    });
     true
 }
 

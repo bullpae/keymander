@@ -1,13 +1,14 @@
 //! `kmd memo` — 메모 CLI (docs/23)
 //!
 //! 런처 `:m` 과 같은 폴더를 쓴다. 여러 줄 메모(`-` 로 표준 입력)와 폴더 설정은 여기서 한다.
+//! `kmd todo`·`kmd timer` 도 여기 있다 — 판단은 런처와 같은 [`NoteSession`] 이 한다.
 
 use std::io::Read;
 
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
 
-use kmd_core::notes::{self, Note, NoteStore};
+use kmd_core::notes::{self, Note, NoteSession, NoteStore};
 
 pub enum Action {
     Add { text: Vec<String> },
@@ -146,6 +147,89 @@ fn set_dir(path: &str, store: &NoteStore) -> Result<()> {
             "같은 이름이 있어 {skipped}개는 {} 에 남겨 뒀습니다",
             store.dir().display()
         );
+    }
+    Ok(())
+}
+
+pub enum TodoAction {
+    Add { text: Vec<String> },
+    List,
+    Done { query: String },
+}
+
+/// `kmd todo`
+pub fn run_todo(action: Option<TodoAction>) -> Result<()> {
+    let config = super::load_config()?;
+    let store = NoteStore::from_config(&config.notes);
+    let mut session = NoteSession::new(store.clone());
+    match action.unwrap_or(TodoAction::List) {
+        TodoAction::Add { text } => {
+            let applied = session
+                .commit(&format!(":td {}", text.join(" ")), None)
+                .map_err(|e| eyre!(e))?;
+            println!("{}", applied.message);
+        }
+        TodoAction::List => {
+            let rows = session.results(":td", false);
+            for item in rows.iter().filter(|r| notes::selected_id(r).is_some()) {
+                println!("{} {}  ({})", item.icon, item.name, item.path);
+            }
+        }
+        TodoAction::Done { query } => {
+            let all = store.load().map_err(|e| eyre!(e))?;
+            let todos: Vec<Note> = all.into_iter().filter(Note::is_todo).collect();
+            let id = resolve(&todos, &query)?.id.clone();
+            let applied = session.commit(":td", Some(&id)).map_err(|e| eyre!(e))?;
+            println!("{}", applied.message);
+        }
+    }
+    Ok(())
+}
+
+pub enum TimerAction {
+    Start { text: Vec<String> },
+    Pomo { text: Vec<String> },
+    List,
+    Stop { query: String },
+}
+
+/// `kmd timer`
+pub fn run_timer(action: Option<TimerAction>) -> Result<()> {
+    let config = super::load_config()?;
+    let store = NoteStore::from_config(&config.notes);
+    let mut session = NoteSession::new(store.clone());
+    let timers = store.timers();
+    match action.unwrap_or(TimerAction::List) {
+        TimerAction::Start { text } => {
+            let applied = session
+                .commit(&format!(":timer {}", text.join(" ")), None)
+                .map_err(|e| eyre!(e))?;
+            println!("{}", applied.message);
+        }
+        TimerAction::Pomo { text } => {
+            let applied = session
+                .commit(&format!(":pomo {}", text.join(" ")), None)
+                .map_err(|e| eyre!(e))?;
+            println!("{}", applied.message);
+        }
+        TimerAction::List => {
+            let rows = session.results(":timer", false);
+            for item in &rows {
+                println!("{}  {}", item.name, item.path);
+            }
+        }
+        TimerAction::Stop { query } => {
+            let found: Vec<_> = timers
+                .list()
+                .into_iter()
+                .filter(|t| t.id == query || t.label.contains(&query))
+                .collect();
+            let [timer] = found.as_slice() else {
+                bail!("{}개가 걸립니다 — 이름을 더 적으세요", found.len());
+            };
+            timers.cancel(&timer.id).map_err(|e| eyre!(e))?;
+            println!("껐습니다: {}", timer.label);
+        }
     }
     Ok(())
 }

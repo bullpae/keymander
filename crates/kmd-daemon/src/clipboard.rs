@@ -328,6 +328,13 @@ pub fn copy_item(id: u64) -> Result<(), String> {
         .map_err(|e| format!("클립보드 쓰기 실패: {e}"))
 }
 
+/// 안정 ID의 항목 전체 글. 클립보드는 건드리지 않는다
+pub fn item_text(id: u64) -> Result<String, String> {
+    entry_by_id(id)
+        .map(|entry| entry.text)
+        .ok_or_else(|| "선택한 클립보드 항목이 만료되었습니다".to_string())
+}
+
 /// 복원 판단 (클립보드 스왑 경로): 우리가 넣은 임시 값이 **여전히 현재
 /// 클립보드일 때만** 복원한다. 그 사이 사용자/다른 앱이 복사했다면 덮어쓰지
 /// 않는다 (사용자 데이터 보호). 세대 번호가 있으면(swap≠0) 세대 비교,

@@ -388,11 +388,13 @@ pass_score = 0.8  # 타이핑 통과 기준 (0~1)
 
 ---
 
-### 4.9 [notes] — `:m` 메모 (docs/23)
+### 4.9 [notes] — `:m` 메모·`:pomo` 뽀모도로 (docs/23)
 
 ```toml
 [notes]
 dir = "~/Dropbox/kmd-notes"   # 없으면 <data_dir>/notes (이 기기에만 저장)
+focus_minutes = 25            # :pomo 집중 시간
+break_minutes = 5             # :pomo 휴식 시간
 ```
 
 폴더를 바꿀 때는 메모를 함께 옮기는 `kmd memo dir <폴더|off>` 를 쓴다. 정한 폴더가 없으면(드라이브 빠짐 등)

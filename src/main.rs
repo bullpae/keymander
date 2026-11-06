@@ -134,6 +134,17 @@ enum Commands {
         #[command(subcommand)]
         action: Option<MemoAction>,
     },
+    /// To-dos: :td in the launcher (add "보고서 @내일 9시" / ls / done)
+    #[command(alias = "td")]
+    Todo {
+        #[command(subcommand)]
+        action: Option<TodoAction>,
+    },
+    /// Timers and pomodoro: :timer and :pomo in the launcher (needs the daemon to ring)
+    Timer {
+        #[command(subcommand)]
+        action: Option<TimerAction>,
+    },
     /// Show version information
     Version,
     /// Upgrade keymander (stops the daemon/launcher, upgrades, restarts the daemon)
@@ -201,6 +212,36 @@ enum MemoAction {
     Rm { query: String },
     /// Show the notes folder, or move notes to a shared folder (off = back to this device)
     Dir { path: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum TodoAction {
+    /// Add a to-do: kmd todo add 보고서 쓰기 @내일 9시
+    Add {
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// List open to-dos, soonest first
+    #[command(alias = "ls")]
+    List,
+    /// Mark a to-do done, or open again (by id or a word only it has)
+    Done { query: String },
+}
+
+#[derive(Subcommand)]
+enum TimerAction {
+    /// Start a timer: kmd timer start 10분 라면
+    Start {
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// Start a pomodoro focus; a break follows by itself
+    Pomo { text: Vec<String> },
+    /// List running timers
+    #[command(alias = "ls")]
+    List,
+    /// Stop a running timer (by id or a word in its name)
+    Stop { query: String },
 }
 
 #[derive(Subcommand)]
@@ -541,6 +582,21 @@ fn main() -> color_eyre::Result<()> {
                 MemoAction::Edit { query } => cmd::memo::Action::Edit { query },
                 MemoAction::Rm { query } => cmd::memo::Action::Remove { query },
                 MemoAction::Dir { path } => cmd::memo::Action::Dir { path },
+            }))?;
+        }
+        Some(Commands::Todo { action }) => {
+            cmd::memo::run_todo(action.map(|a| match a {
+                TodoAction::Add { text } => cmd::memo::TodoAction::Add { text },
+                TodoAction::List => cmd::memo::TodoAction::List,
+                TodoAction::Done { query } => cmd::memo::TodoAction::Done { query },
+            }))?;
+        }
+        Some(Commands::Timer { action }) => {
+            cmd::memo::run_timer(action.map(|a| match a {
+                TimerAction::Start { text } => cmd::memo::TimerAction::Start { text },
+                TimerAction::Pomo { text } => cmd::memo::TimerAction::Pomo { text },
+                TimerAction::List => cmd::memo::TimerAction::List,
+                TimerAction::Stop { query } => cmd::memo::TimerAction::Stop { query },
             }))?;
         }
         Some(Commands::Say { action }) => {

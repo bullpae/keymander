@@ -53,16 +53,13 @@ impl App {
         task
     }
 
-    /// 메모 단축키. `:m` 이 아니면 None — 다른 단축키로 넘어간다
+    /// 메모 단축키. 메모 명령이 아니면 None — 다른 단축키로 넘어간다
     pub(super) fn handle_notes_key(
         &mut self,
         key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
     ) -> Option<Task<Message>> {
         use keyboard::key::Named;
-        if crate::query_prefix::prefix_of(self.query.trim()) != crate::query_prefix::Prefix::Notes {
-            return None;
-        }
         #[cfg(target_os = "macos")]
         let ctrl_like = modifiers.control() || modifiers.logo();
         #[cfg(not(target_os = "macos"))]
@@ -70,13 +67,24 @@ impl App {
         if !ctrl_like {
             return None;
         }
+        let query = self.query.trim();
+        if crate::query_prefix::prefix_of(query) == crate::query_prefix::Prefix::Clipboard {
+            return match key {
+                keyboard::Key::Character(c) if is_letter(c, "s", "ㄴ") => self.clip_to_note(),
+                _ => None,
+            };
+        }
+        if !notes::is_notes_query(query) {
+            return None;
+        }
         match key {
             keyboard::Key::Named(Named::Delete) => self.note_delete_selected(),
             keyboard::Key::Character(c) if is_letter(c, "e", "ㄷ") => self.note_edit_selected(),
             // macOS는 ⌘D — `:scope` 와 같은 이유 (⌘⌫ 는 입력창이 함께 받는다)
             keyboard::Key::Character(c) if is_letter(c, "d", "ㅇ") => self.note_delete_selected(),
+            keyboard::Key::Character(c) if is_letter(c, "p", "ㅔ") => self.note_focus_selected(),
             keyboard::Key::Character(c) if is_letter(c, "z", "ㅋ") => {
-                let result = self.notes.undo_delete()?;
+                let result = self.notes.undo_last()?;
                 let task = self.perform_search();
                 self.status_message = Some(result.unwrap_or_else(|e| e));
                 Some(task)
@@ -91,11 +99,56 @@ impl App {
     }
 
     fn note_delete_selected(&mut self) -> Option<Task<Message>> {
-        let id = self.selected_note_id()?;
-        let result = self.notes.delete(&id);
+        let item = self.results.get(self.selected)?.item.clone();
+        let result = self.notes.delete_item(&item)?;
         let task = self.perform_search();
         self.status_message = Some(result.unwrap_or_else(|e| e));
         Some(task)
+    }
+
+    /// 고른 할 일로 뽀모도로 시작
+    fn note_focus_selected(&mut self) -> Option<Task<Message>> {
+        let item = self.results.get(self.selected)?.item.clone();
+        match self.notes.start_focus_item(&item)? {
+            Ok(_) => Some(exit_launcher()),
+            Err(e) => {
+                self.status_message = Some(e);
+                Some(Task::none())
+            }
+        }
+    }
+
+    /// `;` 에서 고른 클립보드 항목을 메모로 — 전체 글은 데몬에 있다 (N1.2)
+    fn clip_to_note(&mut self) -> Option<Task<Message>> {
+        let marker = self
+            .results
+            .get(self.selected)?
+            .item
+            .keywords
+            .strip_prefix("kmd:clip:")?;
+        let id = marker.split(':').next()?.parse::<u64>().ok()?;
+        Some(Task::future(async move {
+            let request = kmd_core::ipc::Request::ClipText { id };
+            let result = tokio::task::spawn_blocking(move || {
+                match kmd_core::ipc::send_request_result(&request) {
+                    Ok(kmd_core::ipc::Response::ClipText { text }) => Ok(text),
+                    Ok(kmd_core::ipc::Response::Error { message }) => Err(message),
+                    Ok(other) => Err(format!("예기치 않은 데몬 응답: {other:?}")),
+                    Err(e) => Err(format!("데몬에 연결할 수 없습니다 ({e})")),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("클립보드 항목 읽기 실패: {e}")));
+            Message::ClipTextForNote(result)
+        }))
+    }
+
+    pub(super) fn handle_clip_text_for_note(&mut self, result: Result<String, String>) {
+        self.status_message = Some(
+            result
+                .and_then(|text| self.notes.save_text(&text))
+                .unwrap_or_else(|e| e),
+        );
     }
 
     fn note_edit_selected(&mut self) -> Option<Task<Message>> {

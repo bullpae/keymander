@@ -539,6 +539,7 @@ pub fn run() -> color_eyre::Result<()> {
     // 주기 리프레시 전까지 아무 스캔도 하지 않는다.
     spawn_index_refresher(engine.clone(), shutdown.clone(), rebuild_immediately);
     crate::fs_watch::spawn(shutdown.clone());
+    crate::alarms::spawn(shutdown.clone());
     spawn_key_stats_saver(shutdown.clone());
 
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
@@ -775,6 +776,11 @@ fn process_request(
             Ok(()) => Response::Ok {
                 message: "클립보드 항목 복사".into(),
             },
+            Err(message) => Response::Error { message },
+        },
+
+        Request::ClipText { id } => match crate::clipboard::item_text(id) {
+            Ok(text) => Response::ClipText { text },
             Err(message) => Response::Error { message },
         },
 

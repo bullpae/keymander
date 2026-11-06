@@ -2396,6 +2396,7 @@ name = "kmd-daemon"
 version = "0.19.2"
 dependencies = [
  "arboard",
+ "chrono",
  "clipboard-win",
  "color-eyre",
  "dirs",

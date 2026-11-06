@@ -11,6 +11,9 @@ path = "src/main.rs"
 [dependencies]
 kmd-core = { path = "../kmd-core" }
 
+# 타이머·리마인더 시각 (지역 시간)
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

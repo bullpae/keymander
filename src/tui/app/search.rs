@@ -37,7 +37,7 @@ pub(super) fn update_search(
     let query = kmd_core::query_prefix::normalize_slash_command(&query).unwrap_or(query);
 
     let prefix = kmd_core::query_prefix::prefix_of(&query);
-    if prefix != QueryPrefix::Notes {
+    if !kmd_core::notes::is_notes_query(&query) {
         state.notes.leave();
     }
 
@@ -62,7 +62,9 @@ pub(super) fn update_search(
         QueryPrefix::Transform => handle_transform_query(&query, state),
         QueryPrefix::Prompt => handle_prompt_query(&query, state),
         QueryPrefix::Say => handle_say_query(&query, state),
-        QueryPrefix::Notes => super::notes::handle_notes_query(&query, state),
+        QueryPrefix::Notes | QueryPrefix::Todo | QueryPrefix::Timer | QueryPrefix::Pomodoro => {
+            super::notes::handle_notes_query(&query, state)
+        }
         QueryPrefix::Calc => handle_calc_query(&query, state),
         QueryPrefix::Emoji => handle_emoji_query(&query, state),
         QueryPrefix::Settings => handle_settings_query(state),

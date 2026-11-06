@@ -8,6 +8,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod alert;
 mod app;
 mod app_icons;
 mod brand_icons;
@@ -143,6 +144,10 @@ fn main() -> iced::Result {
     if should_print_version() {
         print_version();
         return Ok(());
+    }
+    if let Some((title, body)) = alert::parse_args(std::env::args()) {
+        apply_renderer_preference(&engine::load_config().general.renderer);
+        return alert::run(title, body);
     }
     let boot_started = std::time::Instant::now();
     launch_perf::init();

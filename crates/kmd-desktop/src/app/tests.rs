@@ -1717,3 +1717,64 @@ fn 메모_키로_열면_메모_입력에서_시작하고_입력_소스를_두어
         .iter()
         .any(|r| r.item.name == "아직 메모가 없습니다"));
 }
+
+#[test]
+fn 할_일_추가와_완료() {
+    let mut app = make_test_app();
+    app.query = ":td 끝낼 일 @2030-01-02 09:00".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "할 일 추가: 끝낼 일");
+    let _ = app.launch_selected();
+
+    app.notes.leave();
+    app.query = ":td".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "끝낼 일");
+    let _ = app.launch_selected();
+    assert!(app.status_message.as_deref().unwrap().contains("완료"));
+    assert!(app.results.iter().all(|r| r.item.name != "끝낼 일"));
+
+    let z = keyboard::Key::Character("z".into());
+    assert!(app
+        .handle_notes_key(&z, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(app.results[0].item.name, "끝낼 일");
+}
+
+#[test]
+fn 타이머_걸고_끄기() {
+    let mut app = make_test_app();
+    app.query = ":timer 10분 라면".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "라면 — 10분");
+    let _ = app.launch_selected();
+
+    app.query = ":timer".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "라면");
+    let del = keyboard::Key::Named(keyboard::key::Named::Delete);
+    assert!(app
+        .handle_notes_key(&del, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(app.results[0].item.name, "돌아가는 타이머가 없습니다");
+}
+
+#[test]
+fn 클립보드_항목에서만_메모_저장_단축키가_먹는다() {
+    let mut app = make_test_app();
+    let s = keyboard::Key::Character("s".into());
+    let ctrl = keyboard::Modifiers::CTRL;
+    app.query = ";".into();
+    app.results = items_to_results(vec![search_routing::clip_item(
+        &clip_hit(7, 1, "글"),
+        false,
+    )]);
+    app.selected = 0;
+    assert!(app.handle_notes_key(&s, &ctrl).is_some());
+    app.results = items_to_results(vec![search_routing::clip_notice("비어", "", false)]);
+    assert!(app.handle_notes_key(&s, &ctrl).is_none(), "안내 행");
+    app.handle_clip_text_for_note(Ok("옮긴 글".into()));
+    assert_eq!(app.status_message.as_deref(), Some("메모로 저장했습니다"));
+    app.handle_clip_text_for_note(Err("만료".into()));
+    assert_eq!(app.status_message.as_deref(), Some("만료"));
+}

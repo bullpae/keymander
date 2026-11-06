@@ -111,7 +111,7 @@
 | D8 | `docs/10_dojo_plan.md:3` | "2026-08-08 확인 — 현재 v0.12.0" | 2026-10-05 / v0.16.8 재확인 (상태는 여전히 미구현) |
 | D9 | `docs/03_plugin_spec.md:75` | §3 Script Plugin이 **정본 스펙처럼** 기술됨 | `plugin/protocol.rs`에 타입만 정의, **`protocol::` 참조 0건**. `loader.rs`는 `discover_plugins`/`default_plugin_dir` 2개 함수뿐. → "스펙만 존재, 미배선" 배너 필수 |
 | D10 | `docs/05_theming.md:128-138` + §3 전체 | "예정 테마 7종(catppuccin×2/nord/tokyo-night/gruvbox/solarized)" | 실제 내장은 **데스크톱 5종**(`kmd-desktop/src/theme.rs:66-166` midnight/obsidian/snow/rose_pine/nord). 문서 목록과 전혀 다르다. 또한 §3이 "TUI 테마"를 전제하는데 **TUI는 `general.theme`를 읽지 않는다**(F15) |
-| D11 | `docs/01_prd.md:328` | 공식 플러그인 kmd-todo/memo/clipboard | clipboard만 **네이티브로** 구현(`;`/`:clip`), 플러그인 형태 아님. todo/memo는 0건 → 2026-11-06 메모도 네이티브로 구현(`:m`), 할 일은 [23](23_notes.md) N2 |
+| D11 | `docs/01_prd.md:328` | 공식 플러그인 kmd-todo/memo/clipboard | clipboard만 **네이티브로** 구현(`;`/`:clip`), 플러그인 형태 아님. todo/memo는 0건 → 2026-11-06 메모·할 일도 네이티브로 구현(`:m`, `:td`, [23](23_notes.md)) |
 
 ## 5. 다음 릴리스 묶음 (2026-10-18 현재)
 

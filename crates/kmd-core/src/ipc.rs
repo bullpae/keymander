@@ -68,6 +68,8 @@ pub enum Request {
     /// 안정 ID의 항목을 붙여넣지 않고 시스템 클립보드에 복사만 한다
     /// (런처 Cmd/Ctrl+Enter — 사용자가 클립보드 교체를 명시한 동작).
     ClipCopyItem { id: u64 },
+    /// 안정 ID의 항목 전체 글을 돌려준다 (클립보드 항목을 메모로, docs/23)
+    ClipText { id: u64 },
     /// 클립보드 히스토리 검색 (흐름 B 런처). 빈 쿼리는 전체(최신순).
     ClipHistory {
         #[serde(default)]
@@ -135,6 +137,8 @@ pub enum Response {
     SearchResults { items: Vec<SearchHit> },
     /// 클립보드 히스토리 검색 결과 (흐름 B)
     ClipHistory { hits: Vec<ClipHit> },
+    /// 클립보드 항목 전체 글
+    ClipText { text: String },
     /// 데몬 상태
     Status {
         uptime_secs: u64,
