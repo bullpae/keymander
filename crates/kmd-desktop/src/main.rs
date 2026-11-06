@@ -145,9 +145,11 @@ fn main() -> iced::Result {
         print_version();
         return Ok(());
     }
-    if let Some((title, body)) = alert::parse_args(std::env::args()) {
-        apply_renderer_preference(&engine::load_config().general.renderer);
-        return alert::run(title, body);
+    if let Some(args) = alert::parse_args(std::env::args()) {
+        let config = engine::load_config();
+        apply_renderer_preference(&config.general.renderer);
+        init_window_transparency(&config);
+        return alert::run(args, theme::from_name(&config.general.theme));
     }
     let boot_started = std::time::Instant::now();
     launch_perf::init();

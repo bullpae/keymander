@@ -18,11 +18,27 @@ const FIRED_KEEP_MS: i64 = 30 * 24 * 3600 * 1000;
 /// 이만큼 늦게 끝난 것은 "늦었다"고 알린다
 const LATE_MS: i64 = 60 * 1000;
 
+/// 알림 창 종류 (`kmd-desktop --alert` 의 셋째 인자)
+pub const ALERT_TIMER: &str = "timer";
+pub const ALERT_FOCUS: &str = "focus";
+pub const ALERT_BREAK: &str = "break";
+pub const ALERT_REMINDER: &str = "reminder";
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Kind {
     Timer,
     Focus,
     Break,
+}
+
+impl Kind {
+    pub fn alert(self) -> &'static str {
+        match self {
+            Self::Timer => ALERT_TIMER,
+            Self::Focus => ALERT_FOCUS,
+            Self::Break => ALERT_BREAK,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

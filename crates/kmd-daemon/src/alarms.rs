@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Local;
-use kmd_core::notes::timers::{plan_fired, Kind, Timer};
+use kmd_core::notes::timers::{plan_fired, Kind, Timer, ALERT_REMINDER};
 use kmd_core::notes::{due_reminders, NoteStore};
 
 use crate::server::{load_config, lower_indexer_thread_priority};
@@ -53,7 +53,7 @@ fn fire(store: &NoteStore, timer: &Timer) {
     let now_ms = now.timestamp_millis();
     let fired = plan_fired(timer, now_ms, store.break_secs());
     tracing::info!("타이머 끝: {}", fired.title);
-    show_alert(&fired.title, &fired.body);
+    show_alert(&fired.title, &fired.body, timer.kind.alert());
     let timers = store.timers();
     if fired.count_focus {
         if let Err(e) = timers.count_focus(&now.format("%Y-%m-%d").to_string()) {
@@ -96,21 +96,26 @@ fn scan_reminders(store: &NoteStore) {
         .map(|(_, title)| title.as_str())
         .collect();
     if titles.len() > MAX_REMINDER_WINDOWS {
-        show_alert(&format!("할 일 {}개", titles.len()), &titles.join(" · "));
+        show_alert(
+            &format!("할 일 {}개", titles.len()),
+            &titles.join(" · "),
+            ALERT_REMINDER,
+        );
     } else {
         for title in titles {
-            show_alert(title, "할 일 시간이 됐습니다");
+            show_alert(title, "할 일 시간이 됐습니다", ALERT_REMINDER);
         }
     }
 }
 
-fn show_alert(title: &str, body: &str) {
+fn show_alert(title: &str, body: &str, kind: &str) {
     use kmd_core::process::HideConsole;
     let exe = crate::keybind::resolve_launch_cmd("kmd-desktop");
     if let Err(e) = std::process::Command::new(&exe)
         .arg(kmd_core::notes::ALERT_ARG)
         .arg(title)
         .arg(body)
+        .arg(kind)
         .hide_console()
         .spawn()
     {
