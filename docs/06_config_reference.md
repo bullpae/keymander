@@ -388,7 +388,7 @@ pass_score = 0.8  # 타이핑 통과 기준 (0~1)
 
 ---
 
-### 4.x [notes] — `:m` 메모 (docs/23)
+### 4.9 [notes] — `:m` 메모 (docs/23)
 
 ```toml
 [notes]
