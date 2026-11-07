@@ -128,6 +128,23 @@ enum Commands {
         #[command(subcommand)]
         action: Option<SayAction>,
     },
+    /// Notes: quick memos saved as Markdown files (same as :m in the launcher)
+    #[command(alias = "m")]
+    Memo {
+        #[command(subcommand)]
+        action: Option<MemoAction>,
+    },
+    /// To-dos: :td in the launcher (add "보고서 @내일 9시" / ls / done)
+    #[command(alias = "td")]
+    Todo {
+        #[command(subcommand)]
+        action: Option<TodoAction>,
+    },
+    /// Timers and pomodoro: :timer and :pomo in the launcher (needs the daemon to ring)
+    Timer {
+        #[command(subcommand)]
+        action: Option<TimerAction>,
+    },
     /// Show version information
     Version,
     /// Upgrade keymander (stops the daemon/launcher, upgrades, restarts the daemon)
@@ -170,6 +187,61 @@ enum SealAction {
         /// Code printed by `kmd dojo seal export` (KMD1-...)
         code: String,
     },
+}
+
+#[derive(Subcommand)]
+enum MemoAction {
+    /// Add a memo: kmd memo add 떠오른 생각 (- reads several lines from stdin)
+    Add {
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// List memos, newest first, optionally only those matching words
+    #[command(alias = "ls")]
+    List {
+        query: Vec<String>,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Print a whole memo (by id or a word only it has)
+    Show { query: String },
+    /// Open a memo in your editor
+    Edit { query: String },
+    /// Move a memo to the .trash folder
+    #[command(alias = "remove")]
+    Rm { query: String },
+    /// Show the notes folder, or move notes to a shared folder (off = back to this device)
+    Dir { path: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum TodoAction {
+    /// Add a to-do: kmd todo add 보고서 쓰기 @내일 9시
+    Add {
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// List open to-dos, soonest first
+    #[command(alias = "ls")]
+    List,
+    /// Mark a to-do done, or open again (by id or a word only it has)
+    Done { query: String },
+}
+
+#[derive(Subcommand)]
+enum TimerAction {
+    /// Start a timer: kmd timer start 10분 라면
+    Start {
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// Start a pomodoro focus; a break follows by itself
+    Pomo { text: Vec<String> },
+    /// List running timers
+    #[command(alias = "ls")]
+    List,
+    /// Stop a running timer (by id or a word in its name)
+    Stop { query: String },
 }
 
 #[derive(Subcommand)]
@@ -500,6 +572,31 @@ fn main() -> color_eyre::Result<()> {
                 PromptAction::List => cmd::prompt::Action::List,
                 PromptAction::Add { name, body } => cmd::prompt::Action::Add { name, body },
                 PromptAction::Remove { name } => cmd::prompt::Action::Remove { name },
+            }))?;
+        }
+        Some(Commands::Memo { action }) => {
+            cmd::memo::run(action.map(|a| match a {
+                MemoAction::Add { text } => cmd::memo::Action::Add { text },
+                MemoAction::List { query, limit } => cmd::memo::Action::List { query, limit },
+                MemoAction::Show { query } => cmd::memo::Action::Show { query },
+                MemoAction::Edit { query } => cmd::memo::Action::Edit { query },
+                MemoAction::Rm { query } => cmd::memo::Action::Remove { query },
+                MemoAction::Dir { path } => cmd::memo::Action::Dir { path },
+            }))?;
+        }
+        Some(Commands::Todo { action }) => {
+            cmd::memo::run_todo(action.map(|a| match a {
+                TodoAction::Add { text } => cmd::memo::TodoAction::Add { text },
+                TodoAction::List => cmd::memo::TodoAction::List,
+                TodoAction::Done { query } => cmd::memo::TodoAction::Done { query },
+            }))?;
+        }
+        Some(Commands::Timer { action }) => {
+            cmd::memo::run_timer(action.map(|a| match a {
+                TimerAction::Start { text } => cmd::memo::TimerAction::Start { text },
+                TimerAction::Pomo { text } => cmd::memo::TimerAction::Pomo { text },
+                TimerAction::List => cmd::memo::TimerAction::List,
+                TimerAction::Stop { query } => cmd::memo::TimerAction::Stop { query },
             }))?;
         }
         Some(Commands::Say { action }) => {

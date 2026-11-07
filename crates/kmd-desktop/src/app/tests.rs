@@ -29,6 +29,7 @@ fn 런처_닫기는_exit_launcher를_거친다() {
     );
     for (name, src) in [
         ("launch.rs", include_str!("launch.rs")),
+        ("notes.rs", include_str!("notes.rs")),
         ("settings.rs", include_str!("settings.rs")),
         ("search_routing.rs", include_str!("search_routing.rs")),
         ("view.rs", include_str!("view.rs")),
@@ -63,7 +64,12 @@ fn make_test_app() -> App {
     // 그 파일들이 결과에 섞이지 않게 끈다
     config.launcher.file_search.engine = "off".into();
     let window_state = WindowState::default();
-    let (app, _task) = App::new_for_test(guard, config, window_state, test_db_path);
+    let (mut app, _task) = App::new_for_test(guard, config, window_state, test_db_path);
+    // 실제 메모 폴더를 건드리지 않는다
+    app.notes = kmd_core::notes::NoteSession::new(kmd_core::notes::NoteStore::new(
+        tmp.join("notes"),
+        false,
+    ));
     app
 }
 
@@ -1621,4 +1627,184 @@ fn 초성으로_앱을_찾는다() {
         app.results.first().map(|r| r.item.name.as_str()),
         Some("카카오톡")
     );
+}
+
+// ── `:m` 메모 (docs/23) ──
+
+#[test]
+fn 메모_저장하면_창을_닫을_길로_가고_목록에_뜬다() {
+    let mut app = make_test_app();
+    app.query = ":m 떠오른 생각".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "새 메모: 떠오른 생각");
+    let _ = app.launch_selected();
+
+    app.notes.leave();
+    app.query = ":m".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "떠오른 생각");
+    assert!(kmd_core::notes::selected_id(&app.results[0].item).is_some());
+}
+
+#[test]
+fn 메모_수정과_삭제와_되돌리기() {
+    let mut app = make_test_app();
+    app.query = ":m 고칠 메모".into();
+    let _ = app.perform_search();
+    let _ = app.launch_selected();
+    app.notes.leave();
+    app.query = ":m".into();
+    let _ = app.perform_search();
+    app.selected = 0;
+
+    let ctrl = keyboard::Modifiers::CTRL;
+    // 한글 입력 중에 눌러도 (ㄷ = E) 수정으로 들어간다
+    let e = keyboard::Key::Character("ㄷ".into());
+    assert!(app.handle_notes_key(&e, &ctrl).is_some());
+    assert_eq!(app.query, ":m 고칠 메모");
+    assert_eq!(app.results[0].item.name, "수정 저장: 고칠 메모");
+
+    app.query = ":m 고친 메모".into();
+    let _ = app.perform_search();
+    let _ = app.launch_selected();
+    assert_eq!(app.query, ":m");
+    assert_eq!(app.results[0].item.name, "고친 메모");
+
+    let d = keyboard::Key::Character("d".into());
+    assert!(app.handle_notes_key(&d, &ctrl).is_some());
+    assert!(app.results.iter().all(|r| r.item.name != "고친 메모"));
+
+    let z = keyboard::Key::Character("z".into());
+    assert!(app.handle_notes_key(&z, &ctrl).is_some());
+    assert_eq!(app.results[0].item.name, "고친 메모");
+
+    // 안내 행에서는 지울 것이 없고, 되돌릴 것이 없으면 다른 단축키로 넘어간다
+    assert!(app.handle_notes_key(&z, &ctrl).is_none());
+    app.query = "vera".into();
+    assert!(app.handle_notes_key(&d, &ctrl).is_none());
+}
+
+#[test]
+fn 메모_수정_중_다른_검색으로_가면_취소() {
+    let mut app = make_test_app();
+    app.query = ":m 그대로".into();
+    let _ = app.perform_search();
+    let _ = app.launch_selected();
+    app.notes.leave();
+    app.query = ":m".into();
+    let _ = app.perform_search();
+    let e = keyboard::Key::Character("e".into());
+    assert!(app
+        .handle_notes_key(&e, &keyboard::Modifiers::CTRL)
+        .is_some());
+
+    app.query = String::new();
+    let _ = app.perform_search();
+    app.query = ":m 새것".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "새 메모: 새것");
+}
+
+#[test]
+fn 메모_키로_열면_메모_입력에서_시작하고_입력_소스를_두어둔다() {
+    let mut app = make_test_app();
+    assert!(!app.keep_input_source);
+    let _ = app.start_memo();
+    assert!(app.keep_input_source);
+    assert_eq!(app.query, ":m ");
+    assert!(app
+        .results
+        .iter()
+        .any(|r| r.item.name == "아직 메모가 없습니다"));
+}
+
+#[test]
+fn 할_일_추가와_완료() {
+    let mut app = make_test_app();
+    app.query = ":td 끝낼 일 @2030-01-02 09:00".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "할 일 추가: 끝낼 일");
+    let _ = app.launch_selected();
+
+    app.notes.leave();
+    app.query = ":td".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "끝낼 일");
+    let _ = app.launch_selected();
+    assert!(app.status_message.as_deref().unwrap().contains("완료"));
+    assert!(app.results.iter().all(|r| r.item.name != "끝낼 일"));
+
+    let z = keyboard::Key::Character("z".into());
+    assert!(app
+        .handle_notes_key(&z, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(app.results[0].item.name, "끝낼 일");
+}
+
+#[test]
+fn 타이머_걸고_끄기() {
+    let mut app = make_test_app();
+    app.query = ":timer 10분 라면".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "라면 — 10분");
+    let _ = app.launch_selected();
+
+    app.query = ":timer".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "라면");
+    let del = keyboard::Key::Named(keyboard::key::Named::Delete);
+    assert!(app
+        .handle_notes_key(&del, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(app.results[0].item.name, "돌아가는 타이머가 없습니다");
+}
+
+#[test]
+fn 클립보드_항목에서만_메모_저장_단축키가_먹는다() {
+    let mut app = make_test_app();
+    let s = keyboard::Key::Character("s".into());
+    let ctrl = keyboard::Modifiers::CTRL;
+    app.query = ";".into();
+    app.results = items_to_results(vec![search_routing::clip_item(
+        &clip_hit(7, 1, "글"),
+        false,
+    )]);
+    app.selected = 0;
+    assert!(app.handle_notes_key(&s, &ctrl).is_some());
+    app.results = items_to_results(vec![search_routing::clip_notice("비어", "", false)]);
+    assert!(app.handle_notes_key(&s, &ctrl).is_none(), "안내 행");
+    app.handle_clip_text_for_note(Ok("옮긴 글".into()));
+    assert_eq!(app.status_message.as_deref(), Some("메모로 저장했습니다"));
+    app.handle_clip_text_for_note(Err("만료".into()));
+    assert_eq!(app.status_message.as_deref(), Some("만료"));
+}
+
+#[test]
+fn 메모_찾기는_엔터가_복사고_새_메모를_만들지_않는다() {
+    let mut app = make_test_app();
+    app.query = ":m NAS 정보".into();
+    let _ = app.perform_search();
+    let _ = app.launch_selected();
+    app.notes.leave();
+
+    app.query = ":ms nas".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results.len(), 1);
+    assert_eq!(app.results[0].item.name, "NAS 정보");
+    assert_eq!(app.selected, 0);
+
+    app.query = ":ms 없는말".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results[0].item.name, "맞는 메모가 없습니다");
+    let _ = app.launch_selected();
+    app.notes.leave();
+    app.query = ":ms".into();
+    let _ = app.perform_search();
+    assert_eq!(app.results.len(), 1, "Enter 를 눌러도 메모가 늘지 않는다");
+
+    let d = keyboard::Key::Character("d".into());
+    assert!(app
+        .handle_notes_key(&d, &keyboard::Modifiers::CTRL)
+        .is_some());
+    assert_eq!(app.results[0].item.name, "맞는 메모가 없습니다");
 }

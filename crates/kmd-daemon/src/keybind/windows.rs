@@ -1047,6 +1047,10 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
     let Some(vkey) = vk_to_vkey(vk) else {
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     };
+    if is_down {
+        // kb.time 은 GetTickCount 기준 — 이벤트가 만들어진 뒤 훅이 받기까지
+        super::note_key_down(Some(u64::from(GetTickCount().wrapping_sub(kb.time))));
+    }
 
     let state = match HOOK_STATE.get() {
         Some(s) => s,

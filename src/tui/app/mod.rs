@@ -28,6 +28,7 @@ use super::ui;
 mod drill;
 mod execute;
 mod input;
+mod notes;
 mod run;
 mod scope;
 mod search;

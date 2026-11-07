@@ -223,3 +223,30 @@ kmd keymap stats sync off
 - **Windows 백신 예외** — 프로세스 생성이 유독 크면 Defender 실시간 검사가 매번 실행 파일을 훑는 것이
   흔한 원인이다.
 - **renderer** — 창 준비가 크면 `general.renderer = "software"` 로 하루 재 보고 비교한다.
+
+### 7.3 단축키 경로 기록 — 키를 누른 순간부터
+
+2026-11-07 분석: 사용자가 맥·윈도우에서 "하루 첫 실행이 5초 넘게 걸린다"고 했지만, 맥 기록 380회에서
+`main()`→창 준비가 1초를 넘은 건 한 번뿐이었다. 지연은 측정 밖에 있었다.
+
+- **키→데몬 구간이 비어 있었다.** 이제 훅이 물리 keyDown 마다 시각과 OS 타임스탬프 기준 지연을 남기고,
+  Launch 가 `KMD_LAUNCH_TRACE` 로 자식에게 넘긴다. 런처는 desktop.log 에
+  `단축키 경로: 키→훅 2ms · 훅→실행 1ms · 전경 앱 조회 0ms · 프로세스 생성 15ms (창을 띄움)` 을 남긴다.
+  macOS 는 `CGEventTimestamp`(Apple Silicon 에선 mach tick 으로 오기도 해 둘 다 해석),
+  Windows 는 `KBDLLHOOKSTRUCT.time`(GetTickCount) 를 쓴다.
+- **창을 차지한 실행만 기록됐다.** 실행이 막혀 여러 번 누르면 늦게 누른 빠른 값만 남았다. 기존 창을 닫고
+  끝나는 실행도 같은 줄을 `(기존 창을 닫음)` 으로 남긴다.
+- **첫 프레임이 없었다.** iced 는 창을 숨긴 채 만들고 첫 UI 를 지은 뒤 보이게 한다. `첫 프레임 Nms` 를 남긴다
+  (`window::frames()` 를 첫 프레임까지만 구독).
+- **데몬 로그가 없었다.** 데몬은 stdout 으로만 로그를 냈고 launchd 아래에서는 버려졌다(2026-09 이후 daemon.log
+  정지). 이제 `start` 는 `daemon.log` 에 직접 쓴다(백그라운드 스레드, 5MB 넘으면 시작 때 `.log.1` 로).
+
+느려지면 그 시각 근처의 `단축키 경로:` 줄을 본다. 줄이 아예 없으면 키가 데몬에 닿지 않은 것이다(보안 입력 등).
+
+### 7.4 런처 예열
+
+새 바이너리를 처음 실행하면 macOS 가 서명 검사(amfid)와 Gatekeeper 스캔을 한다 — 실측 0.4~0.6초, 이후 5~14ms.
+배포 다음 날 아침 첫 실행에서 실제로 걸렸다. Windows 는 백신 검사가 같은 자리다. 데몬이 시작할 때(업데이트
+직후 포함)와 절전에서 깬 직후 `kmd-desktop --version` 을 한 번 띄워 그 비용을 미리 치른다. 절전은 절전을 포함하는
+시계와 빼는 시계의 차이로 안다(macOS·Linux: 벽시계 대 `Instant`, Windows: `GetTickCount64` 대
+`QueryUnbiasedInterruptTime`). 폰트·Metal 같은 창 쪽 콜드 비용은 그대로다 — 캐시를 비운 실측 약 1초.

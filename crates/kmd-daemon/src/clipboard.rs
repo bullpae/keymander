@@ -244,7 +244,7 @@ static PREV_APP_TARGET: AtomicIsize = AtomicIsize::new(0);
 /// 실행만 해당한다. 다른 launch 바인딩(브라우저·에디터 등)이 캡처하면 런처 사용
 /// 중 흐름 B의 붙여넣기 대상이 엉뚱한 앱으로 덮어써진다.
 pub fn launch_captures_foreground(cmd: &str) -> bool {
-    cmd == "kmd-desktop"
+    crate::keybind::launch_parts(cmd).0 == "kmd-desktop"
 }
 
 /// 런처(kmd-desktop)를 띄우기 직전에 호출 — 현재 전경 앱을 기억한다.
@@ -326,6 +326,13 @@ pub fn copy_item(id: u64) -> Result<(), String> {
     board
         .set_text(entry.text)
         .map_err(|e| format!("클립보드 쓰기 실패: {e}"))
+}
+
+/// 안정 ID의 항목 전체 글. 클립보드는 건드리지 않는다
+pub fn item_text(id: u64) -> Result<String, String> {
+    entry_by_id(id)
+        .map(|entry| entry.text)
+        .ok_or_else(|| "선택한 클립보드 항목이 만료되었습니다".to_string())
 }
 
 /// 복원 판단 (클립보드 스왑 경로): 우리가 넣은 임시 값이 **여전히 현재

@@ -23,6 +23,10 @@ fn test_state() -> AppState {
         drill_path: None,
         status_message: None,
         scope_undo: None,
+        notes: kmd_core::notes::NoteSession::new(kmd_core::notes::NoteStore::new(
+            std::env::temp_dir().join(format!("kmd_tui_test_notes_{}", std::process::id())),
+            false,
+        )),
         settings: None,
         is_portable: false,
         use_emoji: true,
@@ -798,4 +802,44 @@ fn tui_도움말은_클립보드_히스토리_항목을_숨긴다() {
         }),
         "클립보드 도움말 항목이 TUI에 노출됨"
     );
+}
+
+#[test]
+fn 메모_키_흐름() {
+    let dir = std::env::temp_dir().join(format!("kmd_tui_notes_flow_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = kmd_core::notes::NoteStore::new(&dir, false);
+    let mut state = test_state();
+    state.notes = kmd_core::notes::NoteSession::new(store.clone());
+    let mut engine = SearchEngine::new();
+    let press = |st: &mut AppState, e: &mut SearchEngine, code, mods| {
+        handle_key(st, KeyEvent::new(code, mods), e, None)
+    };
+    let none = KeyModifiers::NONE;
+    let ctrl = KeyModifiers::CONTROL;
+
+    for c in ":m hello".chars() {
+        press(&mut state, &mut engine, KeyCode::Char(c), none);
+    }
+    assert_eq!(state.results[0].item.name, "새 메모: hello");
+    press(&mut state, &mut engine, KeyCode::Enter, none);
+    assert_eq!(state.query, ":m ", "TUI 는 닫지 않고 다음 메모를 받는다");
+    assert_eq!(state.status_message.as_deref(), Some("메모를 저장했습니다"));
+    assert_eq!(store.load().unwrap()[0].body, "hello");
+    assert_eq!(state.results[0].item.name, "hello");
+
+    press(&mut state, &mut engine, KeyCode::Char('e'), ctrl);
+    assert_eq!(state.query, ":m hello");
+    press(&mut state, &mut engine, KeyCode::Char('!'), none);
+    press(&mut state, &mut engine, KeyCode::Enter, none);
+    let notes = store.load().unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].body, "hello!");
+
+    assert_eq!(state.results[0].item.name, "hello!");
+    press(&mut state, &mut engine, KeyCode::Char('d'), ctrl);
+    assert!(store.load().unwrap().is_empty());
+    press(&mut state, &mut engine, KeyCode::Char('z'), ctrl);
+    assert_eq!(store.load().unwrap()[0].body, "hello!");
+    let _ = std::fs::remove_dir_all(&dir);
 }
