@@ -204,6 +204,8 @@ pub struct App {
 
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
+    /// 첫 프레임을 기록했는지 — 기록하면 프레임 구독을 끊는다 (launch_perf)
+    first_frame_seen: bool,
     warmup_token: u64,
 }
 
@@ -244,6 +246,8 @@ pub enum Message {
     DelayedRefocus,
     /// 백그라운드 아이콘 프리워밍 완료 → 캐시된 아이콘으로 리렌더 유도
     IconsReady,
+    /// 창의 첫 프레임 (실행 지연 계측)
+    FirstFrame,
     /// 데몬 자동시작 상태 조회 완료
     AutostartStatusLoaded(Result<bool, String>),
     /// 데몬 자동시작 토글 완료
@@ -433,6 +437,7 @@ impl App {
             say_store: say::default_say_store(),
             say_revealed: None,
             full_warmup_started: false,
+            first_frame_seen: false,
             warmup_token: 0,
         };
 
@@ -458,6 +463,7 @@ impl App {
                 | Message::EngineSwapSettled
                 | Message::QuickEngineReady
                 | Message::IconsReady
+                | Message::FirstFrame
                 | Message::AutostartStatusLoaded(_)
                 | Message::AutostartToggleFinished(_)
                 | Message::ScopeReindexed(_)
@@ -752,6 +758,11 @@ impl App {
             Message::EngineSwapSettled => self.handle_engine_swap_settled(),
             Message::QuickEngineReady => self.handle_quick_engine_ready(),
             Message::IconsReady => Task::none(),
+            Message::FirstFrame => {
+                self.first_frame_seen = true;
+                crate::launch_perf::mark_frame();
+                Task::none()
+            }
             Message::AutostartStatusLoaded(result) => self.handle_autostart_status_loaded(result),
             Message::AutostartToggleFinished(result) => {
                 self.handle_autostart_toggle_finished(result)
@@ -824,7 +835,14 @@ impl App {
 
         let window_sub = window::events().map(|(id, event)| Message::WindowEvent(id, event));
 
-        Subscription::batch([keyboard_sub, quit_sub, window_sub])
+        // 첫 프레임만 — 기록한 뒤에는 구독하지 않는다 (매 프레임 메시지를 만들지 않게)
+        let frame_sub = if self.first_frame_seen {
+            Subscription::none()
+        } else {
+            window::frames().map(|_| Message::FirstFrame)
+        };
+
+        Subscription::batch([keyboard_sub, quit_sub, window_sub, frame_sub])
     }
 
     pub fn theme(&self) -> iced::Theme {

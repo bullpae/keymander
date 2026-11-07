@@ -540,6 +540,7 @@ pub fn run() -> color_eyre::Result<()> {
     spawn_index_refresher(engine.clone(), shutdown.clone(), rebuild_immediately);
     crate::fs_watch::spawn(shutdown.clone());
     crate::alarms::spawn(shutdown.clone());
+    crate::prewarm::spawn(shutdown.clone());
     spawn_key_stats_saver(shutdown.clone());
 
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.

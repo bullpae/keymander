@@ -31,6 +31,12 @@ pub const HOLD_BUCKETS: usize = 11;
 /// 데몬이 Launch 로 띄운 자식에게 실행 시각(유닉스 ms)을 넘기는 환경 변수 (§7)
 pub const LAUNCH_AT_ENV: &str = "KMD_LAUNCH_AT_MS";
 
+/// 데몬이 자식에게 넘기는 단축키 경로 지연 — 런처가 desktop.log 에 그대로 남긴다 (§7.3)
+///
+/// 형식: `키→훅 3ms · 훅→실행 2ms · 전경 앱 조회 1ms` 처럼 사람이 읽는 한 줄.
+/// 데몬 로그만으로는 런처 쪽 시각과 맞춰 보기 어려워 한 줄에 모은다.
+pub const LAUNCH_TRACE_ENV: &str = "KMD_LAUNCH_TRACE";
+
 /// 지연 칸의 위 경계 (ms) — 마지막 칸은 그 이상
 pub const PERF_EDGES: [u64; 10] = [25, 50, 100, 150, 200, 300, 500, 800, 1200, 2000];
 pub const PERF_BUCKETS: usize = PERF_EDGES.len() + 1;

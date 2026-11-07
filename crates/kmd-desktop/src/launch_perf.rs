@@ -9,7 +9,7 @@
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use kmd_core::keystats::{perf_bucket, LAUNCH_AT_ENV};
+use kmd_core::keystats::{perf_bucket, LAUNCH_AT_ENV, LAUNCH_TRACE_ENV};
 
 /// 이보다 긴 "프로세스 생성" 은 시계가 어긋났거나 남은 환경 변수다 — 버린다
 const MAX_SPAWN_MS: u64 = 60_000;
@@ -18,7 +18,10 @@ struct Perf {
     start: Instant,
     /// 데몬 실행 → 이 프로세스 시작 (단축키로 띄웠을 때만)
     spawn_ms: Option<u64>,
+    /// 데몬이 넘긴 단축키 경로 지연 (키→훅·훅→실행) — 사람이 읽는 한 줄
+    trace: Option<String>,
     window_ms: Option<u64>,
+    frame_logged: bool,
     engine_ms: Option<u64>,
     record: bool,
     done: bool,
@@ -40,12 +43,16 @@ pub fn init() {
         .and_then(|v| v.parse::<u64>().ok())
         .map(|at| now.saturating_sub(at))
         .filter(|&ms| ms <= MAX_SPAWN_MS);
+    let trace = std::env::var(LAUNCH_TRACE_ENV).ok();
     // 런처가 띄우는 앱에 물려주지 않는다
     std::env::remove_var(LAUNCH_AT_ENV);
+    std::env::remove_var(LAUNCH_TRACE_ENV);
     *lock() = Some(Perf {
         start: Instant::now(),
         spawn_ms,
+        trace,
         window_ms: None,
+        frame_logged: false,
         engine_ms: None,
         record: false,
         done: false,
@@ -53,10 +60,43 @@ pub fn init() {
 }
 
 /// 설정을 읽은 뒤 — 손버릇 통계가 켜져 있을 때만 DB 에 남긴다
+///
+/// 로그가 준비된 뒤라 여기서 단축키 경로를 남긴다.
 pub fn enable(stats: bool) {
     if let Some(p) = lock().as_mut() {
         p.record = stats;
+        log_path_line(p, "창을 띄움");
     }
+}
+
+/// 이미 떠 있는 런처를 닫고 끝나는 실행 — 이 누름도 지연 기록에 남긴다.
+/// 예전엔 창을 차지한 실행만 기록돼, 실행이 막혀 여러 번 누른 경우 늦게 누른 빠른 값만 남았다.
+pub fn log_toggle_exit() {
+    if let Some(p) = lock().as_ref() {
+        log_path_line(p, "기존 창을 닫음");
+    }
+}
+
+/// 단축키로 띄웠을 때만 — `단축키 경로: 키→훅 2ms · 훅→실행 1ms · … · 프로세스 생성 15ms (창을 띄움)`
+fn log_path_line(p: &Perf, outcome: &str) {
+    let Some(spawn) = p.spawn_ms else {
+        return;
+    };
+    let trace = p.trace.as_deref().unwrap_or("데몬 기록 없음");
+    tracing::info!("단축키 경로: {trace} · 프로세스 생성 {spawn}ms ({outcome})");
+}
+
+/// 창의 첫 프레임 — 창 id 이후에 실제로 그려지기까지 (한 번만 남긴다)
+pub fn mark_frame() {
+    let mut guard = lock();
+    let Some(p) = guard.as_mut() else {
+        return;
+    };
+    if p.frame_logged {
+        return;
+    }
+    p.frame_logged = true;
+    tracing::info!("첫 프레임 {}ms", p.start.elapsed().as_millis());
 }
 
 /// 창 id 를 얻었다

@@ -210,6 +210,7 @@ fn main() -> iced::Result {
     let guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
         kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
         kmd_core::single_instance::InstanceAction::SignalledExisting => {
+            launch_perf::log_toggle_exit();
             tracing::info!("Signalled existing desktop instance to quit — exiting");
             return Ok(());
         }

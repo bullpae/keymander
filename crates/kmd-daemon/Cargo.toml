@@ -21,6 +21,7 @@ serde_json = "1"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # Error handling
 color-eyre = "0.6"
@@ -57,6 +58,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     # 훅 워치독의 GetTickCount (훅 생존 하트비트)
     "Win32_System_SystemInformation",
+    # 절전 제외 시계 QueryUnbiasedInterruptTime (prewarm 절전 복귀 감지)
+    "Win32_System_WindowsProgramming",
     # 볼륨 분리 알림을 받을 숨은 창의 WNDCLASSW (fs_watch, hbrBackground 필드)
     "Win32_Graphics_Gdi",
 ] }

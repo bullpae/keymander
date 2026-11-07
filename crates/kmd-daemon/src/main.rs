@@ -10,6 +10,7 @@ mod clipboard;
 mod fs_watch;
 mod keybind;
 mod location;
+mod prewarm;
 mod server;
 // Windows 붙여넣기 주입/민감정보 정책(순수 로직) — 모든 플랫폼에서 컴파일·
 // 테스트되고 실제 사용은 clipboard.rs의 cfg(windows) 경로뿐이라 그 외에선
@@ -21,16 +22,57 @@ use color_eyre::Result;
 use kmd_core::ipc;
 use std::env;
 
-fn main() -> Result<()> {
-    color_eyre::install()?;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+/// 로그 파일이 이보다 크면 시작할 때 `.1` 로 밀어낸다 (한 세대만 보관)
+const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
 
+/// `start` 일 때만 로그 파일을 연다 — launchd·작업 스케줄러 아래에서는 stdout 이
+/// 버려져 데몬 기록이 남지 않았다 (2026-09 이후 daemon.log 가 멈춰 있었음)
+fn open_log_file() -> Option<std::fs::File> {
+    let path = ipc::log_file_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+}
+
+fn main() -> Result<()> {
+    use tracing_subscriber::prelude::*;
+
+    color_eyre::install()?;
     let args: Vec<String> = env::args().collect();
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("start");
+
+    // 파일 쓰기는 백그라운드 스레드로 — 키 훅 스레드가 디스크 I/O 로 멈추지 않게
+    let (file_writer, _log_guard) = match (command == "start").then(open_log_file).flatten() {
+        Some(file) => {
+            let (writer, guard) = tracing_appender::non_blocking(file);
+            (Some(writer), Some(guard))
+        }
+        None => (None, None),
+    };
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        // 파일에 쓰는 동안 stdout 은 터미널일 때만 — `kmd daemon start` 는 stdout 을 같은
+        // daemon.log 로 돌려 두므로 그대로 두면 모든 줄이 두 번 남는다
+        .with(
+            (file_writer.is_none() || std::io::IsTerminal::is_terminal(&std::io::stdout()))
+                .then(tracing_subscriber::fmt::layer),
+        )
+        .with(file_writer.map(|w| {
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(w)
+        }))
+        .init();
 
     match command {
         "start" => {
