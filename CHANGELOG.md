@@ -22,6 +22,9 @@ All notable changes to keymander are documented here.
   늦게라도 알린다. CLI: `kmd timer`.
 - **뽀모도로** (docs/23) — `:pomo` 로 집중 25분을 시작하고 끝나면 휴식 5분이 저절로 걸린다. 횟수는 할 일에 `🍅3` 처럼 쌓인다. `[notes] focus_minutes`, `break_minutes`.
 
+### Fixed
+- 데몬이 launchd·작업 스케줄러 아래에서 로그를 남기지 않던 문제 — 이제 `daemon.log` 에 직접 쓴다.
+
 ## [0.19.2] — 2026-10-28
 
 ### Added
@@ -33,7 +36,6 @@ All notable changes to keymander are documented here.
   이름에 그대로 든 결과가 같은 자리면 앞에 온다. 여러 단어면 마지막 단어만. 옛·새 엔진 모두.
 
 ### Fixed
-- 데몬이 launchd·작업 스케줄러 아래에서 로그를 남기지 않던 문제 — 이제 `daemon.log` 에 직접 쓴다.
 - **Windows: 데몬이 VeraCrypt 마운트 해제를 막던 문제** — 본문 색인 감시가 검색 폴더 핸들을 열어 두어 해제가
   "사용 중"으로 실패했다. 해제 직전 VeraCrypt 가 보내는 알림을 받아 그 드라이브의 감시를 바로 푼다.
 - **다시 마운트한 검색 폴더를 감시하지 않던 문제** — 사라졌던 검색 폴더가 다시 나타나면 10초 안에 다시 감시하고
