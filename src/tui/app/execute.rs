@@ -212,6 +212,9 @@ pub(super) fn execute_selected(
         }
         Activation::PromptCommit => commit_prompt_command(state, engine, db),
         Activation::SayCommit(target) => commit_say_command(state, engine, db, target),
+        Activation::NoteCommit(target) => {
+            super::notes::commit_note_command(state, engine, db, target)
+        }
         // :t 실행 — 검색이 아니라 여기서 연다 (타이핑 중 브라우저가 열리지 않게)
         Activation::TransformRun => run_transform(state),
         // 클립보드 히스토리·데스크톱 설정은 TUI에 없다 — 안내 항목과 같이 무시

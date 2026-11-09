@@ -40,6 +40,8 @@ pub struct AppState {
     pub status_message: Option<String>,
     /// `:scope`에서 방금 뺀 폴더 — Ctrl+Z로 되돌린다 (docs/18)
     pub(super) scope_undo: Option<PathBuf>,
+    /// `:m` 메모 (docs/23)
+    pub(super) notes: kmd_core::notes::NoteSession,
     /// Settings modal (None = hidden, Some = active)
     pub settings: Option<SettingsState>,
     /// Portable mode indicator

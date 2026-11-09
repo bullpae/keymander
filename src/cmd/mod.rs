@@ -8,6 +8,7 @@ pub mod history;
 pub mod index;
 pub mod keymap;
 pub mod launch;
+pub mod memo;
 pub mod plugin;
 pub mod portable;
 pub mod prompt;

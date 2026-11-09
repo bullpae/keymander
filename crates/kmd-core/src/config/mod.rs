@@ -40,6 +40,8 @@ pub struct Config {
     pub clipboard: ClipboardConfig,
     /// `:say` 입버릇 데스크톱 (docs/21)
     pub say: crate::say::SayConfig,
+    /// `:m` 메모 (docs/23)
+    pub notes: crate::notes::NotesConfig,
 
     /// Config file path (excluded from serialization)
     #[serde(skip)]

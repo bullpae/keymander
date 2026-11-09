@@ -366,27 +366,47 @@ pub fn resolve_launch_cmd(name: &str) -> String {
     safe_name.to_string()
 }
 
+/// `launch:` 값 → (프로그램 이름, 인자). 이름에 공백이 있는 프로그램이 있을 수 있어
+/// 일반 분리는 하지 않고, 런처의 메모 인자만 알아본다.
+pub(crate) fn launch_parts(cmd: &str) -> (&str, Option<&'static str>) {
+    let memo = kmd_core::notes::MEMO_ARG;
+    match cmd.strip_suffix(memo).map(str::trim_end) {
+        Some("kmd-desktop") => ("kmd-desktop", Some(memo)),
+        _ => (cmd, None),
+    }
+}
+
 /// Launch 액션 실행 — 느린 worker 에서 부른다. `delay` 뒤 별도 스레드에서 띄운다.
 ///
 /// 자식에게 실행 시각(`KMD_LAUNCH_AT_MS`)을 넘긴다. 데스크톱 런처는 이것으로
 /// 프로세스 생성·창·엔진 준비까지의 지연을 재어 손버릇 통계에 남긴다 (docs/19 §7).
 pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
+    // 마지막 물리 keyDown(= Launch 를 일으킨 키) 이후 여기까지 — 큐·워커 대기
+    let key = last_key_down();
+    let hook_to_here = key.map(|k| k.at.elapsed().as_millis() as u64);
     // 런처가 포커스를 뺏기 전에 현재 전경 앱을 기억한다 (docs/12 흐름 B —
     // 나중에 클립보드 항목을 그 앱에 붙여넣기 위함). 다른 launch 바인딩이
     // 런처 사용 중 붙여넣기 대상을 덮어쓰지 않도록 데스크톱 런처를 여는
     // 액션에서만 캡처한다.
+    let capture_started = std::time::Instant::now();
     if crate::clipboard::launch_captures_foreground(cmd) {
         crate::clipboard::capture_foreground_app();
     }
-    let resolved = resolve_launch_cmd(cmd);
+    let trace = launch_trace(
+        key.and_then(|k| k.os_lag_ms),
+        hook_to_here,
+        capture_started.elapsed().as_millis() as u64,
+    );
+    let (name, arg) = launch_parts(cmd);
+    let resolved = resolve_launch_cmd(name);
     // 런처가 아직 뜨는 중이면 또 띄우지 않는다. 백신 검사로 프로세스 생성이 수 초 막히는 동안
     // 누른 횟수만큼 프로세스가 쌓였다가 한꺼번에 떠서 서로 토글해 꺼 버린다.
     let track = crate::clipboard::launch_captures_foreground(cmd);
     if track && !LAUNCHER_STARTING.try_begin(std::time::Instant::now()) {
-        tracing::info!("런처가 아직 뜨는 중 — 다시 띄우지 않음: {resolved}");
+        tracing::info!("런처가 아직 뜨는 중 — 다시 띄우지 않음: {resolved} ({trace})");
         return;
     }
-    tracing::info!("프로그램 실행: {resolved}");
+    tracing::info!("프로그램 실행: {resolved} ({trace})");
     std::thread::spawn(move || {
         use kmd_core::process::HideConsole;
         if !delay.is_zero() {
@@ -396,7 +416,9 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
         match std::process::Command::new(&resolved)
+            .args(arg)
             .env(kmd_core::keystats::LAUNCH_AT_ENV, at.to_string())
+            .env(kmd_core::keystats::LAUNCH_TRACE_ENV, &trace)
             .hide_console()
             .spawn()
         {
@@ -411,6 +433,52 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
             LAUNCHER_STARTING.finish();
         }
     });
+}
+
+// ── 단축키 경로 지연 (docs/19 §7.3) ─────────────────────────────────────────
+//
+// 런처 쪽 계측은 `main()` 부터라, 키를 누른 뒤 데몬이 실행을 결정하기까지는 비어
+// 있었다. 훅이 물리 keyDown 마다 시각을 남기고, Launch 가 그것을 읽어 자식에게 넘긴다.
+
+/// 마지막 물리 keyDown
+#[derive(Clone, Copy)]
+pub(crate) struct KeyStamp {
+    /// 훅 콜백이 받은 시각
+    pub at: std::time::Instant,
+    /// OS 가 키 이벤트를 만든 뒤 훅이 받기까지 (OS 타임스탬프로 계산, 모르면 None)
+    pub os_lag_ms: Option<u64>,
+}
+
+static LAST_KEY_DOWN: Mutex<Option<KeyStamp>> = Mutex::new(None);
+
+/// 훅 콜백에서 keyDown 마다 부른다 — 막히지 않게 try_lock 만 쓴다
+pub(crate) fn note_key_down(os_lag_ms: Option<u64>) {
+    if let Ok(mut last) = LAST_KEY_DOWN.try_lock() {
+        *last = Some(KeyStamp {
+            at: std::time::Instant::now(),
+            os_lag_ms,
+        });
+    }
+}
+
+fn last_key_down() -> Option<KeyStamp> {
+    *LAST_KEY_DOWN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 이보다 긴 값은 계산이 틀린 것으로 본다 (시계 단위 착오·오래된 기록)
+const MAX_TRACE_MS: u64 = 60_000;
+
+/// 사람이 읽는 한 줄 — 데몬 로그와 런처 로그에 같은 글을 남긴다
+fn launch_trace(os_lag: Option<u64>, hook_to_launch: Option<u64>, capture: u64) -> String {
+    let fmt = |v: Option<u64>| match v.filter(|&ms| ms <= MAX_TRACE_MS) {
+        Some(ms) => format!("{ms}ms"),
+        None => "?".to_string(),
+    };
+    format!(
+        "키→훅 {} · 훅→실행 {} · 전경 앱 조회 {capture}ms",
+        fmt(os_lag),
+        fmt(hook_to_launch)
+    )
 }
 
 /// 런처 실행 중복 막기 — 띄운 프로세스가 입력을 받을 수 있게 될 때까지(창 생성) "뜨는 중"
@@ -1371,11 +1439,29 @@ mod tests {
 
     #[test]
     fn test_parse_action_launch() {
+        assert_eq!(
+            launch_parts("kmd-desktop --memo"),
+            ("kmd-desktop", Some("--memo"))
+        );
+        assert_eq!(launch_parts("kmd-desktop"), ("kmd-desktop", None));
+        assert_eq!(launch_parts("other --memo"), ("other --memo", None));
         let action = parse_action("launch:kmd-desktop").unwrap();
         match action {
             BindAction::Launch(cmd) => assert_eq!(cmd, "kmd-desktop"),
             _ => panic!("launch 예상"),
         }
+    }
+
+    #[test]
+    fn 실행_경로는_모르는_값과_튀는_값을_물음표로_적는다() {
+        assert_eq!(
+            launch_trace(Some(3), Some(1_200), 0),
+            "키→훅 3ms · 훅→실행 1200ms · 전경 앱 조회 0ms"
+        );
+        assert_eq!(
+            launch_trace(None, Some(MAX_TRACE_MS + 1), 2),
+            "키→훅 ? · 훅→실행 ? · 전경 앱 조회 2ms"
+        );
     }
 
     #[test]

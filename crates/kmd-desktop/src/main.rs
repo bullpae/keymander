@@ -8,6 +8,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod alert;
 mod app;
 mod app_icons;
 mod brand_icons;
@@ -144,6 +145,12 @@ fn main() -> iced::Result {
         print_version();
         return Ok(());
     }
+    if let Some(args) = alert::parse_args(std::env::args()) {
+        let config = engine::load_config();
+        apply_renderer_preference(&config.general.renderer);
+        init_window_transparency(&config);
+        return alert::run(args, theme::from_name(&config.general.theme));
+    }
     let boot_started = std::time::Instant::now();
     launch_perf::init();
 
@@ -203,6 +210,7 @@ fn main() -> iced::Result {
     let guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
         kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
         kmd_core::single_instance::InstanceAction::SignalledExisting => {
+            launch_perf::log_toggle_exit();
             tracing::info!("Signalled existing desktop instance to quit — exiting");
             return Ok(());
         }

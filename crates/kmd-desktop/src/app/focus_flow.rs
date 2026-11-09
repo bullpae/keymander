@@ -38,12 +38,13 @@ impl App {
             crate::platform::apply_native_rounded_corners(raw_id);
         }
         crate::platform::force_foreground(raw_id);
-        if self.reset_ime_on_launch {
+        if self.reset_ime_on_launch && !self.keep_input_source {
             crate::platform::force_english_ime(raw_id);
         }
         // 리사이즈 잔상 교정 (macOS CAMetalLayer) — 창이 살아 있는 지금이 가장 이른 시점.
         let stabilize = self.handle_stabilize_surface_layer(0);
-        let rest = if self.query.is_empty() {
+        // `--memo` 는 입력이 차 있어도 처음 여는 창이다
+        let rest = if self.query.is_empty() || self.keep_input_source {
             let focus = self.request_focus();
             #[cfg(target_os = "windows")]
             {
@@ -85,7 +86,9 @@ impl App {
 
     pub(super) fn handle_ensure_focus(&mut self, attempt: u8) -> Task<Message> {
         self.log_ime_state("EnsureFocus:start");
-        if attempt > MAX_FOCUS_RETRIES || !self.query.is_empty() {
+        // `--memo` 는 시작 입력이 있으니, 사용자가 치기 시작했는지는 그 입력과 비교한다
+        let typing = self.query != self.boot_query();
+        if attempt > MAX_FOCUS_RETRIES || typing {
             self.log_ime_state("EnsureFocus:skip");
             return Task::none();
         }
@@ -280,6 +283,15 @@ impl App {
 // ─── 포커스 요청 ──────────────────────────────────────────────────────────────
 
 impl App {
+    /// 처음 연 창의 입력
+    fn boot_query(&self) -> &'static str {
+        if self.keep_input_source {
+            kmd_core::notes::MEMO_SEED
+        } else {
+            ""
+        }
+    }
+
     /// 부팅 안정화 구간(첫 포커스 후 1초 이내) 여부
     pub(super) fn is_boot_settled(&self) -> bool {
         self.boot_focus_done && self.app_started_at.elapsed() < Duration::from_millis(1000)

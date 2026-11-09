@@ -65,6 +65,7 @@ extern "C" {
         user_info: *mut c_void,
     ) -> CFMachPortRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    fn CGEventGetTimestamp(event: CGEventRef) -> u64;
     fn CGEventSourceCreate(state_id: i32) -> CGEventSourceRef;
     fn CGEventCreateKeyboardEvent(
         source: CGEventSourceRef,
@@ -994,6 +995,42 @@ static WORKER_MISSING_WARNED: AtomicBool = AtomicBool::new(false);
 
 // ── CGEventTap 콜백 ─────────────────────────────────────────────────────────
 
+/// 키 이벤트가 만들어진 뒤 지난 시간 (ms)
+///
+/// `CGEventTimestamp` 는 문서상 나노초지만 Apple Silicon 에서는 mach tick 으로 온다는
+/// 보고가 있다. tick 으로 먼저 보고, 현재 tick 보다 크면(= 나노초) 나노초 시계로 본다.
+fn event_age_ms(ts: u64) -> Option<u64> {
+    #[repr(C)]
+    struct MachTimebaseInfo {
+        numer: u32,
+        denom: u32,
+    }
+    extern "C" {
+        fn mach_absolute_time() -> u64;
+        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+        fn clock_gettime_nsec_np(clock_id: u32) -> u64;
+    }
+    /// <time.h> CLOCK_UPTIME_RAW — mach_absolute_time 과 같은 시계(절전 중 멈춤)
+    const CLOCK_UPTIME_RAW: u32 = 8;
+    if ts == 0 {
+        return None;
+    }
+    // SAFETY: 인자 없는 시계 조회와, 지역 구조체에 쓰는 timebase 조회뿐이다
+    unsafe {
+        let now_ticks = mach_absolute_time();
+        let ns = if ts <= now_ticks {
+            let mut tb = MachTimebaseInfo { numer: 0, denom: 0 };
+            if mach_timebase_info(&mut tb) != 0 || tb.denom == 0 {
+                return None;
+            }
+            u128::from(now_ticks - ts) * u128::from(tb.numer) / u128::from(tb.denom)
+        } else {
+            u128::from(clock_gettime_nsec_np(CLOCK_UPTIME_RAW).checked_sub(ts)?)
+        };
+        u64::try_from(ns / 1_000_000).ok()
+    }
+}
+
 unsafe extern "C" fn event_tap_callback(
     _proxy: CGEventTapProxy,
     type_: u32,
@@ -1095,6 +1132,9 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
     let Some(vkey) = cg_to_vkey(keycode) else {
         return event;
     };
+    if type_ == CG_EVENT_KEY_DOWN {
+        super::note_key_down(event_age_ms(CGEventGetTimestamp(event)));
+    }
 
     let state = match HOOK_STATE.get() {
         Some(s) => s,

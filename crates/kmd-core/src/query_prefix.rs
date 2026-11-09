@@ -49,6 +49,16 @@ pub enum QueryPrefix {
     Route,
     /// `:say` / `:입버릇` — 영어 문장 노출·타이핑 연습 (docs/21)
     Say,
+    /// `:m` / `:memo` / `:메모` — 메모 (docs/23)
+    Notes,
+    /// `:ms` / `:메모찾기` — 메모 찾기 전용 (docs/23)
+    NoteSearch,
+    /// `:td` / `:todo` / `:할일` — 할 일 (docs/23)
+    Todo,
+    /// `:timer` / `:타이머` — 타이머 (docs/23)
+    Timer,
+    /// `:pomo` / `:뽀모` — 뽀모도로 (docs/23)
+    Pomodoro,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
     General,
 }
@@ -204,6 +214,51 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":say ",
         icon_emoji: "\u{1F4AC}",
         icon_ascii: "[EN]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Notes,
+        aliases: crate::notes::NOTE_ALIASES,
+        title: ":m  Notes (메모)",
+        usage: "Type :m text and Enter to save  (:m alone lists, :m word finds)",
+        seed: ":m ",
+        icon_emoji: "\u{1F4DD}",
+        icon_ascii: "[MEMO]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::NoteSearch,
+        aliases: crate::notes::SEARCH_ALIASES,
+        title: ":ms  Find notes (메모 찾기)",
+        usage: "Type :ms words  (Enter copies the first match, never saves)",
+        seed: ":ms ",
+        icon_emoji: "\u{1F50D}",
+        icon_ascii: "[FIND]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Todo,
+        aliases: crate::notes::TODO_ALIASES,
+        title: ":td  To-do (할 일)",
+        usage: "Type :td task @tomorrow-time and Enter  (e.g. :td 보고서 @내일 9시, Enter on a task marks it done)",
+        seed: ":td ",
+        icon_emoji: "\u{2705}",
+        icon_ascii: "[TODO]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Timer,
+        aliases: crate::notes::TIMER_ALIASES,
+        title: ":timer  Timer (타이머)",
+        usage: "Type :timer 10분 라면 and Enter  (:timer lists running timers)",
+        seed: ":timer ",
+        icon_emoji: "\u{23F1}\u{FE0F}",
+        icon_ascii: "[TIME]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Pomodoro,
+        aliases: crate::notes::POMO_ALIASES,
+        title: ":pomo  Pomodoro (뽀모도로)",
+        usage: "Type :pomo task and Enter  (focus, then a break starts by itself)",
+        seed: ":pomo ",
+        icon_emoji: "\u{1F345}",
+        icon_ascii: "[POMO]",
     },
     CommandSpec {
         prefix: QueryPrefix::Help,
@@ -780,6 +835,20 @@ mod tests {
         assert_eq!(prefix_of("!ip"), QueryPrefix::Shell);
         assert_eq!(prefix_of(">ip"), QueryPrefix::Shell);
         // 클립보드 히스토리 (docs/12 흐름 B) — 시길 `;`와 `:clip` 별칭
+        assert_eq!(prefix_of(":ms 나스 IP"), QueryPrefix::NoteSearch);
+        assert_eq!(prefix_of(":메모찾기"), QueryPrefix::NoteSearch);
+        assert_eq!(prefix_of(":td 할 일"), QueryPrefix::Todo);
+        assert_eq!(prefix_of(":ㅅㅇ"), QueryPrefix::Todo);
+        assert_eq!(prefix_of(":t spell"), QueryPrefix::Transform);
+        assert_eq!(prefix_of(":timer 10분"), QueryPrefix::Timer);
+        assert_eq!(prefix_of(":pomo"), QueryPrefix::Pomodoro);
+        assert_eq!(prefix_of(":pt"), QueryPrefix::Prompt);
+        assert_eq!(prefix_of(":m"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":m 떠오른 생각"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":ㅡ 내용"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":메모"), QueryPrefix::Notes);
+        assert_eq!(prefix_of(":map 판교역"), QueryPrefix::Route);
+        assert_ne!(prefix_of(":mx"), QueryPrefix::Notes);
         assert_eq!(prefix_of(";"), QueryPrefix::Clipboard);
         assert_eq!(prefix_of(";계좌"), QueryPrefix::Clipboard);
         assert_eq!(prefix_of(":clip"), QueryPrefix::Clipboard);
@@ -915,6 +984,11 @@ mod tests {
             QueryPrefix::Keys,
             QueryPrefix::Dojo,
             QueryPrefix::FolderSearch,
+            QueryPrefix::Notes,
+            QueryPrefix::NoteSearch,
+            QueryPrefix::Todo,
+            QueryPrefix::Timer,
+            QueryPrefix::Pomodoro,
         ] {
             assert!(covered.contains(&p), "레지스트리에 없는 명령: {p:?}");
         }
