@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-11-09
+
 ### Added
 - **단축키 실행 경로 기록** (docs/19 §7.3) — 런처를 띄울 때 키를 누른 뒤 데몬이 받기까지, 데몬이 실행하기까지,
   프로세스 생성, 첫 프레임까지를 desktop.log 에 남긴다. 여러 번 눌러 기존 창을 닫은 실행도 기록한다.

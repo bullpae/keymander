@@ -2329,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "keymander"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -2364,7 +2364,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kmd-core"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "arboard",
  "bincode",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "kmd-daemon"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "kmd-desktop"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "core-foundation-sys",
  "iced",
