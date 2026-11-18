@@ -457,5 +457,7 @@ jobs:
           identifier: bullpae.keymander
           # winget 전용 zip(kmd-data 없음) — build-bundle의 "Package winget zip" 참조
           installers-regex: 'keymander-winget-(x86_64|aarch64)-pc-windows-msvc\.zip$'
-          max-versions-to-keep: 5
+          # max-versions-to-keep는 쓰지 않는다 — 가장 오래된 버전 대신 최신 기존 버전을
+          # 지우는 PR을 올렸다(2026-10 0.18.x·0.19.0/1 삭제, 2026-11 0.19.2 삭제 PR #475153).
+          # 새 버전이 머지되기 전에 최신이 사라질 위험이 있어 오래된 버전은 수동 정리한다.
           token: ${{ secrets.WINGET_GITHUB_TOKEN }}

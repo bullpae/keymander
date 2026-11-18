@@ -24,37 +24,31 @@ pub fn is_hidden_attr(attributes: u32) -> bool {
     attributes & FILE_ATTRIBUTE_HIDDEN != 0
 }
 
+/// 항목 메타데이터에 숨김 속성이 있는가 — Windows 전용, 다른 OS에선 항상 `false`.
+///
+/// 메타데이터는 클로저로 받아 Windows에서만 읽는다.
+#[cfg(windows)]
+fn has_hidden_attr<E>(metadata: impl FnOnce() -> Result<std::fs::Metadata, E>) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata().is_ok_and(|meta| is_hidden_attr(meta.file_attributes()))
+}
+
+#[cfg(not(windows))]
+fn has_hidden_attr<E>(_metadata: impl FnOnce() -> Result<std::fs::Metadata, E>) -> bool {
+    false
+}
+
 /// `std::fs::read_dir` 항목이 숨김인가.
 ///
 /// Windows에서 `DirEntry::metadata()`는 디렉터리 열거가 이미 받아 둔 정보라
 /// 추가 시스템 호출이 없다. 다른 OS에선 속성을 볼 일이 없으므로 부르지 않는다.
 pub fn is_hidden_entry(entry: &std::fs::DirEntry) -> bool {
-    if is_hidden_name(&entry.file_name().to_string_lossy()) {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if let Ok(meta) = entry.metadata() {
-            return is_hidden_attr(meta.file_attributes());
-        }
-    }
-    false
+    is_hidden_name(&entry.file_name().to_string_lossy()) || has_hidden_attr(|| entry.metadata())
 }
 
 /// `walkdir` 항목이 숨김인가 — 규칙은 [`is_hidden_entry`]와 같다.
 pub fn is_hidden_walk_entry(entry: &walkdir::DirEntry) -> bool {
-    if is_hidden_name(&entry.file_name().to_string_lossy()) {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if let Ok(meta) = entry.metadata() {
-            return is_hidden_attr(meta.file_attributes());
-        }
-    }
-    false
+    is_hidden_name(&entry.file_name().to_string_lossy()) || has_hidden_attr(|| entry.metadata())
 }
 
 /// 이 컴퓨터의 드라이브·외장 볼륨 루트 (홈은 포함하지 않는다).
