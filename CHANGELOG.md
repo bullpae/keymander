@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-22
+
 ### Security
 - **이어서 질문(`@@`)이 탭을 확인한다** (Windows) — 창만 같으면 보이는 탭이 무엇이든 프롬프트를 붙여넣고 Enter 를 눌렀다.
   이제 제목이 그 LLM 일 때만 보낸다. 빈 제목 마커는 무시한다.
