@@ -110,7 +110,7 @@ PR 제목 관례: `New package: bullpae.keymander version X.Y.Z`
 
 ### 2.2 winget 자동 갱신용 PAT — ✅ `workflow` 스코프 추가됨 (다음 릴리스에서 검증)
 
-winget-releaser(내부적으로 komac)는 winget-pkgs 포크에 브랜치를 만들고 PR을 내야
+`update-winget` 잡의 komac(v0.21.0 까지는 winget-releaser 액션이 내부에서 부름, 이후 버전·SHA256 고정해 직접 실행)은 winget-pkgs 포크에 브랜치를 만들고 PR을 내야
 하므로 deploy key로는 안 되고 사용자 PAT가 필요하다.
 
 **`CreateRef` 실패의 진짜 원인 (2026-10-05 규명)**: 에러 문구는
@@ -262,7 +262,7 @@ git config --global user.email "bullpae@gmail.com"
      (거대 저장소라 clone 없이 GitHub contents API로 올리는 게 빠르다)
 4. PR 제목 관례: `New package: <계정>.<이름> version X.Y.Z`
 5. CLA는 계정당 1회 (§2.1)
-6. 머지 후 `update-winget` 잡(winget-releaser)이 이후 버전을 자동 제출
+6. 머지 후 `update-winget` 잡(komac)이 이후 버전을 자동 제출
 
 **④ .deb/.rpm 패키지** — Rust 프로젝트면 cargo-deb/cargo-generate-rpm 메타데이터
 복사·수정 후 `build-packages` 잡 복사. Rust가 아니면
