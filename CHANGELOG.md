@@ -19,6 +19,12 @@ All notable changes to keymander are documented here.
 - **숨은 `kmd daemon paste-test` 와 `InjectPaste` IPC 요청을 뺀다** — 클립보드 기능 검증용 스파이크로, 전경 앱에
   붙여넣기를 주입하는 경로가 남아 있었다.
 
+### Fixed
+- **관리자 권한 창·UAC 화면에서 키보드 훅을 되풀이해 재설치하지 않는다** (Windows) — 권한이 더 높은 창이 앞에
+  있으면 Windows 가 훅 생존 확인용 입력을 버리는데, 이를 훅이 죽은 것으로 읽어 10초마다 재설치하고 그때마다
+  켜져 있던 Caps Lock 을 껐다. 이런 화면에서는 판단을 미룬다. (관리자 창에서 단축키가 쉬는 것은 Windows 의
+  권한 격리로 그대로다.)
+
 ### Changed
 - **Windows 로그인 자동 시작을 시작 폴더 `.vbs` 대신 레지스트리 `Run` 값으로 등록한다** — 키보드 훅을 거는 데몬이
   숨김 실행 스크립트를 쓰는 조합은 백신 휴리스틱에 걸리기 쉽다. `HKCU\...\Run\keymander` 에
