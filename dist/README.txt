@@ -52,7 +52,7 @@
   winget으로 설치한 경우 데몬을 처음 실행하면 자동 시작이 등록됩니다.
   끄려면 kmd-daemon uninstall (한 번 끄면 다시 켜지지 않음)
   USB 포터블로 쓸 때는 직접 등록: kmd-daemon install
-  (Windows: Startup 폴더, macOS: LaunchAgent, Linux: systemd)
+  (Windows: 레지스트리 HKCU Run, macOS: LaunchAgent, Linux: systemd)
 
   ** 업그레이드 (winget) **
   kmd upgrade

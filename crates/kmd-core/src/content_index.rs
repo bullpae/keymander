@@ -78,7 +78,7 @@ pub const MIN_QUERY_CHARS: usize = 2;
 
 /// 내장 기본 파일명 제외 마커 — 시크릿성 파일(dotfile이 아니어서 숨김 필터를
 /// 통과하는 credentials.json, secrets.yaml 등)의 본문이 인덱스 DB에 평문으로
-/// 복제되지 않게 한다. config `content_search.exclude_names`로 통째 대체 가능.
+/// 복제되지 않게 한다. config `content_search.exclude_names`는 여기에 더해진다.
 const DEFAULT_EXCLUDE_NAME_MARKERS: &[&str] = &[
     "secret",
     "credential",
@@ -100,16 +100,18 @@ const DEFAULT_EXCLUDE_NAME_MARKERS: &[&str] = &[
 
 /// 파일명(소문자)이 제외 마커에 걸리는지.
 /// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
+///
+/// 기본 마커는 항상 적용하고 `exclude_names`는 그 위에 더한다. 예전엔 지정하면
+/// 기본 목록을 통째로 대체해서, 마커 하나를 추가하려던 설정이 `credentials.json`
+/// 같은 시크릿 파일을 다시 색인 대상으로 만들었다.
 pub(crate) fn excluded_name(cs: &crate::config::ContentSearchConfig, name_lower: &str) -> bool {
-    if cs.exclude_names.is_empty() {
-        DEFAULT_EXCLUDE_NAME_MARKERS
+    DEFAULT_EXCLUDE_NAME_MARKERS
+        .iter()
+        .any(|m| name_lower.contains(m))
+        || cs
+            .exclude_names
             .iter()
-            .any(|m| name_lower.contains(m))
-    } else {
-        cs.exclude_names
-            .iter()
-            .any(|m| name_lower.contains(&m.to_lowercase()))
-    }
+            .any(|m| !m.is_empty() && name_lower.contains(&m.to_lowercase()))
 }
 
 /// 무시 패턴 집합 — 순회 필터용 빌림 집합. 규칙은 호출자가
@@ -1136,11 +1138,16 @@ mod tests {
         assert!(search(&db, "hunter2", 10).unwrap().is_empty());
         assert!(search(&db, "API_KEY", 10).unwrap().is_empty());
 
-        // exclude_names를 지정하면 기본 마커를 통째로 대체
+        // exclude_names는 기본 마커에 더해진다 — 지정해도 시크릿 파일은 계속 빠진다
+        let db = Database::open_in_memory().unwrap();
         let mut launcher = test_launcher(dir.path());
-        launcher.content_search.exclude_names = vec!["zzz-none".into()];
+        launcher.content_search.exclude_names = vec!["NOTES".into()];
         let s = sync(&db, &launcher).unwrap();
-        assert!(s.indexed >= 2, "대체 목록에선 credentials.json도 인덱싱");
+        assert_eq!(
+            s.indexed, 0,
+            "추가 마커(대소문자 무시)와 기본 마커가 함께 적용"
+        );
+        assert!(search(&db, "hunter2", 10).unwrap().is_empty());
     }
 
     #[test]

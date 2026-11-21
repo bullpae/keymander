@@ -44,10 +44,6 @@ pub enum Request {
     LlmAutopilot { jobs: Vec<LlmJob> },
     /// 이어서 질문 — 레지스트리에 기억된 LLM 창들에 후속 프롬프트 전달.
     LlmFollowup { prompt: String },
-    /// [P3 스파이크] 현재 전경 앱에 붙여넣기(Cmd+V/Ctrl+V) 주입.
-    /// 데스크톱이 클립보드를 세팅한 뒤 호출한다 — 클립보드 확장의 핵심 능력을
-    /// 분리 구조에서 실증하기 위한 것 (docs/11).
-    InjectPaste,
     /// 현재 위치 — `:길` 기본 출발지 (docs/20). 데몬이 메모리에만 들고 있다.
     Location,
     /// 클립보드 히스토리 n번째(1-기반) 항목을 붙여넣기 (docs/12).

@@ -127,6 +127,6 @@ global_hotkey = "alt+space"
 # kmd-daemon uninstall → 자동 시작 해제
 # kmd-daemon status    → 현재 상태 및 자동 시작 등록 여부 확인
 #
-# Windows: Startup 폴더에 VBS 스크립트 생성 (콘솔 창 없이 실행)
+# Windows: HKCU\...\Run 에 kmd-desktop.exe --start-daemon 등록 (콘솔 창 없이 실행)
 # macOS:   ~/Library/LaunchAgents/com.keymander.daemon.plist
 # Linux:   ~/.config/systemd/user/kmd-daemon.service
