@@ -78,7 +78,7 @@ fn main() -> Result<()> {
         "start" => {
             if let Some(detail) = autostart::ensure_default() {
                 tracing::info!(
-                    "자동 시작을 기본으로 등록했습니다 ({detail}) — 해제: kmd-daemon uninstall"
+                    "자동 시작을 등록했습니다 ({detail}) — 해제: kmd-daemon uninstall"
                 );
             }
             server::run()?

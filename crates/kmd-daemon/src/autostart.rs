@@ -63,7 +63,7 @@ pub fn ensure_default() -> Option<String> {
         return None;
     }
     match install() {
-        Ok(detail) => Some(detail),
+        Ok(detail) => Some(format!("기본으로 켬 · {detail}")),
         Err(e) => {
             // 실패해도 매 시작마다 재시도하지 않는다 — 수동 등록은 여전히 가능
             mark_decided();
@@ -291,7 +291,7 @@ mod platform {
             return None;
         }
         match install() {
-            Ok(detail) => Some(detail),
+            Ok(detail) => Some(format!("시작 폴더 스크립트에서 옮김 · {detail}")),
             Err(e) => {
                 eprintln!("자동 시작 이전 실패 — 기존 시작 스크립트를 유지합니다: {e}");
                 None
