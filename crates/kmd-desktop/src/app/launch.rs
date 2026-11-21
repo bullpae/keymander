@@ -102,11 +102,13 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     use kmd_core::process::HideConsole;
-                    let path = item.path.clone();
-                    let escaped = path.replace('\'', "''");
-                    let script = format!("Start-Process -FilePath '{}' -Verb RunAs", escaped);
+                    // 경로는 스크립트 글에 끼우지 않고 환경 변수로 넘긴다 — PowerShell 은 ' 말고
+                    // 둥근 따옴표(U+2018 등)도 문자열 끝으로 읽어, 파일 이름으로 명령을 끼울 수 있었다.
+                    const SCRIPT: &str =
+                        "Start-Process -FilePath $env:KMD_ADMIN_TARGET -Verb RunAs";
                     if let Err(e) = std::process::Command::new("powershell")
-                        .args(["-NoProfile", "-Command", &script])
+                        .args(["-NoProfile", "-Command", SCRIPT])
+                        .env("KMD_ADMIN_TARGET", &item.path)
                         .hide_console()
                         .spawn()
                     {

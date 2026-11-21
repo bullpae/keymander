@@ -607,6 +607,29 @@ pub fn run() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// 요청(토큰 줄 + JSON 줄)을 다 받기까지의 기한. 클라이언트는 둘을 한 번에 보낸다
+const REQUEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 요청 전체에 기한을 건다. 소켓의 읽기 제한 시간은 `read` 한 번마다 새로 시작하므로,
+/// 한 바이트씩 천천히 보내면 인증 없이도 연결 칸(MAX_CONNECTIONS)을 오래 붙잡을 수 있었다.
+struct DeadlineReader<'a> {
+    stream: &'a TcpStream,
+    deadline: Instant,
+}
+
+impl std::io::Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        let mut stream = self.stream;
+        stream.read(buf)
+    }
+}
+
 fn handle_client(
     stream: TcpStream,
     engine: &Arc<Mutex<SearchEngine>>,
@@ -614,11 +637,16 @@ fn handle_client(
     started_at: Instant,
     token: &str,
 ) -> color_eyre::Result<()> {
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+    // 응답을 읽지 않는 클라이언트가 연결 칸을 붙잡지 못하게
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
 
     // 요청 크기 상한 — 개행 없는 대용량 스트림으로 인한 메모리 소진 방지
     const MAX_REQUEST_BYTES: u64 = 64 * 1024;
-    let mut reader = BufReader::new(std::io::Read::take(&stream, MAX_REQUEST_BYTES));
+    let request_reader = DeadlineReader {
+        stream: &stream,
+        deadline: Instant::now() + REQUEST_DEADLINE,
+    };
+    let mut reader = BufReader::new(std::io::Read::take(request_reader, MAX_REQUEST_BYTES));
     let mut writer = &stream;
 
     // line 1: 인증 토큰. 불일치 시 응답 없이 연결 종료.
@@ -1019,6 +1047,41 @@ fn cleanup_runtime_files() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 천천히_보내는_요청은_전체_기한에서_끊긴다() {
+        use std::io::Read;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        // 읽기 한 번의 제한 시간(기한)보다 짧은 간격으로 한 바이트씩 — 예전엔 끝없이 이어졌다
+        let sender = std::thread::spawn(move || {
+            for _ in 0..40 {
+                if client.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let started = Instant::now();
+        let mut reader = BufReader::new(DeadlineReader {
+            stream: &server,
+            deadline: started + Duration::from_millis(300),
+        });
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "개행 없이 기한을 넘김"
+        );
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        let mut rest = [0u8; 1];
+        assert!(
+            reader.get_mut().read(&mut rest).is_err(),
+            "기한 뒤엔 읽지 않는다"
+        );
+        drop(server);
+        let _ = sender.join();
+    }
 
     #[test]
     fn 오토파일럿_url_은_https_만() {

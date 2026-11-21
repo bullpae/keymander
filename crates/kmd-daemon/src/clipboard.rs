@@ -511,13 +511,27 @@ mod platform {
     #[derive(Debug)]
     pub struct Snapshot {
         text: Option<String>,
+        /// 비밀번호 관리자가 붙인 Concealed 마크 — 복원할 때 다시 붙인다
+        concealed: bool,
+    }
+
+    #[cfg(test)]
+    impl Snapshot {
+        pub fn for_test(text: &str, concealed: bool) -> Self {
+            Self {
+                text: Some(text.to_string()),
+                concealed,
+            }
+        }
     }
 
     /// 현재 클립보드 백업. 텍스트가 아니면 None 스냅샷 (복원 시 no-op).
     pub fn snapshot() -> Result<Snapshot, String> {
+        let concealed = is_concealed();
         let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
         Ok(Snapshot {
             text: board.get_text().ok(),
+            concealed,
         })
     }
 
@@ -528,9 +542,45 @@ mod platform {
         if let Some(text) = snapshot.text {
             let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             board.set_text(text).map_err(|e| e.to_string())?;
+            // 마크 없이 되쓰면 비밀번호가 평문 항목이 되어, 우리 히스토리와 다른 클립보드
+            // 관리자가 수집한다. 감시 스레드는 이 시점에 아직 SUPPRESS_CAPTURE 로 멈춰 있다.
+            if snapshot.concealed && !mark_concealed() {
+                return Err("비밀번호 표시(Concealed)를 다시 붙이지 못했습니다".into());
+            }
         }
         Ok(())
     }
+
+    /// 현재 클립보드 내용에 Concealed 마크를 덧붙인다 (내용은 그대로).
+    /// `[pb addTypes:@[concealed] owner:nil]` + `[pb setString:@"" forType:concealed]`
+    fn mark_concealed() -> bool {
+        unsafe {
+            let (Some(pb_cls), Some(str_cls), Some(arr_cls)) = (
+                AnyClass::get(c"NSPasteboard"),
+                AnyClass::get(c"NSString"),
+                AnyClass::get(c"NSArray"),
+            ) else {
+                return false;
+            };
+            let pb: *mut AnyObject = msg_send![pb_cls, generalPasteboard];
+            let ty: *mut AnyObject =
+                msg_send![str_cls, stringWithUTF8String: CONCEALED_TYPE.as_ptr()];
+            let empty: *mut AnyObject = msg_send![str_cls, string];
+            if pb.is_null() || ty.is_null() || empty.is_null() {
+                return false;
+            }
+            let arr: *mut AnyObject = msg_send![arr_cls, arrayWithObject: ty];
+            if arr.is_null() {
+                return false;
+            }
+            let owner: *mut AnyObject = std::ptr::null_mut();
+            let _: isize = msg_send![pb, addTypes: arr, owner: owner];
+            msg_send![pb, setString: empty, forType: ty]
+        }
+    }
+
+    /// 비밀번호 관리자 관례 (nspasteboard.org)
+    const CONCEALED_TYPE: &std::ffi::CStr = c"org.nspasteboard.ConcealedType";
 
     /// `[[NSPasteboard generalPasteboard] changeCount]`. 실패 시 0.
     pub fn change_count() -> isize {
@@ -561,7 +611,8 @@ mod platform {
             if pb.is_null() {
                 return false;
             }
-            let ty: *mut AnyObject = msg_send![str_cls, stringWithUTF8String: c"org.nspasteboard.ConcealedType".as_ptr()];
+            let ty: *mut AnyObject =
+                msg_send![str_cls, stringWithUTF8String: CONCEALED_TYPE.as_ptr()];
             if ty.is_null() {
                 return false;
             }
@@ -839,6 +890,38 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 실제 시스템 클립보드를 건드리므로 평소엔 돌리지 않는다:
+    /// `cargo test -p kmd-daemon concealed -- --ignored`
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "시스템 클립보드를 바꾼다"]
+    fn 복원한_비밀번호는_concealed_표시를_유지한다() {
+        let mut board = arboard::Clipboard::new().unwrap();
+        let before = board.get_text().ok();
+
+        board.set_text("kmd-concealed-test").unwrap();
+        assert!(!platform::is_concealed());
+        let plain = platform::snapshot().unwrap();
+        board.set_text("other").unwrap();
+        platform::restore(plain).unwrap();
+        assert!(!platform::is_concealed(), "평문은 표시 없이 복원");
+
+        // 비밀번호 관리자가 하듯 표시를 붙인 뒤 백업 → 다른 값 → 복원
+        let marked = platform::Snapshot::for_test("kmd-concealed-test", true);
+        platform::restore(marked).unwrap();
+        assert!(platform::is_concealed());
+        let saved = platform::snapshot().unwrap();
+        board.set_text("other").unwrap();
+        assert!(!platform::is_concealed());
+        platform::restore(saved).unwrap();
+        assert!(platform::is_concealed(), "표시가 살아 있어야 한다");
+        assert_eq!(board.get_text().unwrap(), "kmd-concealed-test");
+
+        if let Some(text) = before {
+            board.set_text(text).unwrap();
+        }
+    }
 
     // 전역 HISTORY를 공유하므로 테스트를 직렬화한다 (병렬 실행 시 상호 오염 방지).
     static TEST_LOCK: Mutex<()> = Mutex::new(());
