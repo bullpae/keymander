@@ -13,8 +13,17 @@ All notable changes to keymander are documented here.
   PowerShell 명령을 끼울 수 있었다. 경로를 환경 변수로 넘긴다.
 - **IPC 요청에 전체 기한** — 인증 없이 한 바이트씩 천천히 보내 연결 칸 64개를 붙잡으면 런처·`kmd daemon stop` 이
   막혔다. 요청은 5초 안에 다 와야 하고, 응답 쓰기도 10초에서 끊는다.
+- **본문 검색 제외 파일명은 기본 목록에 더해진다** — `content_search.exclude_names` 를 지정하면 기본 시크릿 마커
+  (`secret`·`credential`·`password`·토큰·키 파일)를 통째로 대체해서, 마커 하나를 추가하려던 설정이
+  `credentials.json` 본문을 인덱스에 복제할 수 있었다. 이제 기본 마커는 항상 적용된다.
+- **숨은 `kmd daemon paste-test` 와 `InjectPaste` IPC 요청을 뺀다** — 클립보드 기능 검증용 스파이크로, 전경 앱에
+  붙여넣기를 주입하는 경로가 남아 있었다.
 
 ### Changed
+- **Windows 로그인 자동 시작을 시작 폴더 `.vbs` 대신 레지스트리 `Run` 값으로 등록한다** — 키보드 훅을 거는 데몬이
+  숨김 실행 스크립트를 쓰는 조합은 백신 휴리스틱에 걸리기 쉽다. `HKCU\...\Run\keymander` 에
+  `kmd-desktop.exe --start-daemon` 을 등록하고(콘솔 창 없이 데몬만 띄우고 끝남), 남아 있던 `kmd-daemon.vbs` 는
+  데몬이 시작할 때 옮긴 뒤 지운다.
 - `kmd-daemon.exe` 에 버전 정보와 아이콘을 넣는다 (다른 두 실행 파일과 같게).
 - 앱 목록을 읽는 PowerShell 호출에서 필요 없는 `-ExecutionPolicy Bypass` 를 뺀다.
 

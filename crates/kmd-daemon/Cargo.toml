@@ -62,6 +62,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_WindowsProgramming",
     # 볼륨 분리 알림을 받을 숨은 창의 WNDCLASSW (fs_watch, hbrBackground 필드)
     "Win32_Graphics_Gdi",
+    # 로그인 자동 시작 — HKCU Run 값 (autostart.rs)
+    "Win32_System_Registry",
 ] }
 # 현재 위치(`:길` 기본 출발지, docs/20) — WinRT Windows.Devices.Geolocation
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation", "Win32_System_WinRT"] }

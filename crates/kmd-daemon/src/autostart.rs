@@ -1,6 +1,6 @@
 //! 데몬 자동 시작 등록/해제
 //!
-//! Windows: Startup 폴더에 VBS 스크립트 (콘솔 창 없이 백그라운드 실행)
+//! Windows: HKCU `Run` 값 → `kmd-desktop.exe --start-daemon` (콘솔 창 없이 데몬 실행)
 //! macOS:   ~/Library/LaunchAgents/com.keymander.daemon.plist
 //! Linux:   ~/.config/systemd/user/kmd-daemon.service
 
@@ -47,7 +47,15 @@ pub fn ensure_default() -> Option<String> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
-    if is_dev_build(&exe) || marker_path().exists() {
+    if is_dev_build(&exe) {
+        return None;
+    }
+    // 마커 확인보다 먼저 — 이미 결정한 사용자의 이전 방식 등록도 옮겨야 한다
+    #[cfg(target_os = "windows")]
+    if let Some(detail) = platform::migrate_legacy() {
+        return Some(detail);
+    }
+    if marker_path().exists() {
         return None;
     }
     if is_installed() {
@@ -123,6 +131,14 @@ mod tests {
         assert_eq!(systemd_quote(r#"/a"b\c"#), r#""/a\"b\\c""#);
     }
 
+    #[test]
+    fn run_값은_경로를_따옴표로_감싸고_데몬_시작_인자를_붙인다() {
+        assert_eq!(
+            run_value_data(r"C:\Program Files\키맨더\kmd-desktop.exe"),
+            r#""C:\Program Files\키맨더\kmd-desktop.exe" --start-daemon"#
+        );
+    }
+
     // `\` 는 Windows에서만 경로 구분자라 OS별 경로로 검사한다
     #[cfg(windows)]
     #[test]
@@ -147,45 +163,150 @@ mod tests {
 
 // ── Windows ─────────────────────────────────────────────────────────────────
 
+/// Windows: HKCU `Run` 값으로 `kmd-desktop.exe --start-daemon`을 등록한다.
+///
+/// 예전엔 Startup 폴더에 숨김 실행 `.vbs`를 썼다. 키보드 훅을 거는 프로세스가
+/// 스크립트를 떨어뜨리는 조합은 백신 휴리스틱이 싫어하는 모양이라(winget 검증
+/// Defender 이슈를 계기로) 일반 앱과 같은 `Run` 값으로 바꿨다. `kmd-daemon.exe`는
+/// 콘솔 서브시스템이라 직접 걸면 콘솔 창이 뜨므로 GUI 서브시스템인
+/// `kmd-desktop.exe`가 데몬만 띄우고 끝난다. 남은 `.vbs`는 [`migrate_legacy`]가
+/// 데몬 시작 때 옮긴다.
 #[cfg(target_os = "windows")]
 mod platform {
     use std::path::PathBuf;
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
+    };
 
-    const SCRIPT_NAME: &str = "kmd-daemon.vbs";
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const RUN_VALUE: &str = "keymander";
+    const LEGACY_SCRIPT_NAME: &str = "kmd-daemon.vbs";
 
-    fn startup_dir() -> PathBuf {
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn legacy_script_path() -> PathBuf {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| {
             std::env::var("USERPROFILE")
                 .map(|p| format!("{p}\\AppData\\Roaming"))
                 .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".into())
         });
-        PathBuf::from(appdata).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup")
+        PathBuf::from(appdata)
+            .join("Microsoft\\Windows\\Start Menu\\Programs\\Startup")
+            .join(LEGACY_SCRIPT_NAME)
     }
 
-    pub fn install() -> Result<String, String> {
-        let exe = std::env::current_exe().map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
-        let vbs = format!(
-            "Set s = CreateObject(\"WScript.Shell\")\ns.Run \"\"\"{}\"\" start\", 0, False",
-            exe.display()
-        );
-
-        let path = startup_dir().join(SCRIPT_NAME);
-        std::fs::write(&path, vbs).map_err(|e| format!("시작 프로그램 등록 실패: {e}"))?;
-
-        Ok(format!("등록 위치: {}", path.display()))
-    }
-
-    pub fn uninstall() -> Result<(), String> {
-        let path = startup_dir().join(SCRIPT_NAME);
+    fn remove_legacy_script() -> Result<(), String> {
+        let path = legacy_script_path();
         if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| format!("시작 프로그램 제거 실패: {e}"))?;
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("이전 시작 스크립트 제거 실패 ({}): {e}", path.display()))?;
         }
         Ok(())
     }
 
-    pub fn is_installed() -> bool {
-        startup_dir().join(SCRIPT_NAME).exists()
+    /// `Run`에 넣을 명령 — 데몬 옆의 `kmd-desktop.exe`.
+    fn run_command() -> Result<String, String> {
+        let exe = std::env::current_exe().map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
+        let desktop = exe
+            .parent()
+            .map(|d| d.join("kmd-desktop.exe"))
+            .filter(|p| p.is_file())
+            .ok_or_else(|| {
+                format!(
+                    "kmd-desktop.exe 를 찾을 수 없습니다 ({} 옆) — 자동 시작은 데스크톱 앱이 데몬을 띄웁니다",
+                    exe.display()
+                )
+            })?;
+        Ok(super::run_value_data(&desktop.display().to_string()))
     }
+
+    fn run_value_exists() -> bool {
+        let key = wide(RUN_KEY);
+        let name = wide(RUN_VALUE);
+        // SAFETY: 데이터 버퍼 없이 크기만 묻는다 — 모든 포인터는 유효한 NUL 종료 문자열이거나 null
+        let rc = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        rc == ERROR_SUCCESS
+    }
+
+    pub fn install() -> Result<String, String> {
+        let command = run_command()?;
+        let key = wide(RUN_KEY);
+        let name = wide(RUN_VALUE);
+        let data = wide(&command);
+        // SAFETY: data는 NUL 포함 UTF-16 버퍼이고 cbdata는 그 바이트 수
+        let rc = unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                REG_SZ,
+                data.as_ptr().cast(),
+                (data.len() * 2) as u32,
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            return Err(format!("시작 프로그램 등록 실패 (레지스트리 오류 {rc})"));
+        }
+        // 새 등록이 성공한 뒤에만 지운다 — 둘 다 있으면 데몬이 두 번 뜨려 한다
+        remove_legacy_script()?;
+        Ok(format!(
+            "등록 위치: HKCU\\{RUN_KEY}\\{RUN_VALUE} = {command}"
+        ))
+    }
+
+    pub fn uninstall() -> Result<(), String> {
+        let key = wide(RUN_KEY);
+        let name = wide(RUN_VALUE);
+        // SAFETY: NUL 종료 UTF-16 문자열만 넘긴다
+        let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) };
+        if rc != ERROR_SUCCESS && rc != ERROR_FILE_NOT_FOUND {
+            return Err(format!("시작 프로그램 제거 실패 (레지스트리 오류 {rc})"));
+        }
+        remove_legacy_script()
+    }
+
+    pub fn is_installed() -> bool {
+        run_value_exists() || legacy_script_path().exists()
+    }
+
+    /// 이전 버전이 남긴 Startup `.vbs`를 `Run` 값으로 옮긴다.
+    ///
+    /// 사용자가 켜 둔 상태(스크립트가 있음)일 때만 옮기므로 꺼 둔 결정은 그대로다.
+    /// 옮기기에 실패하면 스크립트를 남겨 재부팅 뒤 단축키가 죽지 않게 한다.
+    pub fn migrate_legacy() -> Option<String> {
+        if !legacy_script_path().exists() {
+            return None;
+        }
+        match install() {
+            Ok(detail) => Some(detail),
+            Err(e) => {
+                eprintln!("자동 시작 이전 실패 — 기존 시작 스크립트를 유지합니다: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// HKCU `Run` 값 데이터 — 경로를 따옴표로 감싸고 데몬 시작 인자를 붙인다.
+#[cfg(any(target_os = "windows", test))]
+fn run_value_data(desktop_exe: &str) -> String {
+    format!(
+        "\"{desktop_exe}\" {}",
+        kmd_core::process::DESKTOP_START_DAEMON_ARG
+    )
 }
 
 // ── macOS ───────────────────────────────────────────────────────────────────

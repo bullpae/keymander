@@ -140,10 +140,48 @@ fn apply_renderer_preference(renderer: &str) {
     }
 }
 
+/// 로그인 자동 시작 진입점 — 옆의 `kmd-daemon start`를 콘솔 없이 띄우고 끝난다.
+/// 창·싱글턴·로그 초기화보다 먼저 처리해 떠 있는 런처를 건드리지 않는다.
+fn start_daemon_and_exit() {
+    use kmd_core::process::HideConsole;
+
+    let exe_name = if cfg!(windows) {
+        "kmd-daemon.exe"
+    } else {
+        "kmd-daemon"
+    };
+    let Some(daemon) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(exe_name)))
+    else {
+        std::process::exit(1);
+    };
+    let mut cmd = std::process::Command::new(daemon);
+    cmd.arg("start")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .hide_console();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(kmd_core::process::CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    let code = if cmd.spawn().is_ok() { 0 } else { 1 };
+    std::process::exit(code);
+}
+
 fn main() -> iced::Result {
     if should_print_version() {
         print_version();
         return Ok(());
+    }
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == kmd_core::process::DESKTOP_START_DAEMON_ARG)
+    {
+        start_daemon_and_exit();
     }
     if let Some(args) = alert::parse_args(std::env::args()) {
         let config = engine::load_config();

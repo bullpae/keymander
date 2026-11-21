@@ -521,18 +521,16 @@ fn wait_until_ready(child: &std::process::Child) {
 #[cfg(not(windows))]
 fn wait_until_ready(_child: &std::process::Child) {}
 
-// ── 붙여넣기 주입 (확장 능력 스파이크, docs/11) ──────────────────────────────
+// ── 붙여넣기 단축키 주입 ─────────────────────────────────────────────────────
 //
-// [P3 프로토타입] 클립보드 확장이 현재 분리 구조에서 가능한지 실증하기 위한 것.
-// 데스크톱이 클립보드를 세팅한 뒤 이 함수를 IPC로 호출하면, 데몬이 현재 전경
-// 앱에 붙여넣기 단축키(macOS Cmd+V / Windows·Linux Ctrl+V)를 주입한다.
-// 데몬이 클립보드 자체를 만질 필요가 없어 가볍게 유지된다.
+// 클립보드를 스왑한 뒤 전경 앱에 Cmd+V 를 주입한다 (clipboard.rs 스왑 경로).
+// Windows 는 클립보드를 건드리지 않는 SendInput 유니코드 주입을 쓰므로 필요 없다.
+// (예전엔 `kmd daemon paste-test` 용 `InjectPaste` IPC 로도 열려 있었으나 제거)
+#[cfg(not(windows))]
 pub fn inject_paste() {
     #[cfg(target_os = "macos")]
     macos::inject_paste();
-    #[cfg(windows)]
-    windows::inject_paste();
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(not(target_os = "macos"))]
     {
         tracing::info!("inject_paste: 이 플랫폼은 아직 미지원");
     }

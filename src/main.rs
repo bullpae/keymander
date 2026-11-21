@@ -324,14 +324,6 @@ enum DaemonAction {
     Install,
     /// Unregister daemon from starting at login
     Uninstall,
-    /// [실험] 지정한 지연 후 전경 앱에 붙여넣기(Cmd+V/Ctrl+V)를 주입한다.
-    /// 클립보드 확장(P3) 검증용 — 지연 동안 붙여넣을 앱으로 전환해 테스트한다.
-    #[command(hide = true)]
-    PasteTest {
-        /// 주입 전 대기(ms). 이 시간 안에 대상 앱으로 포커스를 옮긴다.
-        #[arg(long, default_value_t = 3000)]
-        delay_ms: u64,
-    },
     /// [실험] 클립보드 히스토리 n번째 항목을 지연 후 전경 앱에 붙여넣는다.
     /// 클립보드 P1(docs/12 흐름 A) 검증용.
     #[command(hide = true)]
@@ -540,7 +532,6 @@ fn main() -> color_eyre::Result<()> {
                 DaemonAction::Status => cmd::daemon::Action::Status,
                 DaemonAction::Install => cmd::daemon::Action::Install,
                 DaemonAction::Uninstall => cmd::daemon::Action::Uninstall,
-                DaemonAction::PasteTest { delay_ms } => cmd::daemon::Action::PasteTest { delay_ms },
                 DaemonAction::ClipTest {
                     slot,
                     delay_ms,

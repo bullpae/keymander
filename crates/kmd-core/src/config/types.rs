@@ -240,9 +240,9 @@ pub struct ContentSearchConfig {
     /// 본문 인덱스 대상 파일 수 상한 (기본 20000). 초과분은 건너뛰고 로그만 남긴다.
     pub max_files: usize,
     /// 파일명에 포함되면 인덱싱에서 제외하는 마커 (소문자 부분일치).
-    /// 비어 있으면 내장 기본 목록(secret/credential/password/passwd)을 사용하고,
-    /// 지정하면 통째로 대체한다. 시크릿성 파일 본문이 인덱스 DB에 복제되는
-    /// 것을 막는 안전장치다.
+    /// 내장 기본 목록(secret/credential/password/토큰·키 파일 등)은 항상 적용되고
+    /// 여기 지정한 마커는 그 위에 더해진다. 시크릿성 파일 본문이 인덱스 DB에
+    /// 복제되는 것을 막는 안전장치다.
     pub exclude_names: Vec<String>,
 }
 

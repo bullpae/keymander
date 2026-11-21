@@ -12,9 +12,6 @@ pub enum Action {
     E2e,
     Install,
     Uninstall,
-    PasteTest {
-        delay_ms: u64,
-    },
     ClipTest {
         slot: usize,
         delay_ms: u64,
@@ -32,7 +29,6 @@ pub fn run(action: Action) -> Result<()> {
         Action::Status => check_status(),
         Action::Install => run_daemon_cmd("install"),
         Action::Uninstall => run_daemon_cmd("uninstall"),
-        Action::PasteTest { delay_ms } => paste_test(delay_ms),
         Action::ClipTest {
             slot,
             delay_ms,
@@ -53,14 +49,6 @@ fn clip_test(slot: usize, delay_ms: u64, to_previous: bool) -> Result<()> {
     println!("{delay_ms}ms 후 슬롯 {slot}을 {where_}에 붙여넣습니다...");
     std::thread::sleep(std::time::Duration::from_millis(delay_ms));
     send_command(ipc::Request::ClipPaste { slot, to_previous }, "clip-test")
-}
-
-/// [P3 스파이크] 지연 후 데몬에 붙여넣기 주입을 요청한다.
-/// 지연 동안 사용자가 붙여넣을 대상 앱으로 포커스를 옮긴다.
-fn paste_test(delay_ms: u64) -> Result<()> {
-    println!("{delay_ms}ms 후 전경 앱에 붙여넣기를 주입합니다 — 지금 대상 앱으로 전환하세요...");
-    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-    send_command(ipc::Request::InjectPaste, "paste-test")
 }
 
 /// 데몬 로그 파일 경로 (런타임 디렉터리 아래, 시작마다 새로 씀)
