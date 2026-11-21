@@ -1315,6 +1315,7 @@ fn report_hook_diagnostics(previous: &mut DiagnosticsSnapshot) {
 fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut last_probe: Option<u32> = None;
+        let mut blocked_reason: Option<&'static str> = None;
         let mut last_reinstall_attempt: Option<u32> = None;
         let mut reinstall_retry_delay = REINSTALL_RETRY_INITIAL_MS;
         let mut diagnostics = DiagnosticsSnapshot::default();
@@ -1364,6 +1365,16 @@ fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
             if !should_probe_hook(now, last_hook, last_input, last_probe) {
                 continue;
             }
+            // 프로브가 훅까지 닿지 않는 화면에서는 판단을 미룬다 — 조용한 것이
+            // 훅 사망의 증거가 아니다. 같은 이유는 한 번만 기록한다.
+            if let Some(reason) = probe_blocked_reason() {
+                if blocked_reason != Some(reason) {
+                    tracing::info!("키보드 훅 생존 확인 보류 — {reason}");
+                    blocked_reason = Some(reason);
+                }
+                continue;
+            }
+            blocked_reason = None;
             last_probe = Some(now);
 
             // ── 생존 프로브 ──
@@ -1387,9 +1398,11 @@ fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
 
             // Post 직전 한 번 더 세대/하트비트를 확인한다. 메시지 처리 시 훅
             // 스레드가 같은 증거를 다시 확인해 큐 지연 중의 정상 회복도 거른다.
+            // 프로브를 기다리는 사이 관리자 창·UAC 가 앞에 왔으면 그 프로브도 무효다.
             let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
             if tid == 0
                 || !running.load(Ordering::Relaxed)
+                || probe_blocked_reason().is_some()
                 || !probe_evidence_unchanged(
                     generation,
                     before,
@@ -1414,6 +1427,81 @@ fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
             }
         }
     })
+}
+
+/// 지금은 프로브가 훅까지 닿지 않는 화면인가 — 닿지 않으면 그 이유.
+///
+/// 우리보다 권한이 높은 창이 앞에 있으면(관리자 권한 앱) Windows 가 주입 입력을
+/// 버리고(UIPI) 훅도 부르지 않는다. UAC 동의·잠금 화면(보안 데스크톱)도 같다.
+/// 이때 프로브가 조용한 것은 훅이 죽었다는 증거가 아닌데, 예전엔 그렇게 읽고
+/// 10초마다 훅을 재설치했다(재설치는 켜져 있던 Caps Lock 까지 끈다).
+fn probe_blocked_reason() -> Option<&'static str> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, OpenInputDesktop};
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    const DESKTOP_SWITCHDESKTOP: u32 = 0x0100;
+    static SELF_ELEVATED: OnceLock<bool> = OnceLock::new();
+
+    // SAFETY: 핸들은 받은 자리에서 닫고, 포인터는 모두 이 함수의 지역 변수를 가리킨다
+    unsafe {
+        // 입력 데스크톱을 열 수 없으면 보안 데스크톱이 떠 있는 것
+        let desktop = OpenInputDesktop(0, 0, DESKTOP_SWITCHDESKTOP);
+        if desktop.is_null() {
+            return Some("보안 데스크톱(UAC·잠금 화면)");
+        }
+        CloseDesktop(desktop);
+
+        let self_elevated = *SELF_ELEVATED
+            .get_or_init(|| process_is_elevated(GetCurrentProcess()).unwrap_or(false));
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return Some("전경 창 없음(화면 전환 중)");
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return Some("전경 프로세스를 열 수 없음(보호된 프로세스)");
+        }
+        let foreground_elevated = process_is_elevated(process);
+        CloseHandle(process);
+        foreground_outranks_us(self_elevated, foreground_elevated)
+            .then_some("관리자 권한 창이 전경")
+    }
+}
+
+/// 전경 프로세스가 우리보다 권한이 높아 주입 입력이 닿지 않는가.
+/// 권한을 읽지 못했으면(`None`) 닿는다고 볼 근거가 없으므로 높다고 본다.
+fn foreground_outranks_us(self_elevated: bool, foreground_elevated: Option<bool>) -> bool {
+    !self_elevated && foreground_elevated.unwrap_or(true)
+}
+
+/// 프로세스 토큰이 승격돼 있는지. 토큰을 읽지 못하면 `None`.
+unsafe fn process_is_elevated(process: windows_sys::Win32::Foundation::HANDLE) -> Option<bool> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+    let mut token = std::ptr::null_mut();
+    if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+        return None;
+    }
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut returned = 0u32;
+    let ok = GetTokenInformation(
+        token,
+        TokenElevation,
+        (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+        std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+        &mut returned,
+    );
+    CloseHandle(token);
+    (ok != 0).then_some(elevation.TokenIsElevated != 0)
 }
 
 /// 프로브 시작 뒤 훅 세대나 콜백 하트비트가 바뀌지 않았을 때만 재설치한다.
@@ -1999,6 +2087,16 @@ mod tests {
         // 시스템은 0.2초 전 입력을 봤는데 훅은 10초째 조용 → 사망 의심
         let now = 100_000;
         assert!(should_probe_hook(now, now - 10_000, now - 200, None));
+    }
+
+    #[test]
+    fn 권한이_높은_전경_창에서는_프로브를_믿지_않는다() {
+        assert!(foreground_outranks_us(false, Some(true)));
+        assert!(foreground_outranks_us(false, None), "권한을 못 읽으면 보류");
+        assert!(!foreground_outranks_us(false, Some(false)));
+        // 데몬이 관리자 권한이면 주입이 어디든 닿는다
+        assert!(!foreground_outranks_us(true, Some(true)));
+        assert!(!foreground_outranks_us(true, None));
     }
 
     #[test]

@@ -64,6 +64,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     # 로그인 자동 시작 — HKCU Run 값 (autostart.rs)
     "Win32_System_Registry",
+    # 훅 워치독 — 전경 창 권한(토큰 승격)과 보안 데스크톱 판정
+    "Win32_Security",
+    "Win32_System_StationsAndDesktops",
 ] }
 # 현재 위치(`:길` 기본 출발지, docs/20) — WinRT Windows.Devices.Geolocation
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation", "Win32_System_WinRT"] }
