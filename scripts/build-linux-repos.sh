@@ -126,9 +126,12 @@ build_yum() {
     info "YUM: .rpm $n개 배치"
 
     # rpmsign 은 %_gpg_name 매크로로 키를 고른다. gpg2 는 --batch 로 비대화 서명.
+    # %__gpg_sign_cmd 를 통째로 덮어쓰지 않는다 — 명령 형식이 rpm 버전마다 달라
+    # (옛 형식은 실행 파일 뒤에 argv[0] "gpg" 를 한 번 더 쓴다) ubuntu-26.04 의
+    # rpm 에서 "gpg gpg --batch …" 가 되어 서명이 죽었다 (v0.21.0). 추가 인자만 넘긴다.
     cat > "$HOME/.rpmmacros" <<EOF
 %_gpg_name $GPG_KEY_ID
-%__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+%_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback
 EOF
     rpmsign --addsign "$root"/*.rpm
     info "YUM: 패키지 서명 완료"
