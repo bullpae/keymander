@@ -93,18 +93,29 @@ mod win {
         "librewolf.exe",
     ];
 
-    /// 세션 레지스트리: (service_id, HWND as isize). HWND는 raw pointer라
-    /// isize로 저장해 스레드 간 이동을 안전하게 한다.
-    static SESSION: Mutex<Vec<(String, isize)>> = Mutex::new(Vec::new());
+    /// 이어서 질문할 창 — 창 하나에 탭이 여럿이라 제목 마커도 함께 기억한다
+    #[derive(Clone)]
+    struct Session {
+        service_id: String,
+        /// HWND는 raw pointer라 isize로 저장해 스레드 간 이동을 안전하게 한다
+        hwnd: isize,
+        title_markers: Vec<String>,
+    }
+
+    static SESSION: Mutex<Vec<Session>> = Mutex::new(Vec::new());
 
     pub(super) fn session_len() -> usize {
         SESSION.lock().map(|g| g.len()).unwrap_or(0)
     }
 
-    fn registry_upsert(service_id: &str, hwnd: isize) {
+    fn registry_upsert(service_id: &str, hwnd: isize, title_markers: &[String]) {
         if let Ok(mut g) = SESSION.lock() {
-            g.retain(|(id, _)| id != service_id);
-            g.push((service_id.to_string(), hwnd));
+            g.retain(|s| s.service_id != service_id);
+            g.push(Session {
+                service_id: service_id.to_string(),
+                hwnd,
+                title_markers: title_markers.to_vec(),
+            });
         }
     }
 
@@ -159,7 +170,10 @@ mod win {
 
     fn title_matches(hwnd: HWND, markers: &[String]) -> bool {
         let title = window_title(hwnd);
-        markers.iter().any(|m| title.contains(m.as_str()))
+        // 빈 마커는 모든 제목과 맞으므로 세지 않는다
+        markers
+            .iter()
+            .any(|m| !m.is_empty() && title.contains(m.as_str()))
     }
 
     /// 전경창이 브라우저 + 기대 마커가 될 때까지 폴링. 매치되면 그 HWND 반환.
@@ -263,13 +277,13 @@ mod win {
                 }
             }
 
-            registry_upsert(&job.service_id, hwnd as isize);
+            registry_upsert(&job.service_id, hwnd as isize, &job.title_markers);
             tracing::info!("[{}] 자동 제출 완료", job.service_id);
         }
     }
 
     pub(super) fn followup_sequence(prompt: &str) {
-        let entries: Vec<(String, isize)> = match SESSION.lock() {
+        let entries: Vec<Session> = match SESSION.lock() {
             Ok(g) => g.clone(),
             Err(_) => return,
         };
@@ -278,9 +292,10 @@ mod win {
             return;
         }
 
-        let mut still_alive: Vec<(String, isize)> = Vec::new();
-        for (service_id, hwnd_isize) in entries {
-            let hwnd = hwnd_isize as HWND;
+        let mut still_alive: Vec<Session> = Vec::new();
+        for session in entries {
+            let service_id = session.service_id.as_str();
+            let hwnd = session.hwnd as HWND;
             unsafe {
                 if IsWindow(hwnd) == 0 {
                     continue; // 창이 닫힘 — 레지스트리에서 제거
@@ -289,16 +304,17 @@ mod win {
             }
             std::thread::sleep(FOCUS_SETTLE);
 
-            // 포커스가 실제로 그 창으로 갔고 브라우저인지 검증
+            // 포커스가 실제로 그 창으로 갔고, 브라우저이며, 보이는 탭이 그 LLM 인지 검증.
+            // 창은 같아도 다른 탭(메일·결제 폼)이 앞에 있으면 거기에 붙여넣고 제출하게 된다.
             let fg = foreground_window();
-            if fg != hwnd || !is_browser(fg) {
-                tracing::info!("[{service_id}] 포커스 실패 — 이어서 질문 건너뜀");
-                still_alive.push((service_id, hwnd_isize));
+            if fg != hwnd || !is_browser(fg) || !title_matches(fg, &session.title_markers) {
+                tracing::info!("[{service_id}] 창 또는 탭이 다름 — 이어서 질문 건너뜀");
+                still_alive.push(session);
                 continue;
             }
 
             if !set_clipboard(prompt) {
-                still_alive.push((service_id, hwnd_isize));
+                still_alive.push(session);
                 continue;
             }
             send_paste();
@@ -307,7 +323,7 @@ mod win {
                 send_enter();
                 tracing::info!("[{service_id}] 이어서 질문 전달 완료");
             }
-            still_alive.push((service_id, hwnd_isize));
+            still_alive.push(session);
         }
 
         if let Ok(mut g) = SESSION.lock() {

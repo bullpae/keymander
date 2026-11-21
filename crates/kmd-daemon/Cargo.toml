@@ -65,3 +65,6 @@ windows-sys = { version = "0.59", features = [
 ] }
 # 현재 위치(`:길` 기본 출발지, docs/20) — WinRT Windows.Devices.Geolocation
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation", "Win32_System_WinRT"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

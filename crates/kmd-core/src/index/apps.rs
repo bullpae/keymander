@@ -129,8 +129,7 @@ $sw.Close()
     cmd.args([
         "-NoProfile",
         "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
+        // 실행 정책은 스크립트 파일에만 걸린다 — `-Command` 에는 Bypass 가 필요 없다
         "-Command",
         ps_script,
     ]);
