@@ -12,6 +12,9 @@ name: Publish Linux Repos
 
 on:
   workflow_call:
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: false
   workflow_dispatch:
 
 # Pages는 브랜치(gh-pages)가 아니라 Actions 아티팩트로 배포한다.
