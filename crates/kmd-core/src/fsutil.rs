@@ -141,6 +141,39 @@ fn path_within_ignore_case(path: &Path, root: &Path) -> bool {
     true
 }
 
+/// 로그 파일이 이보다 크면 열 때 `.1` 로 밀어낸다 (한 세대만 보관)
+pub const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// 로그 파일을 이어 쓰기로 연다. 본인만 읽게(Unix 0600) 하고, 너무 크면 한 세대 밀어낸다.
+///
+/// 로그에는 실행한 프로그램 경로·색인 폴더 같은 것이 남는다. 데이터 폴더가 0755 인
+/// 환경(Linux `~/.local/share`)에서 다른 계정이 읽지 못하게 파일 자체를 잠근다.
+pub fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+        let mut old = path.as_os_str().to_owned();
+        old.push(".1");
+        let _ = std::fs::rename(path, old);
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts.open(path)?;
+    // 이미 있던 파일은 `mode` 가 적용되지 않는다 — 예전 버전이 0644 로 만든 로그를 고친다
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(file)
+}
+
 /// 원자적 파일 쓰기 — 고유 tmp에 쓰고 `sync_all` 후 rename.
 ///
 /// - tmp 이름은 프로세스·스레드별로 고유하다. 고정 이름이면 데몬·데스크톱·TUI가
@@ -184,6 +217,31 @@ pub fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 로그_파일은_본인만_읽고_크면_한_세대_밀어낸다() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs").join("app.log");
+        drop(open_log_file(&path).unwrap());
+        assert!(path.exists(), "폴더까지 만든다");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // 예전 버전이 0644 로 만든 파일도 고친다
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            drop(open_log_file(&path).unwrap());
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let big = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        big.set_len(LOG_ROTATE_BYTES + 1).unwrap();
+        drop(big);
+        drop(open_log_file(&path).unwrap());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0, "새 파일로 시작");
+        assert!(dir.path().join("logs").join("app.log.1").exists());
+    }
 
     #[test]
     fn 이름_규칙() {

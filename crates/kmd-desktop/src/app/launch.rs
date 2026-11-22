@@ -213,7 +213,7 @@ impl App {
                     if let kmd_core::action::ActionResult::Error(e) =
                         kmd_core::action::open_url(&url)
                     {
-                        tracing::warn!("URL 열기 실패: {url} — {e}");
+                        tracing::warn!("URL 열기 실패: {e}");
                     }
                 }
                 exit_launcher()
@@ -291,7 +291,7 @@ impl App {
                         if let kmd_core::action::ActionResult::Error(e) =
                             kmd_core::action::open_url(&url)
                         {
-                            tracing::warn!("URL 열기 실패: {url} — {e}");
+                            tracing::warn!("URL 열기 실패: {e}");
                         }
                     }
                     return exit_launcher();

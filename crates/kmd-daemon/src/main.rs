@@ -22,24 +22,10 @@ use color_eyre::Result;
 use kmd_core::ipc;
 use std::env;
 
-/// 로그 파일이 이보다 크면 시작할 때 `.1` 로 밀어낸다 (한 세대만 보관)
-const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
-
 /// `start` 일 때만 로그 파일을 연다 — launchd·작업 스케줄러 아래에서는 stdout 이
 /// 버려져 데몬 기록이 남지 않았다 (2026-09 이후 daemon.log 가 멈춰 있었음)
 fn open_log_file() -> Option<std::fs::File> {
-    let path = ipc::log_file_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).ok()?;
-    }
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
-        let _ = std::fs::rename(&path, path.with_extension("log.1"));
-    }
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()
+    kmd_core::fsutil::open_log_file(&ipc::log_file_path()).ok()
 }
 
 fn main() -> Result<()> {

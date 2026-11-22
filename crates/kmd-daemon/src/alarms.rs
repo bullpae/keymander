@@ -52,7 +52,8 @@ fn fire(store: &NoteStore, timer: &Timer) {
     let now = Local::now();
     let now_ms = now.timestamp_millis();
     let fired = plan_fired(timer, now_ms, store.break_secs());
-    tracing::info!("타이머 끝: {}", fired.title);
+    // 라벨은 사용자가 적은 글이라 로그에 남기지 않는다
+    tracing::info!("타이머 끝 ({})", timer.kind.alert());
     show_alert(&fired.title, &fired.body, timer.kind.alert());
     let timers = store.timers();
     if fired.count_focus {

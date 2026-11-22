@@ -87,8 +87,19 @@ pub fn open_with_system(path: &str) -> ActionResult {
 pub fn open_url(url: &str) -> ActionResult {
     match spawn_open(url) {
         Ok(_) => ActionResult::OpenedUrl(url.to_string()),
-        Err(e) => ActionResult::Error(format!("Failed to open URL '{}': {}", url, e)),
+        // 주소 전체에는 검색어·번역 원문·프롬프트가 들어 있고, 이 문구는 로그로 간다
+        Err(e) => ActionResult::Error(format!("Failed to open URL ({}): {}", url_host(url), e)),
     }
+}
+
+/// 주소의 `스킴://호스트` 까지만 — 경로·질의는 뺀다. 주소가 아니면 `"?"`
+pub fn url_host(url: &str) -> &str {
+    let Some(scheme_end) = url.find("://") else {
+        return "?";
+    };
+    let rest = &url[scheme_end + 3..];
+    let host_len = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    &url[..scheme_end + 3 + host_len]
 }
 
 /// Spawn the platform-specific "open" command for a path or URL
@@ -194,6 +205,23 @@ pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> Action
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn 주소는_호스트까지만_남긴다() {
+        assert_eq!(
+            super::url_host("https://translate.google.com/?sl=auto&text=비밀"),
+            "https://translate.google.com"
+        );
+        assert_eq!(
+            super::url_host("https://chatgpt.com?q=x"),
+            "https://chatgpt.com"
+        );
+        assert_eq!(
+            super::url_host("https://example.com"),
+            "https://example.com"
+        );
+        assert_eq!(super::url_host("/Users/me/file.txt"), "?");
+    }
+
     use super::{explorer_path, linux_desktop_exec};
 
     #[test]
