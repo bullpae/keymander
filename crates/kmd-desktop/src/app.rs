@@ -627,8 +627,8 @@ impl App {
         match result {
             Ok(output) => match kmd_core::clipboard::set_text(&output) {
                 Ok(()) => {
-                    let first_line = output.lines().next().unwrap_or("(no output)");
-                    tracing::info!("Shell output copied: {first_line}");
+                    // 출력(IP·호스트 이름 등)은 로그에 남기지 않는다
+                    tracing::info!("Shell output copied: {} bytes", output.len());
                     exit_launcher()
                 }
                 Err(e) => {

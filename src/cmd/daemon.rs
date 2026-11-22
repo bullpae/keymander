@@ -65,6 +65,12 @@ fn daemon_log_stdio() -> (std::process::Stdio, std::process::Stdio) {
     }
     preserve_previous_log(&path);
     if let Ok(file) = std::fs::File::create(&path) {
+        // 본인만 읽게 — 데몬이 같은 파일을 열 때도 0600 으로 맞춘다 (fsutil::open_log_file)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
         if let Ok(clone) = file.try_clone() {
             return (file.into(), clone.into());
         }

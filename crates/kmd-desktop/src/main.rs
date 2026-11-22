@@ -21,7 +21,6 @@ mod theme;
 mod window_state;
 
 use iced::{window, Color, Point, Size};
-use std::fs::{self, OpenOptions};
 use std::sync::Mutex;
 
 use crate::app::{
@@ -208,13 +207,8 @@ fn main() -> iced::Result {
             .add_directive("iced_wgpu::window::compositor=info".parse().unwrap())
     };
 
-    let log_file = fs::create_dir_all(&log_dir).ok().and_then(|_| {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .ok()
-    });
+    // 본인만 읽게 열고, 5MB 를 넘으면 한 세대 밀어낸다 (예전엔 끝없이 쌓였다)
+    let log_file = kmd_core::fsutil::open_log_file(&log_path).ok();
 
     // 파일 I/O를 백그라운드 스레드로 오프로드 — 키 입력마다 UI 스레드가 디스크
     // 쓰기로 멈추지 않게 한다. WorkerGuard는 main 종료 시점까지 살아 있어야

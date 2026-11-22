@@ -488,8 +488,9 @@ pub fn run() -> color_eyre::Result<()> {
     // Shutdown 요청 → 채널로 메인 스레드를 즉시 깨운다 (200ms 폴링 제거)
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
-    // 설정 로드 (성공/폴백 로그는 load_config 내부에서)
+    // 설정 로드 (폴백 경고는 load_config 내부에서)
     let config = load_config();
+    tracing::info!("설정 폴더: {}", Config::default_config_dir().display());
 
     // 키 바인딩 엔진 시작
     let mut kb_backend = keybind::create_backend();
@@ -927,7 +928,9 @@ pub(crate) fn load_config() -> Config {
             if let Ok(mut g) = CONFIG_LOAD_ERROR.lock() {
                 *g = None;
             }
-            tracing::info!("설정 로드 완료: {}", config_dir.display());
+            // 알림·감시 스레드가 30초마다 다시 읽는다 — info 로 두면 로그의 대부분이 이 줄이다.
+            // 시작할 때 한 번은 `run_server` 가 info 로 남긴다.
+            tracing::debug!("설정 로드 완료: {}", config_dir.display());
             config
         }
         Err(e) => {

@@ -280,7 +280,9 @@ impl App {
         match result {
             Ok(items) => self.apply_contains_items(items),
             Err(message) => {
-                tracing::warn!("장소 검색 실패: {message}");
+                // 문구에는 사용자가 친 장소 이름이 들어 있다 — 화면에만 보이고 로그에는 남기지 않는다
+                tracing::warn!("장소 검색 실패");
+                tracing::debug!("장소 검색 실패: {message}");
                 let mut items = vec![kmd_core::route::notice(
                     "장소 검색에 실패했습니다",
                     &message,
