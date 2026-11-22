@@ -15,7 +15,7 @@ jobs:
     name: Validate release version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Match tag and Cargo package versions
         shell: bash
         run: |
@@ -50,9 +50,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install Linux build deps
         if: runner.os == 'Linux'
         run: |
@@ -95,11 +95,11 @@ jobs:
             prefix: kmd
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Validate
         run: cargo check --workspace
@@ -120,7 +120,7 @@ jobs:
           7z a ../../../${{ matrix.prefix }}-${{ matrix.target }}.zip ${{ matrix.artifact }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.prefix }}-${{ matrix.target }}
           path: ${{ matrix.prefix }}-${{ matrix.target }}.*
@@ -155,11 +155,11 @@ jobs:
             prefix: kmd-desktop
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install Linux system deps (iced/winit)
         if: runner.os == 'Linux'
         run: |
@@ -188,7 +188,7 @@ jobs:
           7z a ../../../${{ matrix.prefix }}-${{ matrix.target }}.zip ${{ matrix.artifact }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.prefix }}-${{ matrix.target }}
           path: ${{ matrix.prefix }}-${{ matrix.target }}.*
@@ -218,11 +218,11 @@ jobs:
             ext: ".exe"
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install Linux system deps (iced/winit)
         if: runner.os == 'Linux'
         run: |
@@ -280,7 +280,7 @@ jobs:
           (cd winget-stage && 7z a ../keymander-winget-${{ matrix.target }}.zip keymander)
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: keymander-portable-${{ matrix.target }}
           path: |
@@ -296,9 +296,9 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Install Linux system deps (iced/winit + packaging)
         run: |
           sudo apt-get update -qq
@@ -307,7 +307,8 @@ jobs:
             libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
             libudev-dev libssl-dev dpkg-dev
       - name: Install packaging tools
-        run: cargo install cargo-deb cargo-generate-rpm --locked
+        # 버전 고정 — 여기서 만든 deb/rpm 이 서명되어 apt/yum 으로 나간다. 올릴 땐 숫자를 바꾼다.
+        run: cargo install cargo-deb@3.8.0 cargo-generate-rpm@0.21.1 --locked
 
       - name: Build all binaries
         run: cargo build --release -p keymander -p kmd-desktop -p kmd-daemon --locked
@@ -325,7 +326,7 @@ jobs:
         run: cargo generate-rpm -o .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: keymander-linux-packages
           path: |
@@ -343,7 +344,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -400,10 +401,10 @@ jobs:
           HAS_KEY: ${{ secrets.TAP_DEPLOY_KEY != '' }}
         run: echo "has=$HAS_KEY" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         if: steps.tap.outputs.has == 'true'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: steps.tap.outputs.has == 'true'
         with:
           path: artifacts
