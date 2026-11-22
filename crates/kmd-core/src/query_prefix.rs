@@ -523,6 +523,92 @@ pub fn bang_web_hint(query: &str, use_emoji: bool) -> Option<IndexItem> {
     })
 }
 
+fn command_item(spec: &CommandSpec, use_emoji: bool) -> IndexItem {
+    let icon = if use_emoji {
+        spec.icon_emoji
+    } else {
+        spec.icon_ascii
+    };
+    help_item(spec.title, spec.usage, icon, false)
+}
+
+/// `:` 또는 `:ti` 처럼 명령을 치는 중일 때의 자동완성 목록.
+///
+/// 지금까지는 별칭을 끝까지 정확히 쳐야 했고, 그 전에는 일반 검색으로 흘러 무엇이 있는지
+/// 보려면 `:help` 를 따로 열어야 했다. 항목은 `:help` 와 같은 것이라 Enter 면 시작 쿼리가 채워진다.
+/// 이미 명령으로 인식되는 입력(`:t`)과 인자를 치기 시작한 입력(공백 포함)에는 띄우지 않는다.
+pub fn command_completions(query: &str, use_emoji: bool) -> Vec<IndexItem> {
+    if !query.starts_with(':')
+        || query.contains(char::is_whitespace)
+        || prefix_of(query) != QueryPrefix::General
+    {
+        return Vec::new();
+    }
+    let token = query.to_lowercase();
+    COMMANDS
+        .iter()
+        .filter(|spec| spec.aliases.iter().any(|a| a.starts_with(&token)))
+        .map(|spec| command_item(spec, use_emoji))
+        .collect()
+}
+
+/// 제목에 없는 한글 이름 — 이름으로 명령을 찾을 때만 쓴다
+fn extra_names(prefix: QueryPrefix) -> &'static [&'static str] {
+    match prefix {
+        QueryPrefix::Calc => &["계산기", "계산"],
+        QueryPrefix::Emoji => &["이모지", "이모티콘"],
+        QueryPrefix::Settings => &["설정", "테마"],
+        QueryPrefix::Transform => &["변환", "맞춤법", "번역"],
+        QueryPrefix::Prompt => &["프롬프트"],
+        QueryPrefix::FolderSearch => &["폴더"],
+        QueryPrefix::Scope => &["범위", "색인"],
+        QueryPrefix::ContentSearch => &["본문", "내용"],
+        QueryPrefix::Keys => &["단축키", "치트시트"],
+        QueryPrefix::Dojo => &["도장"],
+        QueryPrefix::Keymap => &["키맵"],
+        QueryPrefix::Version => &["버전"],
+        QueryPrefix::Clipboard => &["클립보드"],
+        QueryPrefix::Route => &["길찾기", "지도", "카카오맵"],
+        QueryPrefix::Todo => &["할일", "투두", "todo"],
+        QueryPrefix::Help => &["도움말"],
+        _ => &[],
+    }
+}
+
+/// 접두사 없이 이름으로 친 명령 (`timer`, `타이머`, `계산기`).
+///
+/// 다른 런처는 명령을 이름으로 찾는 것이 기본이다. `:` 별칭을 외우지 않아도 닿게 하되,
+/// 앱·파일 결과를 밀어내지 않도록 호출부가 상위 결과 아래에 끼운다. 짧은 입력은 너무 많이
+/// 걸려 라틴 3자·한글 2자부터 본다. 제목의 낱말, 별칭, [`extra_names`] 의 앞부분과 맞춘다.
+pub fn command_name_matches(query: &str, use_emoji: bool) -> Vec<IndexItem> {
+    let q: String = query
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let chars = q.chars().count();
+    let min = if q.is_ascii() { 3 } else { 2 };
+    if chars < min || !q.chars().all(char::is_alphanumeric) {
+        return Vec::new();
+    }
+    COMMANDS
+        .iter()
+        .filter(|spec| {
+            let title = spec.title.to_lowercase();
+            let in_title = title
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|w| w.starts_with(&q));
+            let in_alias = spec
+                .aliases
+                .iter()
+                .any(|a| a.trim_start_matches(':').starts_with(&q));
+            let in_extra = extra_names(spec.prefix).iter().any(|n| n.starts_with(&q));
+            in_title || in_alias || in_extra
+        })
+        .map(|spec| command_item(spec, use_emoji))
+        .collect()
+}
+
 /// `:clac`처럼 `:`로 시작하지만 알려진 명령이 아닌 입력에 대한 안내 항목.
 ///
 /// 오타나 미지원 명령일 때 결과 최상단에 표시할 힌트 — 일반 검색 폴스루는
@@ -720,6 +806,62 @@ pub fn keymap_query_items(config: &crate::Config, query: &str, use_emoji: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn names(items: &[IndexItem]) -> Vec<&str> {
+        items.iter().map(|i| i.name.as_str()).collect()
+    }
+
+    #[test]
+    fn 콜론만_치면_모든_명령이_뜬다() {
+        let all = command_completions(":", false);
+        assert_eq!(all.len(), COMMANDS.len());
+        // 항목은 :help 와 같은 것 — Enter 면 시작 쿼리가 채워진다
+        assert!(all.iter().all(|i| help_query_seed(&i.name).is_some()));
+    }
+
+    #[test]
+    fn 치는_중인_명령은_앞부분이_맞는_것만_뜬다() {
+        let got = command_completions(":ti", false);
+        assert_eq!(names(&got), [":timer  Timer (타이머)"]);
+        assert!(names(&command_completions(":P", false))
+            .iter()
+            .any(|n| n.starts_with(":pomo")));
+    }
+
+    #[test]
+    fn 이미_명령이거나_인자를_치기_시작했으면_자동완성하지_않는다() {
+        assert!(
+            command_completions(":t", false).is_empty(),
+            "정확히 맞는 명령"
+        );
+        assert!(command_completions(":ti 5분", false).is_empty());
+        assert!(command_completions(":zzz", false).is_empty());
+        assert!(command_completions("timer", false).is_empty());
+        assert!(command_completions("/ti", false).is_empty());
+    }
+
+    #[test]
+    fn 이름으로_친_명령을_찾는다() {
+        let first = |q: &str| {
+            command_name_matches(q, false)
+                .first()
+                .map(|i| i.name.clone())
+        };
+        assert_eq!(first("timer").as_deref(), Some(":timer  Timer (타이머)"));
+        assert_eq!(first("타이머").as_deref(), Some(":timer  Timer (타이머)"));
+        assert_eq!(first("계산기").as_deref(), Some(":calc  Calculator"));
+        assert_eq!(first("할 일").as_deref(), Some(":td  To-do (할 일)"));
+        assert_eq!(first("Pomo").as_deref(), Some(":pomo  Pomodoro (뽀모도로)"));
+    }
+
+    #[test]
+    fn 짧거나_기호가_든_입력은_이름으로_찾지_않는다() {
+        assert!(command_name_matches("ti", false).is_empty());
+        assert!(command_name_matches("메", false).is_empty());
+        assert!(command_name_matches("*.pdf", false).is_empty());
+        assert!(command_name_matches("report.md", false).is_empty());
+        assert!(command_name_matches("", false).is_empty());
+    }
 
     // ── 프리픽스 결과 생성 (데스크톱·TUI 공용) ─────────────────────────
     //

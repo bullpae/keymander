@@ -452,6 +452,30 @@ impl App {
             );
         }
 
+        // `:` · `:ti` — 치는 중인 명령의 자동완성. 일반 검색 결과는 뜻이 없으므로 갈아 끼운다
+        let completions = kmd_core::query_prefix::command_completions(query, self.use_emoji);
+        if !completions.is_empty() {
+            results = completions
+                .into_iter()
+                .map(|item| kmd_core::SearchResult {
+                    item,
+                    score: SCORE_PLUGIN,
+                })
+                .collect();
+            self.search_mode = kmd_core::SearchMode::Contains;
+        } else {
+            // 이름으로 친 명령(`timer`, `타이머`) — 앱·파일 상위 결과 아래에 끼운다
+            let named = kmd_core::query_prefix::command_name_matches(query, self.use_emoji);
+            let at = results.len().min(NAMED_COMMAND_KEEP_TOP);
+            results.splice(
+                at..at,
+                named.into_iter().map(|item| kmd_core::SearchResult {
+                    item,
+                    score: SCORE_PLUGIN,
+                }),
+            );
+        }
+
         // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
         if let Some(hint) = kmd_core::query_prefix::unknown_command_hint(query, self.use_emoji) {
             results.insert(
@@ -575,6 +599,8 @@ impl App {
 
 /// 이름 매칭이 약할 때 대체 제안 위에 남겨 둘 퍼지 결과 수.
 const WEAK_MATCH_KEEP_TOP: usize = 5;
+/// 이름으로 친 명령을 끼울 자리 — 앱·파일 상위 결과는 그대로 둔다
+const NAMED_COMMAND_KEEP_TOP: usize = 3;
 
 /// 결과 중 질의 토큰이 모두 (대소문자 무시) 이름이나 경로에 그대로 들어간
 /// 항목이 있는가 — 글자만 흩어져 걸린 퍼지 매칭과 구분한다.
