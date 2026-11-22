@@ -100,6 +100,17 @@ pub(super) fn update_search(
             ) {
                 state.results.insert(0, SearchResult { item, score: 0 });
             }
+            // `:` · `:ti` — 치는 중인 명령의 자동완성. 없으면 이름으로 친 명령을 상위 결과 아래에
+            let completions = kmd_core::query_prefix::command_completions(&query, state.use_emoji);
+            if !completions.is_empty() {
+                state.results = items_to_results(completions, 0);
+                state.search_mode = SearchMode::Contains;
+                state.selected_index = 0;
+            } else {
+                let named = kmd_core::query_prefix::command_name_matches(&query, state.use_emoji);
+                let at = state.results.len().min(3);
+                state.results.splice(at..at, items_to_results(named, 0));
+            }
             // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
             if let Some(hint) =
                 kmd_core::query_prefix::unknown_command_hint(&query, state.use_emoji)
