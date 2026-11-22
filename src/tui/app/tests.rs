@@ -843,3 +843,35 @@ fn 메모_키_흐름() {
     assert_eq!(store.load().unwrap()[0].body, "hello!");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn 콜론을_치는_중이면_명령_자동완성이_뜨고_고르면_시작_쿼리가_된다() {
+    let st = results_for(":ti");
+    let names: Vec<&str> = st.results.iter().map(|r| r.item.name.as_str()).collect();
+    assert_eq!(names, [":timer  Timer (타이머)"]);
+    assert_eq!(st.selected_index, 0);
+
+    let mut engine = SearchEngine::new();
+    let mut state = results_for(":ti");
+    let picked = state.results[0].clone();
+    run_selected(&mut state, &mut engine, picked);
+    assert_eq!(state.query, ":timer ");
+
+    // 콜론만 — 전체 명령
+    assert_eq!(
+        results_for(":").results.len(),
+        kmd_core::query_prefix::COMMANDS.len()
+    );
+}
+
+#[test]
+fn 이름으로_친_명령이_일반_검색_결과에_낀다() {
+    let st = results_for("timer");
+    assert!(
+        st.results
+            .iter()
+            .any(|r| r.item.name == ":timer  Timer (타이머)"),
+        "{:?}",
+        st.results.iter().map(|r| &r.item.name).collect::<Vec<_>>()
+    );
+}
