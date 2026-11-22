@@ -520,6 +520,7 @@ pub fn run() -> color_eyre::Result<()> {
     crate::clipboard::spawn_watcher(
         config.clipboard.history_enabled,
         config.clipboard.history_size,
+        config.clipboard.expire_minutes,
     );
 
     // TCP 서버 시작 (OS가 빈 포트 자동 할당)
@@ -809,6 +810,13 @@ fn process_request(
 
         Request::ClipHistory { query, limit } => Response::ClipHistory {
             hits: crate::clipboard::search(&query, limit),
+        },
+
+        Request::ClipClear => Response::Ok {
+            message: format!(
+                "클립보드 히스토리 {}건을 비웠습니다",
+                crate::clipboard::clear()
+            ),
         },
 
         Request::ClipCaptureForeground => {

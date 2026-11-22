@@ -8,11 +8,14 @@ use super::*;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ClipboardConfig {
-    /// 히스토리 수집 활성화. 기본 false(opt-in) — 비밀번호 관리자의 Concealed
-    /// 마크 제외가 아직 없어(P1.1), 사용자가 명시적으로 켜야 한다.
+    /// 히스토리 수집 활성화. 기본 false(opt-in) — 클립보드는 비밀번호·토큰이 지나가는
+    /// 통로라 사용자가 명시적으로 켜야 한다. (Concealed 마크가 붙은 항목은 수집하지 않는다)
     pub history_enabled: bool,
     /// 링 버퍼 상한. 초과 시 오래된 것부터 밀려난다.
     pub history_size: usize,
+    /// 복사한 지 이만큼(분) 지난 항목은 버린다. 0 = 만료 없음(데몬이 꺼질 때까지).
+    /// 표시 없이 복사된 비밀번호·토큰이 오래 남지 않게 하려면 켠다.
+    pub expire_minutes: u64,
 }
 
 impl Default for ClipboardConfig {
@@ -20,6 +23,7 @@ impl Default for ClipboardConfig {
         Self {
             history_enabled: false,
             history_size: 50,
+            expire_minutes: 0,
         }
     }
 }

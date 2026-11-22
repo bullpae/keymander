@@ -29,7 +29,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// 수집 상한 (텍스트 1건). 초과 시 수집하지 않는다.
 const MAX_ITEM_BYTES: usize = 1024 * 1024;
@@ -47,6 +47,8 @@ const RESTORE_DELAY: Duration = Duration::from_millis(300);
 struct ClipEntry {
     id: u64,
     text: String,
+    /// 마지막으로 복사된 시각 (만료 기준). 다시 복사하면 새로 잰다
+    at: Instant,
 }
 
 /// 히스토리 링 버퍼. 맨 앞(index 0)이 최신.
@@ -61,6 +63,37 @@ static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// 현재 링 버퍼 상한 (기본 50). spawn_watcher에서 설정.
 static CAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(50);
+/// 항목 수명(초). 0 = 만료 없음. spawn_watcher에서 설정 (`clipboard.expire_minutes`).
+static EXPIRE_SECS: AtomicU64 = AtomicU64::new(0);
+
+/// 수명이 지난 항목을 버린다. 읽기·쓰기 전에 매번 부른다 — 타이머 스레드 없이도
+/// 만료된 항목이 런처 목록이나 `clip:N` 으로 나가지 않는다.
+fn prune(h: &mut VecDeque<ClipEntry>, now: Instant) {
+    let secs = EXPIRE_SECS.load(Ordering::Relaxed);
+    if secs > 0 {
+        let life = Duration::from_secs(secs);
+        h.retain(|e| now.saturating_duration_since(e.at) < life);
+    }
+}
+
+/// 만료 항목을 걸러 낸 히스토리
+fn live_history() -> Option<std::sync::MutexGuard<'static, VecDeque<ClipEntry>>> {
+    let mut h = HISTORY.lock().ok()?;
+    prune(&mut h, Instant::now());
+    Some(h)
+}
+
+/// 히스토리를 전부 비우고 지운 개수를 돌려준다. 시스템 클립보드는 건드리지 않는다.
+pub fn clear() -> usize {
+    HISTORY
+        .lock()
+        .map(|mut h| {
+            let n = h.len();
+            h.clear();
+            n
+        })
+        .unwrap_or(0)
+}
 
 /// 새 클립보드 텍스트를 히스토리 맨 앞에 넣는다 (중복은 앞으로 이동, 상한 유지).
 /// 수집 경로와 테스트에서 공용으로 쓴다.
@@ -69,14 +102,19 @@ fn record(text: String) {
         return;
     }
     let cap = CAP.load(Ordering::Relaxed).max(1);
+    let now = Instant::now();
     if let Ok(mut h) = HISTORY.lock() {
+        prune(&mut h, now);
         // 같은 내용은 중복 생성 없이 맨 앞으로 이동 (dedupe) — ID는 유지한다.
         let entry = if let Some(pos) = h.iter().position(|e| e.text == text) {
-            h.remove(pos).expect("position으로 찾은 항목")
+            let mut entry = h.remove(pos).expect("position으로 찾은 항목");
+            entry.at = now;
+            entry
         } else {
             ClipEntry {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 text,
+                at: now,
             }
         };
         h.push_front(entry);
@@ -88,7 +126,7 @@ fn record(text: String) {
 
 /// 안정 ID로 항목 조회. 밀려났거나 모르는 ID면 None.
 fn entry_by_id(id: u64) -> Option<ClipEntry> {
-    HISTORY.lock().ok()?.iter().find(|e| e.id == id).cloned()
+    live_history()?.iter().find(|e| e.id == id).cloned()
 }
 
 /// n번째 최근 항목(1-기반) 조회. 없으면 None.
@@ -96,7 +134,7 @@ fn entry_by_slot(n: usize) -> Option<ClipEntry> {
     if n == 0 {
         return None;
     }
-    HISTORY.lock().ok()?.get(n - 1).cloned()
+    live_history()?.get(n - 1).cloned()
 }
 
 /// n번째 최근 항목 텍스트 (테스트용).
@@ -113,7 +151,7 @@ fn slot_id(n: usize) -> Option<u64> {
 
 /// 현재 히스토리 길이 (진단/테스트용).
 pub fn len() -> usize {
-    HISTORY.lock().map(|h| h.len()).unwrap_or(0)
+    live_history().map_or(0, |h| h.len())
 }
 
 // ── 감시 상태 기계 (순수 로직 — 레이스 회귀를 실기 없이 테스트) ─────────────
@@ -169,8 +207,9 @@ fn watch_transition(state: &mut WatchState, generation: isize, read: WatchRead) 
 
 /// 클립보드 감시 스레드 시작 — 변화가 있을 때만 읽어 수집한다.
 /// `enabled`가 false면 아무것도 하지 않는다 (opt-in). 중복 호출은 무시.
-pub fn spawn_watcher(enabled: bool, history_size: usize) {
+pub fn spawn_watcher(enabled: bool, history_size: usize, expire_minutes: u64) {
     CAP.store(history_size.clamp(1, 1000), Ordering::Relaxed);
+    EXPIRE_SECS.store(expire_minutes.saturating_mul(60), Ordering::Relaxed);
     if !enabled {
         tracing::info!("클립보드 히스토리 수집: 비활성 (clipboard.history_enabled=false)");
         return;
@@ -261,7 +300,7 @@ pub fn capture_foreground_app() {
 /// 정교한 랭킹은 UI(Nucleo)가 한다. 실행은 안정 ID(`ClipHit.id`)로 한다.
 pub fn search(query: &str, limit: usize) -> Vec<kmd_core::ipc::ClipHit> {
     let q = query.trim().to_lowercase();
-    let Ok(h) = HISTORY.lock() else {
+    let Some(h) = live_history() else {
         return Vec::new();
     };
     h.iter()
@@ -930,8 +969,56 @@ mod tests {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         HISTORY.lock().unwrap().clear();
         CAP.store(50, Ordering::Relaxed);
+        EXPIRE_SECS.store(0, Ordering::Relaxed);
         PREV_APP_TARGET.store(0, Ordering::Relaxed);
         guard
+    }
+
+    /// 맨 앞 항목을 `secs` 초 전에 복사한 것으로 되돌린다
+    fn age_newest(secs: u64) {
+        let mut h = HISTORY.lock().unwrap();
+        let entry = h.front_mut().unwrap();
+        entry.at = entry.at.checked_sub(Duration::from_secs(secs)).unwrap();
+    }
+
+    #[test]
+    fn 수명이_지난_항목은_목록과_슬롯에서_사라진다() {
+        let _g = reset();
+        record("old-secret".into());
+        let old_id = slot_id(1).unwrap();
+        age_newest(120);
+        record("fresh".into());
+
+        // 만료를 켜기 전에는 그대로
+        assert_eq!(len(), 2);
+
+        EXPIRE_SECS.store(60, Ordering::Relaxed);
+        assert_eq!(len(), 1);
+        assert_eq!(slot(1).as_deref(), Some("fresh"));
+        assert!(entry_by_id(old_id).is_none());
+        assert!(search("secret", 10).is_empty());
+        EXPIRE_SECS.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn 다시_복사하면_수명을_새로_잰다() {
+        let _g = reset();
+        record("again".into());
+        age_newest(120);
+        record("again".into());
+        EXPIRE_SECS.store(60, Ordering::Relaxed);
+        assert_eq!(len(), 1);
+        EXPIRE_SECS.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn 비우면_지운_개수를_돌려주고_아무것도_남지_않는다() {
+        let _g = reset();
+        record("a".into());
+        record("b".into());
+        assert_eq!(clear(), 2);
+        assert_eq!(len(), 0);
+        assert_eq!(clear(), 0);
     }
 
     #[test]

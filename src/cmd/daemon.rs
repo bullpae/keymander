@@ -18,6 +18,7 @@ pub enum Action {
         to_previous: bool,
     },
     ClipCapture,
+    ClipClear,
 }
 
 pub fn run(action: Action) -> Result<()> {
@@ -35,6 +36,7 @@ pub fn run(action: Action) -> Result<()> {
             to_previous,
         } => clip_test(slot, delay_ms, to_previous),
         Action::ClipCapture => send_command(ipc::Request::ClipCaptureForeground, "clip-capture"),
+        Action::ClipClear => send_command(ipc::Request::ClipClear, "clip-clear"),
     }
 }
 
