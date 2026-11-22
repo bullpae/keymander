@@ -4,6 +4,11 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **클립보드 히스토리 만료와 비우기** — `[clipboard] expire_minutes` 를 주면 복사한 지 그만큼 지난 항목을 버린다
+  (기본 0 = 만료 없음). `kmd daemon clip-clear` 는 쌓인 히스토리를 바로 비운다. 표시 없이 복사된 비밀번호·토큰이
+  데몬이 꺼질 때까지 남던 것을 줄인다.
+
 ### Security
 - **로그 파일을 본인만 읽게 연다** (Unix 0600) — `daemon.log`·`desktop.log` 가 기본 권한(0644)이라, 데이터 폴더가
   열려 있는 환경(Linux `~/.local/share`)에서 다른 계정이 읽을 수 있었다. 예전에 만들어진 파일도 열 때 고친다.

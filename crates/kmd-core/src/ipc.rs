@@ -73,6 +73,8 @@ pub enum Request {
         #[serde(default = "default_limit")]
         limit: usize,
     },
+    /// 클립보드 히스토리를 전부 비운다 (`kmd daemon clip-clear`). 시스템 클립보드는 그대로.
+    ClipClear,
     /// [검증용] 현재 전경 앱을 흐름 B 붙여넣기 대상으로 기억한다.
     /// 실사용에서는 데몬이 런처 실행(Launch) 시점에 자동 캡처하므로 불필요.
     ClipCaptureForeground,

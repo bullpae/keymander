@@ -341,6 +341,8 @@ enum DaemonAction {
     /// [실험] 현재 전경 앱을 흐름 B 붙여넣기 대상으로 기억 (검증용).
     #[command(hide = true)]
     ClipCapture,
+    /// Forget the clipboard history kept by the daemon (system clipboard is untouched)
+    ClipClear,
 }
 
 #[derive(Subcommand)]
@@ -542,6 +544,7 @@ fn main() -> color_eyre::Result<()> {
                     to_previous,
                 },
                 DaemonAction::ClipCapture => cmd::daemon::Action::ClipCapture,
+                DaemonAction::ClipClear => cmd::daemon::Action::ClipClear,
             })?;
         }
         Some(Commands::Portable { action }) => {
