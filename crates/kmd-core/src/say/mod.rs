@@ -15,7 +15,10 @@ pub mod command;
 pub mod scoring;
 pub mod srs;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -167,11 +170,23 @@ impl Deck {
                 .any(|s| scoring::normalize_words(&s.en) == key)
     }
 
-    /// 여러 쌍을 담는다 — (담은 수, 중복으로 건너뛴 수)
+    /// 문장들의 비교 키 ([`Self::contains_en`] 과 같은 정규화). 여러 줄을 견줄 때 한 번만 만든다 —
+    /// 줄마다 `contains_en` 을 부르면 문장 전체를 줄 수만큼 다시 정규화한다
+    pub fn en_keys(&self) -> HashSet<Vec<String>> {
+        self.sentences
+            .iter()
+            .map(|s| scoring::normalize_words(&s.en))
+            .filter(|k| !k.is_empty())
+            .collect()
+    }
+
+    /// 여러 쌍을 담는다 — (담은 수, 중복으로 건너뛴 수). 같은 묶음 안의 중복도 건너뛴다
     pub fn add_pairs(&mut self, pairs: &[(String, String)], now: i64) -> (usize, usize) {
+        let mut keys = self.en_keys();
         let (mut added, mut dup) = (0, 0);
         for (en, ko) in pairs {
-            if self.contains_en(en) {
+            let key = scoring::normalize_words(en);
+            if !key.is_empty() && !keys.insert(key) {
                 dup += 1;
             } else {
                 self.sentences.push(Sentence::new(en, ko, false, now));
@@ -274,6 +289,35 @@ impl SayStore {
         self.write_json(&self.deck_path(), deck)
     }
 
+    /// [`Self::load_deck`] 를 파일이 그대로인 동안 기억해 둔다. `:say` 미리보기는 키를 칠 때마다
+    /// 불려 문장 파일 전체를 읽고 파싱했다 — 이제 stat 만 한다. 저장하면([`Self::write_json`]) 잊는다
+    pub fn load_deck_cached(&self, now: i64) -> Result<Arc<Deck>, String> {
+        let path = self.deck_path();
+        let Some(stamp) = file_stamp(&path) else {
+            return self.load_deck(now).map(Arc::new); // 처음 — 기본 문장을 만들어 저장한다
+        };
+        if let Some(deck) = memo_get(&DECK_MEMO, &path, stamp) {
+            return Ok(deck);
+        }
+        let deck = Arc::new(self.load_deck(now)?);
+        memo_put(&DECK_MEMO, path, stamp, deck.clone());
+        Ok(deck)
+    }
+
+    /// [`Self::load_state`] 의 기억해 두는 판 ([`Self::load_deck_cached`] 와 같은 이유)
+    pub fn load_state_cached(&self) -> Arc<SayState> {
+        let path = self.state_path();
+        let Some(stamp) = file_stamp(&path) else {
+            return Arc::default();
+        };
+        if let Some(state) = memo_get(&STATE_MEMO, &path, stamp) {
+            return state;
+        }
+        let state = Arc::new(self.load_state());
+        memo_put(&STATE_MEMO, path, stamp, state.clone());
+        state
+    }
+
     /// 화면 상태 읽기 — 없거나 깨졌으면 빈 상태 (잃어도 되는 정보다)
     pub fn load_state(&self) -> SayState {
         std::fs::read_to_string(self.state_path())
@@ -290,8 +334,46 @@ impl SayStore {
         std::fs::create_dir_all(&self.dir)
             .map_err(|e| format!("{} 만들기 실패: {e}", self.dir.display()))?;
         let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+        // 수정 시각이 거친 파일 시스템에서도 방금 쓴 것을 옛 기억으로 덮지 않게 먼저 잊는다
+        memo_forget(&DECK_MEMO, path);
+        memo_forget(&STATE_MEMO, path);
         crate::fsutil::write_atomic(path, json.as_bytes(), true)
             .map_err(|e| format!("{} 저장 실패: {e}", path.display()))
+    }
+}
+
+/// 파일이 바뀌었는지 보는 값 (수정 시각, 크기)
+type Stamp = (SystemTime, u64);
+
+fn file_stamp(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// 마지막으로 읽은 파일 하나 — 런처·TUI 는 한 프로세스에 입버릇 폴더가 하나라 하나면 된다
+struct Memo<T> {
+    path: PathBuf,
+    stamp: Stamp,
+    value: Arc<T>,
+}
+
+static DECK_MEMO: Mutex<Option<Memo<Deck>>> = Mutex::new(None);
+static STATE_MEMO: Mutex<Option<Memo<SayState>>> = Mutex::new(None);
+
+fn memo_get<T>(slot: &Mutex<Option<Memo<T>>>, path: &Path, stamp: Stamp) -> Option<Arc<T>> {
+    let guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let memo = guard.as_ref()?;
+    (memo.path == path && memo.stamp == stamp).then(|| memo.value.clone())
+}
+
+fn memo_put<T>(slot: &Mutex<Option<Memo<T>>>, path: PathBuf, stamp: Stamp, value: Arc<T>) {
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Memo { path, stamp, value });
+}
+
+fn memo_forget<T>(slot: &Mutex<Option<Memo<T>>>, path: &Path) {
+    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.as_ref().is_some_and(|m| m.path == path) {
+        *guard = None;
     }
 }
 
@@ -525,6 +607,32 @@ mod tests {
             2000,
         );
         assert_eq!((added, dup), (1, 1));
+        // 같은 묶음 안의 중복도 건너뛴다
+        let (added, dup) = deck.add_pairs(
+            &[
+                ("Coffee first.".into(), "a".into()),
+                ("coffee FIRST".into(), "b".into()),
+            ],
+            3000,
+        );
+        assert_eq!((added, dup), (1, 1));
+    }
+
+    #[test]
+    fn cached_load_follows_saves() {
+        let store = temp_store("memo");
+        // 다른 테스트가 같은 기억 칸을 써도(병렬) 결과는 늘 파일과 같아야 한다
+        let first = store.load_deck_cached(0).unwrap();
+        assert_eq!(*first, *store.load_deck_cached(0).unwrap());
+        let mut deck = (*first).clone();
+        deck.sentences.truncate(3);
+        store.save_deck(&deck).unwrap();
+        assert_eq!(store.load_deck_cached(0).unwrap().sentences.len(), 3);
+        assert_eq!(store.load_state_cached().recent.len(), 0);
+        let mut state = SayState::default();
+        state.recent.push("x".into());
+        store.save_state(&state).unwrap();
+        assert_eq!(store.load_state_cached().recent, ["x"]);
     }
 
     #[test]

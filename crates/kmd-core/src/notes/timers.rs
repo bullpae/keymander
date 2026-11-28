@@ -227,9 +227,14 @@ impl TimerStore {
         })
     }
 
-    /// 아직 안 울린 리마인더만 골라 울렸다고 적는다
+    /// 아직 안 울린 리마인더만 골라 울렸다고 적는다. 새로 울릴 것이 없으면 잠그지도 쓰지도 않는다 —
+    /// 기한이 지난 할 일이 있으면 하루 동안 30초마다 같은 키로 불린다
     pub fn claim_reminders(&self, keys: &[String], now_ms: i64) -> Result<Vec<String>, String> {
-        if keys.is_empty() {
+        let fresh = |fired: &BTreeMap<String, i64>, k: &String| {
+            fired.get(k).is_none_or(|at| now_ms - *at >= FIRED_KEEP_MS)
+        };
+        let seen = Self::read(&self.path).fired;
+        if !keys.iter().any(|k| fresh(&seen, k)) {
             return Ok(Vec::new());
         }
         self.update(|s| {
@@ -260,6 +265,46 @@ impl TimerStore {
         } else {
             0
         }
+    }
+}
+
+/// 파일이 바뀌었는지 보는 값 (수정 시각, 크기). 없으면 `None`
+fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// 1초마다 부르는 [`TimerStore::take_due`] 앞단. 예전에는 매초 파일을 읽고 파싱했다 — 이제 stat 만 하고,
+/// 파일이 그대로면 기억해 둔 가장 이른 끝 시각과 비교한다. 런처·CLI 가 타이머를 걸면 파일이 바뀌므로
+/// 다음 틱에 바로 보인다. 수정 시각이 거친 파일 시스템에서 놓칠 수 있어 부르는 쪽이 가끔 [`Self::reset`] 한다.
+#[derive(Debug, Default)]
+pub struct DueWatch {
+    /// 마지막으로 읽은 파일의 stamp (`Some(None)` = 파일 없음을 확인함)
+    seen: Option<Option<(SystemTime, u64)>>,
+    next_ms: Option<i64>,
+}
+
+impl DueWatch {
+    /// 다음 틱에 파일을 다시 읽는다
+    pub fn reset(&mut self) {
+        self.seen = None;
+    }
+
+    pub fn take_due(&mut self, store: &TimerStore, now_ms: i64) -> Result<Vec<Timer>, String> {
+        let stamp = file_stamp(&store.path);
+        if self.seen != Some(stamp) {
+            self.next_ms = TimerStore::read(&store.path)
+                .timers
+                .iter()
+                .map(|t| t.ends_ms)
+                .min();
+            self.seen = Some(stamp);
+        }
+        if self.next_ms.is_none_or(|next| next > now_ms) {
+            return Ok(Vec::new());
+        }
+        self.reset();
+        store.take_due(now_ms)
     }
 }
 
@@ -348,6 +393,39 @@ mod tests {
         let (d, s) = store();
         assert!(s.take_due(0).unwrap().is_empty());
         assert!(!d.path().join("timers.json").exists());
+    }
+
+    #[test]
+    fn 감시는_파일이_바뀌면_바로_본다() {
+        let (_d, s) = store();
+        let mut w = DueWatch::default();
+        assert!(w.take_due(&s, 0).unwrap().is_empty());
+        s.add(Kind::Timer, "짧음", 10, None, 0).unwrap();
+        assert!(w.take_due(&s, 5_000).unwrap().is_empty());
+        // 다른 프로세스가 건 타이머도 보인다
+        TimerStore::new(s.path.clone())
+            .add(Kind::Timer, "더 짧음", 1, None, 0)
+            .unwrap();
+        let due = w.take_due(&s, 1_000).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].label, "더 짧음");
+        assert!(w.take_due(&s, 1_000).unwrap().is_empty());
+        assert_eq!(w.take_due(&s, 10_000).unwrap().len(), 1);
+        assert!(w.take_due(&s, 99_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 새로_울릴_리마인더가_없으면_쓰지_않는다() {
+        let (d, s) = store();
+        let keys = vec!["a|1".to_string()];
+        s.claim_reminders(&keys, 100).unwrap();
+        let path = d.path().join("timers.json");
+        let old = filetime::FileTime::from_unix_time(1000, 0);
+        filetime::set_file_mtime(&path, old).unwrap();
+        assert!(s.claim_reminders(&keys, 200).unwrap().is_empty());
+        let mtime =
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(&path).unwrap());
+        assert_eq!(mtime, old);
     }
 
     #[test]

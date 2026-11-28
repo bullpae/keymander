@@ -314,6 +314,8 @@ fn spawn_key_stats_saver(shutdown: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let mut last_save = Instant::now();
         let mut last_sync = Instant::now();
+        // DB 는 한 번 열어 두고 실패했을 때만 다시 연다 — 매분 열면 마이그레이션 확인·PRAGMA 를 되풀이한다
+        let mut db = None;
         while !shutdown.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_secs(1));
             if last_save.elapsed() >= SAVE {
@@ -322,7 +324,7 @@ fn spawn_key_stats_saver(shutdown: Arc<AtomicBool>) {
                 if sync {
                     last_sync = Instant::now();
                 }
-                save_key_stats(sync);
+                save_key_stats(&mut db, sync);
             }
         }
     });
@@ -331,37 +333,44 @@ fn spawn_key_stats_saver(shutdown: Arc<AtomicBool>) {
 /// DB 쓰기에 실패한 통계 — 다음 저장 때 다시 더한다 (엔진에서 이미 꺼냈으므로)
 static UNSAVED_KEY_STATS: std::sync::Mutex<Vec<(String, u32)>> = std::sync::Mutex::new(Vec::new());
 
-fn save_key_stats(sync: bool) {
+/// `db` 가 비었으면 연다. 쓰기에 실패하면 닫아 두어 다음에 새로 연다
+fn save_key_stats(db: &mut Option<kmd_core::Database>, sync: bool) {
     let mut stats = keybind::take_key_stats();
-    let mut unsaved = UNSAVED_KEY_STATS.lock().unwrap_or_else(|e| e.into_inner());
-    stats.append(&mut unsaved);
+    // 잠금은 꺼낼 때만 — DB 가 바빠 몇 초 막혀도 종료 저장이 잠금에서 기다리지 않게
+    stats.append(&mut UNSAVED_KEY_STATS.lock().unwrap_or_else(|e| e.into_inner()));
     if stats.is_empty() {
         return;
     }
-    match kmd_core::Database::open_default(kmd_core::DbRole::Shared) {
-        Ok(db) => {
-            if let Err(e) = db.key_stats_add(&stats) {
-                tracing::warn!("손버릇 통계 저장 실패 — 다음에 다시: {e}");
-                keep_unsaved(&mut unsaved, stats);
+    if db.is_none() {
+        match kmd_core::Database::open_default(kmd_core::DbRole::Shared) {
+            Ok(opened) => *db = Some(opened),
+            Err(e) => {
+                tracing::warn!("손버릇 통계 DB 열기 실패 — 다음에 다시: {e}");
+                keep_unsaved(stats);
                 return;
             }
-            drop(unsaved);
-            if sync {
-                sync_key_stats(&db);
-            }
         }
-        Err(e) => {
-            tracing::warn!("손버릇 통계 DB 열기 실패 — 다음에 다시: {e}");
-            keep_unsaved(&mut unsaved, stats);
-        }
+    }
+    let Some(conn) = db.as_ref() else {
+        return;
+    };
+    if let Err(e) = conn.key_stats_add(&stats) {
+        tracing::warn!("손버릇 통계 저장 실패 — 다음에 다시: {e}");
+        *db = None;
+        keep_unsaved(stats);
+        return;
+    }
+    if sync {
+        sync_key_stats(conn);
     }
 }
 
 /// 못 쓴 통계를 남긴다 — DB 가 오래 막혀도 메모리가 끝없이 늘지 않게 상한을 둔다
-fn keep_unsaved(unsaved: &mut Vec<(String, u32)>, mut stats: Vec<(String, u32)>) {
+fn keep_unsaved(stats: Vec<(String, u32)>) {
     const MAX: usize = 20_000;
-    stats.truncate(MAX);
-    *unsaved = stats;
+    let mut unsaved = UNSAVED_KEY_STATS.lock().unwrap_or_else(|e| e.into_inner());
+    unsaved.extend(stats);
+    unsaved.truncate(MAX);
 }
 
 /// `stats_sync` 공유 폴더가 정해져 있으면 이 기기 스냅숏을 거기 쓴다 (docs/19 §6)
@@ -385,6 +394,9 @@ fn sync_key_stats(db: &kmd_core::Database) {
 ///
 /// 새 파일 검색 엔진 스냅숏을 폴더 시각으로 갱신하는 주기 (docs/22 §3.8)
 const FILE_INDEX_REFRESH_SECS: u64 = 5 * 60;
+/// 감시(`fs_watch`)가 검색 폴더를 모두 맡고 있을 때의 주기. 감시가 이름 변화를 몇 초 안에 반영하므로
+/// 5분 대조는 겹치는 일이었다 — 파일 수정 시각("최근 수정" 가중)과 놓친 이벤트만 드물게 맞춘다
+const FILE_INDEX_REFRESH_WATCHED_SECS: u64 = 30 * 60;
 
 /// `launcher.index_refresh_minutes` 주기(기본 6시간, 0=off)로 전체/quick
 /// 인덱스를 재빌드해 공유 캐시를 원자적으로 갱신하고 데몬 검색 엔진도
@@ -421,6 +433,7 @@ fn spawn_index_refresher(
         // 첫 파일 색인 갱신은 시작 10초 뒤 — 스냅숏이 없으면(업그레이드 직후 등) 여기서 만든다.
         // 전체 인덱스 캐시가 신선하면 Index::build 를 건너뛰어, 기다리면 5분 동안 옛 엔진으로 검색한다.
         let mut since_file_refresh: u64 = FILE_INDEX_REFRESH_SECS.saturating_sub(10);
+        let mut file_refreshed = false;
         loop {
             if shutdown.load(Ordering::Relaxed) {
                 return;
@@ -430,8 +443,15 @@ fn spawn_index_refresher(
             since_file_refresh += 1;
 
             // 새 파일 검색 엔진(docs/22): 바뀐 폴더만 다시 읽어 스냅숏 갱신 — 폴더 시각 확인이라 가볍다
-            if since_file_refresh >= FILE_INDEX_REFRESH_SECS {
+            // 첫 갱신(스냅숏이 없으면 만든다)은 감시와 무관하게 시작 10초 뒤
+            let file_period = if file_refreshed && crate::fs_watch::fully_watched() {
+                FILE_INDEX_REFRESH_WATCHED_SECS
+            } else {
+                FILE_INDEX_REFRESH_SECS
+            };
+            if since_file_refresh >= file_period {
                 since_file_refresh = 0;
+                file_refreshed = true;
                 let cfg = load_config();
                 if cfg.launcher.file_search.enabled() {
                     match kmd_core::filesearch::refresh(&cfg.launcher) {
@@ -599,7 +619,7 @@ pub fn run() -> color_eyre::Result<()> {
     let _ = accept_handle.join();
 
     // 남은 손버릇 통계를 저장하고 키 바인딩 종료
-    save_key_stats(true);
+    save_key_stats(&mut None, true);
     if let Err(e) = kb_backend.stop() {
         tracing::warn!("키 바인딩 종료 실패: {e}");
     }

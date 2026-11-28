@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Local;
-use kmd_core::notes::timers::{plan_fired, Kind, Timer, ALERT_REMINDER};
-use kmd_core::notes::{due_reminders, NoteStore};
+use kmd_core::notes::timers::{plan_fired, DueWatch, Kind, Timer, ALERT_REMINDER};
+use kmd_core::notes::{due_reminders, LoadCache, NoteStore};
 
 use crate::server::{load_config, lower_indexer_thread_priority};
 
@@ -22,12 +22,16 @@ const MAX_REMINDER_WINDOWS: usize = 3;
 pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         lower_indexer_thread_priority();
+        let mut seen_config = config_stamp();
         let mut store = store();
+        let mut due = DueWatch::default();
+        let mut notes = LoadCache::default();
         let mut last_scan = Instant::now() - REMINDER_SCAN;
         while !shutdown.load(Ordering::Relaxed) {
             std::thread::sleep(TICK);
             let now = Local::now();
-            match store.timers().take_due(now.timestamp_millis()) {
+            // 매초 하는 일은 timers.json stat 한 번이다 — 바뀌었을 때만 읽는다
+            match due.take_due(&store.timers(), now.timestamp_millis()) {
                 Ok(due) => {
                     for timer in due {
                         fire(&store, &timer);
@@ -37,8 +41,15 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
             }
             if last_scan.elapsed() >= REMINDER_SCAN {
                 last_scan = Instant::now();
-                store = self::store(); // 폴더·시간 설정 변경 반영
-                scan_reminders(&store);
+                // 수정 시각이 거친 파일 시스템에서 놓친 변경도 30초 안에는 본다
+                due.reset();
+                // 폴더·시간 설정 변경 반영. 설정 파일이 그대로면 다시 파싱하지 않는다
+                let stamp = config_stamp();
+                if stamp != seen_config {
+                    seen_config = stamp;
+                    store = self::store();
+                }
+                scan_reminders(&store, &mut notes);
             }
         }
     });
@@ -46,6 +57,12 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
 
 fn store() -> NoteStore {
     NoteStore::from_config(&load_config().notes)
+}
+
+fn config_stamp() -> Option<(std::time::SystemTime, u64)> {
+    let path = kmd_core::Config::default_config_dir().join(kmd_core::CONFIG_FILENAME);
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
 }
 
 fn fire(store: &NoteStore, timer: &Timer) {
@@ -73,9 +90,10 @@ fn fire(store: &NoteStore, timer: &Timer) {
     }
 }
 
-fn scan_reminders(store: &NoteStore) {
-    // 메모 폴더가 없으면(드라이브 빠짐) 조용히 넘어간다 — 다시 연결되면 울린다
-    let Ok(notes) = store.load() else {
+fn scan_reminders(store: &NoteStore, cache: &mut LoadCache) {
+    // 메모 폴더가 없으면(드라이브 빠짐) 조용히 넘어간다 — 다시 연결되면 울린다.
+    // 30초마다 메모 전체가 든 캐시 파일을 파싱하지 않도록 지난 결과를 메모리에 둔다
+    let Ok(notes) = store.load_cached(cache) else {
         return;
     };
     let now = Local::now();
