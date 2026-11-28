@@ -62,3 +62,28 @@ pub fn create_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine
     let index = load_or_build_index(&config.launcher, config.general.emoji_icons);
     kmd_core::SearchEngine::with_items(&config.launcher.kind_weights, index.items)
 }
+
+/// `$EDITOR` 값으로 편집기 명령을 만든다. `code --wait` 처럼 인자가 붙은 값이 흔하다 — 통째로
+/// 실행 파일 이름으로 쓰면 찾지 못한다. 값 전체가 있는 파일이면(공백 든 Windows 경로) 그대로 쓴다.
+pub fn editor_command(editor: &str) -> std::process::Command {
+    let editor = editor.trim();
+    if std::path::Path::new(editor).is_file() {
+        return std::process::Command::new(editor);
+    }
+    let mut parts = editor.split_whitespace();
+    let mut cmd = std::process::Command::new(parts.next().unwrap_or(editor));
+    cmd.args(parts);
+    cmd
+}
+
+#[cfg(test)]
+mod editor_tests {
+    #[test]
+    fn 인자가_붙은_편집기를_나눈다() {
+        let cmd = super::editor_command("code --wait");
+        assert_eq!(cmd.get_program(), "code");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["--wait"]);
+        assert_eq!(super::editor_command("vi").get_args().count(), 0);
+    }
+}

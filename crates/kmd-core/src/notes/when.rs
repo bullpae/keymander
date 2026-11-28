@@ -152,6 +152,7 @@ fn take_time(s: &str) -> Option<(u32, u32, &str)> {
 
 /// `@` 뒤 글 → 시각. 날짜만 있으면 오전 9시.
 ///
+/// `05:00` 처럼 0 을 채운 시각은 24시간 표기로 그대로 읽는다.
 /// 오전·오후를 안 적으면: 날짜가 있을 때 1~6시는 오후로 읽고(`내일 3시` = 15시), 날짜도 없으면
 /// 앞으로 가장 먼저 오는 때로 읽는다(지금 14시면 `3시` = 15시, 16시면 내일 3시).
 pub fn parse_due(text: &str, now: NaiveDateTime) -> Option<NaiveDateTime> {
@@ -178,6 +179,8 @@ pub fn parse_due(text: &str, now: NaiveDateTime) -> Option<NaiveDateTime> {
     let mut weekday = None;
     let mut meridiem = None;
     let mut time = None;
+    // `05:00` 처럼 0 을 채운 시각은 24시간 표기다 — 할 일 수정 시드가 이렇게 적는다
+    let mut clock24 = false;
     while !rest.is_empty() {
         if let Some(r) = rest.strip_prefix("오늘") {
             date = Some(today);
@@ -204,6 +207,7 @@ pub fn parse_due(text: &str, now: NaiveDateTime) -> Option<NaiveDateTime> {
             date = Some(d);
             rest = r;
         } else if let Some((h, m, r)) = take_time(rest) {
+            clock24 = rest.starts_with('0') && rest[..rest.len() - r.len()].contains(':');
             time = Some((h, m));
             rest = r;
         } else {
@@ -229,7 +233,7 @@ pub fn parse_due(text: &str, now: NaiveDateTime) -> Option<NaiveDateTime> {
         Some(Meridiem::Pm) if hour < 12 => Some(hour + 12),
         Some(Meridiem::Am) if hour == 12 => Some(0),
         Some(_) => Some(hour),
-        None if hour == 0 || hour >= 13 || time.is_none() => Some(hour),
+        None if clock24 || hour == 0 || hour >= 13 || time.is_none() => Some(hour),
         None => None,
     };
 
@@ -331,6 +335,16 @@ mod tests {
 
     fn due(s: &str) -> String {
         parse_due(s, now()).map(format_stored).unwrap_or_default()
+    }
+
+    #[test]
+    fn 영을_채운_시각은_24시간_표기다() {
+        // 할 일 수정 시드(`@2026-11-07 05:00`)를 Enter 로 그대로 저장해도 새벽이 오후가 되지 않는다
+        assert_eq!(due("2026-11-07 05:00"), "2026-11-07T05:00");
+        assert_eq!(due("내일 05:30"), "2026-11-07T05:30");
+        // 채우지 않은 짧은 표기는 예전처럼 오후로 읽는다
+        assert_eq!(due("내일 5:00"), "2026-11-07T17:00");
+        assert_eq!(due("내일 3시"), "2026-11-07T15:00");
     }
 
     #[test]

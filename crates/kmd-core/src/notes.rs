@@ -518,10 +518,13 @@ impl NoteStore {
         }
         self.ensure_dir()?;
         let path = self.file_path(id)?;
-        let front_matter = std::fs::read(&path)
-            .ok()
-            .map(|b| crate::textenc::decode_utf8_or_cp949(b).text)
-            .and_then(|raw| parse(&raw).0);
+        // 지워졌으면(NotFound) 머리말 없이 되살린다. 다른 읽기 실패(동기화 도구의 잠깐 잠금 등)에
+        // 머리말 없이 덮어쓰면 할 일·기한·완료 표시가 사라지므로 저장하지 않는다.
+        let front_matter = match std::fs::read(&path) {
+            Ok(b) => parse(&crate::textenc::decode_utf8_or_cp949(b).text).0,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("메모를 읽지 못해 저장하지 않았습니다: {e}")),
+        };
         crate::fsutil::write_atomic(
             &path,
             render(front_matter.as_deref(), body).as_bytes(),
@@ -1418,6 +1421,21 @@ mod tests {
     fn found(body: &str, query: &str) -> bool {
         let notes = [note(body)];
         !search(&notes, query).is_empty()
+    }
+
+    #[test]
+    fn 읽지_못한_메모는_머리말_없이_덮어쓰지_않는다() {
+        let (_dir, store) = store();
+        let id = store.add_now("원래 글").unwrap();
+        // 지워진 메모는 같은 이름으로 되살린다
+        std::fs::remove_file(store.file_path(&id).unwrap()).unwrap();
+        store.update(&id, "되살림").unwrap();
+        // 읽기가 NotFound 가 아닌 이유로 실패하면 저장하지 않는다 (폴더로 바꿔 흉내)
+        let path = store.file_path(&id).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(store.update(&id, "새 글").is_err());
+        assert!(path.is_dir());
     }
 
     #[test]

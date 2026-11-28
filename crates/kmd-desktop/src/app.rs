@@ -172,6 +172,10 @@ pub struct App {
     /// 창 표시 마커를 남겼는지 (단일 인스턴스 토글 대상)
     window_shown: bool,
     last_query_changed_at: std::time::Instant,
+    /// 자모로 끝난 채 입력이 멈춰 "조합 중이 아니다"로 판정한 질의 — 초성 검색(`ㅋㅋㅇㅌ`)
+    ime_settled_query: Option<String>,
+    /// 지금 결과 목록을 만든 질의 — 같은 질의의 재검색이면 선택을 지킨다
+    committed_query: String,
     app_started_at: std::time::Instant,
     ime_trace_seq: u64,
     ime_trace_enabled: bool,
@@ -223,6 +227,8 @@ pub enum Message {
     GotWindowId(Option<window::Id>),
     GotRawWindowId(u64),
     WarmupTick(u64),
+    /// 자모로 끝난 질의가 이 시간 동안 그대로면 조합이 아니라 초성 질의다
+    ImeSettled(String),
     EnsureFocus(u8),
     EngineReady,
     CheckQuitSignal,
@@ -422,6 +428,8 @@ impl App {
             window_focused: true,
             window_shown: false,
             last_query_changed_at: std::time::Instant::now(),
+            ime_settled_query: None,
+            committed_query: String::new(),
             app_started_at: std::time::Instant::now(),
             ime_trace_seq: 0,
             ime_trace_enabled: std::env::var_os("KMD_IME_TRACE").is_some(),
@@ -513,7 +521,9 @@ impl App {
             // 조합 중에도 warmup 유휴 타이머를 리셋한다. 그렇지 않으면 부팅 시
             // 예약된 WarmupTick이 첫 조합 도중 발화해 loading 토글 재렌더로
             // marked text가 깨지고 자모가 분리된다. (macOS)
-            return self.with_activity_warmup(Task::none());
+            // 초성 질의도 자모로 끝난다 — 입력이 멈추면 조합이 아니라고 보고 검색한다
+            let settle = Self::schedule_ime_settle(self.query.clone());
+            return self.with_activity_warmup(settle);
         }
         let search_task = self.perform_search();
         self.log_ime_state("QueryChanged:perform_search");
@@ -738,6 +748,7 @@ impl App {
             Message::GotWindowId(id) => self.handle_got_window_id(id),
             Message::GotRawWindowId(raw_id) => self.handle_got_raw_window_id(raw_id),
             Message::WarmupTick(token) => self.handle_warmup_tick(token),
+            Message::ImeSettled(query) => self.handle_ime_settled(query),
             Message::FileIndexUpdated(index) => {
                 self.file_index = Some(index);
                 if self.query.trim().is_empty() {

@@ -875,3 +875,36 @@ fn 이름으로_친_명령이_일반_검색_결과에_낀다() {
         st.results.iter().map(|r| &r.item.name).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn url_열기_행은_자주_연_같은_이름_폴더보다_위에_있다() {
+    use kmd_core::{IndexItem, ItemKind, Source};
+    let mut state = test_state();
+    let mut engine = SearchEngine::new();
+    let folder = "/Users/me/go/src/github.com";
+    engine.load(vec![IndexItem {
+        name: "github.com".into(),
+        path: folder.into(),
+        kind: ItemKind::Directory,
+        source: Source::FileProvider,
+        icon: String::new(),
+        keywords: String::new(),
+        icon_path: None,
+    }]);
+    state
+        .frecency
+        .insert(folder.into(), (50, "2026-11-28 09:00:00".into()));
+    state.query = "github.com".into();
+    state.refresh_effective_query();
+    update_search(&mut state, &mut engine, None);
+    assert_eq!(
+        state.results.first().map(|r| r.item.kind),
+        Some(ItemKind::WebSearch),
+        "{:?}",
+        state
+            .results
+            .iter()
+            .map(|r| (&r.item.name, r.score))
+            .collect::<Vec<_>>()
+    );
+}

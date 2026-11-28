@@ -57,9 +57,7 @@ pub fn run(action: Option<Action>) -> Result<()> {
                 });
 
             println!("Opening {} with {}...", config_path.display(), editor);
-            std::process::Command::new(&editor)
-                .arg(config_path)
-                .status()?;
+            super::editor_command(&editor).arg(config_path).status()?;
         }
         Some(Action::Path) | None => {
             let config_dir = kmd_core::Config::default_config_dir();

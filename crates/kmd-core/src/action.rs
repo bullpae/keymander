@@ -103,7 +103,11 @@ pub fn url_host(url: &str) -> &str {
 }
 
 /// Spawn the platform-specific "open" command for a path or URL
-fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
+fn spawn_open(target: &str) -> std::io::Result<()> {
+    spawn_open_child(target).map(crate::process::reap)
+}
+
+fn spawn_open_child(target: &str) -> std::io::Result<std::process::Child> {
     #[cfg(target_os = "windows")]
     {
         let t = target.trim();

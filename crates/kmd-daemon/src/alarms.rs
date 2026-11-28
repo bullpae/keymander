@@ -112,7 +112,7 @@ fn scan_reminders(store: &NoteStore) {
 fn show_alert(title: &str, body: &str, kind: &str) {
     use kmd_core::process::HideConsole;
     let exe = crate::keybind::resolve_launch_cmd("kmd-desktop");
-    if let Err(e) = std::process::Command::new(&exe)
+    match std::process::Command::new(&exe)
         .arg(kmd_core::notes::ALERT_ARG)
         .arg(title)
         .arg(body)
@@ -120,6 +120,7 @@ fn show_alert(title: &str, body: &str, kind: &str) {
         .hide_console()
         .spawn()
     {
-        tracing::error!("알림 창 실행 실패: {exe} — {e}");
+        Ok(child) => kmd_core::process::reap(child),
+        Err(e) => tracing::error!("알림 창 실행 실패: {exe} — {e}"),
     }
 }

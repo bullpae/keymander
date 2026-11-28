@@ -231,14 +231,16 @@ impl App {
         if keywords.ends_with(":noop") || keywords.contains(":noop:") {
             return Task::none();
         }
-        if let Some(msg) =
-            kmd_core::keymap::execute_keymap_action(&mut self.runtime_config, keywords)
-        {
-            tracing::info!("keymap action: {msg}");
-        }
+        let msg = kmd_core::keymap::execute_keymap_action(&mut self.runtime_config, keywords);
         let current_query = kmd_core::query_prefix::normalize_slash_command(self.query.trim())
             .unwrap_or_else(|| self.query.clone());
         self.handle_keymap_query(&current_query);
+        // 성공·실패 문구(kanata 실행 실패, 프로필 없음 등)를 화면에 — 예전엔 로그에만 남아
+        // 실패해도 아무 반응이 없었다 (TUI 는 상태 줄에 띄운다)
+        if let Some(msg) = msg {
+            tracing::info!("keymap action: {msg}");
+            self.status_message = Some(msg);
+        }
         Task::none()
     }
 

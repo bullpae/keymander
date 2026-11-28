@@ -1808,3 +1808,52 @@ fn 메모_찾기는_엔터가_복사고_새_메모를_만들지_않는다() {
         .is_some());
     assert_eq!(app.results[0].item.name, "맞는 메모가 없습니다");
 }
+
+#[test]
+fn 초성_질의는_입력이_멈추면_검색된다() {
+    // 자모 꼬리는 조합 중일 수 있어 바로 검색하지 않지만, 그대로 멈추면 초성 질의다
+    let mut app = make_test_app();
+    app.engine
+        .load(vec![korean_item("카카오톡"), korean_item("메모")]);
+    let _ = app.update(Message::QueryChanged("ㅋㅋㅇㅌ".to_string()));
+    assert!(app.results.iter().all(|r| r.item.name != "카카오톡"));
+    let _ = app.update(Message::ImeSettled("ㅋㅋㅇㅌ".to_string()));
+    assert_eq!(
+        app.results.first().map(|r| r.item.name.as_str()),
+        Some("카카오톡")
+    );
+    assert!(!app.should_limit_reorder_for_ime());
+
+    // 그 사이 질의가 바뀌었으면(조합이 이어졌으면) 낡은 신호는 버린다
+    let _ = app.update(Message::QueryChanged("ㅁ".to_string()));
+    let _ = app.update(Message::ImeSettled("ㅋㅋㅇㅌ".to_string()));
+    assert!(app.should_limit_reorder_for_ime());
+}
+
+#[test]
+fn 같은_질의_재검색은_고른_항목을_지킨다() {
+    // 엔진 교체·파일 색인 갱신으로 같은 질의를 다시 검색해도 ↓ 로 고른 항목이 그대로여야
+    // Enter 가 엉뚱한 첫 항목을 실행하지 않는다
+    let mut app = make_test_app();
+    app.engine.load(vec![
+        korean_item("report-a"),
+        korean_item("report-b"),
+        korean_item("report-c"),
+    ]);
+    let _ = app.update(Message::QueryChanged("report".to_string()));
+    assert!(app.results.len() >= 3);
+    app.selected = 2;
+    let picked = app.results[2].item.name.clone();
+    app.engine.load(vec![
+        korean_item("report-c"),
+        korean_item("report-b"),
+        korean_item("report-a"),
+        korean_item("report-d"),
+    ]);
+    let _ = app.perform_search();
+    assert_eq!(app.results[app.selected].item.name, picked);
+
+    // 질의가 바뀌면 예전처럼 맨 위부터
+    let _ = app.update(Message::QueryChanged("report-".to_string()));
+    assert_eq!(app.selected, 0);
+}
