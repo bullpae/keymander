@@ -45,22 +45,12 @@ pub fn relist(t: &Table<'_>, cfg: &ScanConfig) -> Option<(TableBuilder, Reconcil
 
 /// 감시가 알려 준 폴더만 다시 읽는다 (F3). 표에 없는 폴더(방금 생긴 폴더 등)는 표에 있는 가장
 /// 가까운 조상을 다시 읽는다 — 새 폴더는 그 조상의 새 자식으로 붙으며 아래까지 걷는다.
+/// 이름이 생기거나 지워졌을 때만 새 표를 낸다 — 시각만 바뀐 것은 주기 갱신이 반영한다.
 pub fn relist_dirs(
     t: &Table<'_>,
     cfg: &ScanConfig,
     dirs: &[std::path::PathBuf],
 ) -> Option<(TableBuilder, ReconcileStats)> {
-    let mut known: HashMap<std::path::PathBuf, Container> = t
-        .roots
-        .iter()
-        .enumerate()
-        .map(|(r, root)| (root.path_buf(), Container::Root(r as u16)))
-        .collect();
-    for row in 0..t.len() {
-        if t.kind(row) == Kind::Dir && (t.depth(row) as usize) < cfg.depth {
-            known.insert(t.path(row), Container::Dir(row as u32));
-        }
-    }
     // 감시는 실제 경로로 알려 준다(macOS FSEvents 는 심볼릭 링크를 풀고 `/var` → `/private/var`).
     // 검색 폴더가 링크면 실제 경로 접두를 검색 폴더 경로로 바꿔 찾는다
     let aliases: Vec<(std::path::PathBuf, std::path::PathBuf)> = t
@@ -72,6 +62,38 @@ pub fn relist_dirs(
             (real != path).then_some((real, path))
         })
         .collect();
+    // 이벤트가 난 폴더의 조상만 찾으면 된다. 예전에는 감시 반영마다 폴더 행 전부(2만 개)의 경로를
+    // 만들어 지도를 지었다 — 이제 조상 이름과 같은 이름의 폴더 행만 경로를 만든다
+    let mut wanted: HashSet<std::path::PathBuf> = HashSet::new();
+    for dir in dirs {
+        wanted.extend(dir.ancestors().map(std::path::Path::to_path_buf));
+        for (real, root) in &aliases {
+            if let Ok(rel) = dir.strip_prefix(real) {
+                wanted.extend(root.join(rel).ancestors().map(std::path::Path::to_path_buf));
+            }
+        }
+    }
+    let names: HashSet<&[u8]> = wanted
+        .iter()
+        .filter_map(|p| Some(p.file_name()?.as_encoded_bytes()))
+        .collect();
+    let mut known: HashMap<std::path::PathBuf, Container> = t
+        .roots
+        .iter()
+        .enumerate()
+        .map(|(r, root)| (root.path_buf(), Container::Root(r as u16)))
+        .collect();
+    for row in 0..t.len() {
+        if t.kind(row) == Kind::Dir
+            && (t.depth(row) as usize) < cfg.depth
+            && names.contains(t.raw_name(row))
+        {
+            let path = t.path(row);
+            if wanted.contains(&path) {
+                known.insert(path, Container::Dir(row as u32));
+            }
+        }
+    }
     let mut changed = Vec::new();
     let mut new_mtime = HashMap::new();
     for dir in dirs {
@@ -108,7 +130,7 @@ pub fn relist_dirs(
         checked_dirs: changed.len(),
         ..ReconcileStats::default()
     };
-    apply(t, cfg, changed, new_mtime, stats)
+    apply(t, cfg, changed, new_mtime, stats, true)
 }
 
 fn reconcile_with(
@@ -118,16 +140,18 @@ fn reconcile_with(
 ) -> Option<(TableBuilder, ReconcileStats)> {
     let mut stats = ReconcileStats::default();
     let (changed, new_mtime) = changed_containers(t, cfg, &mut stats, relist_unreliable);
-    apply(t, cfg, changed, new_mtime, stats)
+    apply(t, cfg, changed, new_mtime, stats, false)
 }
 
 /// 바뀐 폴더(`changed`)를 다시 읽어 새 표를 만든다. 실제로 달라진 것이 없으면 `None`.
+/// `names_only` 면 이름이 생기거나 지워졌을 때만 새 표를 낸다 (감시 반영 — 시각은 주기 갱신이 맡는다).
 fn apply(
     t: &Table<'_>,
     cfg: &ScanConfig,
     changed: Vec<Container>,
     new_mtime: HashMap<Container, i64>,
     mut stats: ReconcileStats,
+    names_only: bool,
 ) -> Option<(TableBuilder, ReconcileStats)> {
     if changed.is_empty() {
         return None;
@@ -189,12 +213,10 @@ fn apply(
         }
     }
 
-    // 새 표 — 지운 행과 그 아래는 빼고, 부모 번호를 다시 매긴다 (부모가 먼저라 한 번에)
-    let mut b = TableBuilder::new();
-    b.roots = t.roots.to_vec();
+    let mut roots = t.roots.to_vec();
     for (&c, &m) in &new_mtime {
         if let Container::Root(r) = c {
-            let root = &mut b.roots[r as usize];
+            let root = &mut roots[r as usize];
             if root.mtime == m {
                 continue; // 시각 그대로 다시 나열만 한 검색 폴더 — 볼륨 판별도 그대로
             }
@@ -203,6 +225,31 @@ fn apply(
             root.mtime_reliable = m != OFFLINE && mtime_reliable(&root.path_buf());
         }
     }
+
+    // 이름이 하나도 늘거나 줄지 않았으면 표를 복사하기 전에 끝낸다. 감시 반영은 대부분 이 경우다
+    // (내려받는 파일처럼 시각만 바뀜) — 예전에는 40만 행을 새 표로 다 옮긴 뒤 버렸다
+    let any_removed = removed.iter().any(|&g| g);
+    let any_new = changed.iter().any(|c| {
+        listings.get(c).is_some_and(|list| {
+            let known = seen.get(c);
+            list.keys()
+                .any(|name| known.is_none_or(|k| !k.contains(name)))
+        })
+    });
+    if !any_removed && !any_new {
+        let mtime_changed = mtime_update.iter().any(|(&row, &m)| m != t.mtime[row]);
+        let roots_changed = roots
+            .iter()
+            .zip(t.roots.iter())
+            .any(|(a, b)| a.mtime != b.mtime || a.mtime_reliable != b.mtime_reliable);
+        if names_only || (!mtime_changed && !roots_changed) {
+            return None;
+        }
+    }
+
+    // 새 표 — 지운 행과 그 아래는 빼고, 부모 번호를 다시 매긴다 (부모가 먼저라 한 번에)
+    let mut b = TableBuilder::new();
+    b.roots = roots;
     let mut new_index = vec![NO_PARENT; n];
     let mut scan_stats = ScanStats::default();
     for row in 0..n {

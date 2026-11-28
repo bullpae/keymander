@@ -135,11 +135,12 @@ pub fn items(query: &str, store: &SayStore, ctx: Ctx<'_>) -> Vec<IndexItem> {
             ),
         ];
     }
-    let deck = match store.load_deck(ctx.now) {
+    // 키마다 불리므로 파일이 그대로면 다시 읽지 않는다
+    let deck = match store.load_deck_cached(ctx.now) {
         Ok(d) => d,
         Err(e) => return vec![notice(ue, "입버릇 문장 파일을 읽지 못했습니다", &e)],
     };
-    let state = store.load_state();
+    let state = store.load_state_cached();
     match cmd {
         SayCommand::Practice(answer) => practice_items(&deck, &state, &answer, ctx),
         SayCommand::Add { en, ko } => {
@@ -169,7 +170,11 @@ pub fn items(query: &str, store: &SayStore, ctx: Ctx<'_>) -> Vec<IndexItem> {
                     "엑셀·시트에서 두 열을 복사하거나, 한 줄에 English | 한국어 로 적어 복사하세요",
                 )]
             } else {
-                let dup = pairs.iter().filter(|(en, _)| deck.contains_en(en)).count();
+                let keys = deck.en_keys();
+                let dup = pairs
+                    .iter()
+                    .filter(|(en, _)| keys.contains(&scoring::normalize_words(en)))
+                    .count();
                 vec![item(
                     ic(ue, "\u{1F4E5}", "[IN]"),
                     format!("클립보드의 {}줄 담기", pairs.len()),
@@ -290,7 +295,11 @@ fn add_clipboard_items(deck: &Deck, ue: bool) -> Vec<IndexItem> {
     let clip = crate::clipboard::get_text().unwrap_or_default();
     let pairs = bulk::parse_bulk(&clip);
     if !pairs.is_empty() {
-        let new = pairs.iter().filter(|(en, _)| !deck.contains_en(en)).count();
+        let keys = deck.en_keys();
+        let new = pairs
+            .iter()
+            .filter(|(en, _)| !keys.contains(&scoring::normalize_words(en)))
+            .count();
         return vec![item(
             ic(ue, "\u{2795}", "[+]"),
             format!("클립보드에서 {new}개 담기"),

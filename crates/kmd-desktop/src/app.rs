@@ -274,6 +274,13 @@ pub enum Message {
     },
     /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
     ClipActionFinished(Result<String, String>),
+    /// LLM 오토파일럿 위임 IPC 완료 — 실패면 URL 폴백
+    LlmAutopilotFinished {
+        result: Result<(), String>,
+        fallback: settings::LlmFallback,
+    },
+    /// `@@` 이어서 질문 IPC 완료 — 성공할 때만 닫는다
+    LlmFollowupFinished(Result<String, String>),
     /// 메모로 저장할 클립보드 항목 전체 글 (docs/23)
     ClipTextForNote(Result<String, String>),
     /// `:scope` 추가·제거 후 리빌드 완료 → 새 캐시로 엔진 교체 (docs/18)
@@ -792,6 +799,10 @@ impl App {
                 self.handle_clip_text_for_note(result);
                 Task::none()
             }
+            Message::LlmAutopilotFinished { result, fallback } => {
+                self.finish_llm_autopilot(result, fallback)
+            }
+            Message::LlmFollowupFinished(result) => self.finish_llm_followup(result),
             Message::ClipActionFinished(result) => match result {
                 Ok(message) => {
                     tracing::info!("{message}");

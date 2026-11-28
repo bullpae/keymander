@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,18 @@ const RECHECK: Duration = Duration::from_secs(10);
 /// 볼륨 분리 알림 뒤 그 볼륨을 다시 감시하지 않는 시간 — 분리가 취소되면(다른 프로그램이 잡고 있음) 이 뒤에 다시 건다
 #[cfg(windows)]
 const RELEASE_HOLD: Duration = Duration::from_secs(15);
+/// 이벤트 대기열 크기. 본문 sync·전체 대조가 몇 초 걸리는 동안 `git checkout`·압축 풀기 같은 폭주가
+/// 오면 예전 무한 채널은 이벤트 경로를 끝없이 쌓았다. 넘치면 버리고 한 번 다시 훑는다
+const QUEUE: usize = 1024;
+
+/// 검색 폴더가 모두 감시 중이고 폴더 시각도 믿을 수 있는 볼륨인가 ([`fully_watched`])
+static FULLY_WATCHED: AtomicBool = AtomicBool::new(false);
+
+/// 파일 검색 색인을 감시가 다 맡고 있는가 — 데몬의 5분 폴더 시각 대조는 감시와 겹치므로 이때는 드물게
+/// 돈다. Linux(파일 검색만으로는 감시 안 함)·exFAT·네트워크 볼륨·감시 실패·꺼진 볼륨이 하나라도 있으면 false
+pub(crate) fn fully_watched() -> bool {
+    FULLY_WATCHED.load(Ordering::Relaxed)
+}
 
 pub(crate) enum Msg {
     /// 바뀐 경로들
@@ -55,25 +67,35 @@ struct Roots {
     watcher: notify::RecommendedWatcher,
     desired: Vec<PathBuf>,
     watched: Vec<PathBuf>,
+    /// 파일 검색 색인을 위해 감시하고, 검색 폴더가 모두 폴더 시각을 믿을 수 있는 볼륨이다
+    files_trusted: bool,
     #[cfg(windows)]
     held: Vec<(PathBuf, Instant)>,
 }
 
 impl Roots {
-    fn set(&mut self, desired: Vec<PathBuf>) {
+    /// 감시를 모두 풀고 목록을 바꾼다. 다시 거는 것은 [`recheck`]
+    fn set(&mut self, desired: Vec<PathBuf>, files_trusted: bool) {
         for p in self.watched.drain(..) {
             let _ = self.watcher.unwatch(&p);
         }
         self.desired = desired;
-        self.recheck();
-        tracing::info!("파일 감시: 검색 폴더 {}개", self.watched.len());
+        self.files_trusted = files_trusted;
+        self.publish();
     }
 
-    /// 감시 상태를 실제 폴더와 맞춘다. 다시 감시하게 된 폴더가 있으면 true (다시 마운트 등)
-    fn recheck(&mut self) -> bool {
+    fn publish(&self) {
+        let all = !self.desired.is_empty() && self.watched.len() == self.desired.len();
+        FULLY_WATCHED.store(self.files_trusted && all, Ordering::Relaxed);
+    }
+
+    /// 감시 상태를 실제 폴더와 맞춘다. `checked` 는 잠금 밖에서 확인한 폴더, `alive` 는 그중 있는 것.
+    /// 다시 감시하게 된 폴더가 있으면 true (다시 마운트 등)
+    fn sync_alive(&mut self, checked: &HashSet<PathBuf>, alive: &HashSet<PathBuf>) -> bool {
         let watcher = &mut self.watcher;
         self.watched.retain(|p| {
-            let alive = p.is_dir();
+            // 확인하는 사이 새로 건 감시는 그대로 둔다
+            let alive = !checked.contains(p) || alive.contains(p);
             if !alive {
                 let _ = watcher.unwatch(p);
                 tracing::info!("감시 해제 (폴더 없음): {}", p.display());
@@ -85,7 +107,7 @@ impl Roots {
             .retain(|(_, since)| since.elapsed() < RELEASE_HOLD);
         let mut armed = false;
         for p in &self.desired {
-            if self.watched.contains(p) || !p.is_dir() {
+            if self.watched.contains(p) || !alive.contains(p) {
                 continue;
             }
             #[cfg(windows)]
@@ -100,6 +122,7 @@ impl Roots {
                 Err(e) => tracing::warn!("경로 감시 실패 {}: {e}", p.display()),
             }
         }
+        self.publish();
         armed
     }
 
@@ -117,7 +140,32 @@ impl Roots {
             }
             !on_drive
         });
+        self.publish();
     }
+}
+
+/// 감시 상태를 실제 폴더와 맞춘다 ([`Roots::sync_alive`]). `is_dir` 은 꺼진 네트워크 경로에서 몇 초씩
+/// 막힐 수 있어 잠금 밖에서 부른다 — 잠근 채 부르면 같은 잠금을 기다리는 볼륨 분리 알림(Windows
+/// `on_removing`)이 늦어져 VeraCrypt 해제가 실패한다
+fn recheck(roots: &Mutex<Roots>) -> bool {
+    let checked: HashSet<PathBuf> = with_roots(roots, |r| {
+        r.watched.iter().chain(&r.desired).cloned().collect()
+    });
+    let alive: HashSet<PathBuf> = checked.iter().filter(|p| p.is_dir()).cloned().collect();
+    with_roots(roots, |r| r.sync_alive(&checked, &alive))
+}
+
+/// 검색 폴더 목록을 바꾸고 다시 건다. 볼륨 판별(statfs 등)도 잠금 밖에서 한다
+fn set_roots(roots: &Mutex<Roots>, cfg: &Config) {
+    let desired = watch_paths(cfg);
+    let files_trusted = watches_files(cfg)
+        && desired
+            .iter()
+            .all(|p| kmd_core::filesearch::scan::mtime_reliable(p));
+    with_roots(roots, |r| r.set(desired, files_trusted));
+    recheck(roots);
+    let n = with_roots(roots, |r| r.watched.len());
+    tracing::info!("파일 감시: 검색 폴더 {n}개");
 }
 
 /// 감시 목록을 잠그고 `f` — 잠근 쪽이 패닉했어도 목록은 그대로 쓸 수 있다
@@ -147,29 +195,41 @@ fn dirty_dir(path: &Path, own: &[PathBuf]) -> Option<PathBuf> {
 /// 감시할 검색 폴더. Linux 는 파일 검색만으로는 감시하지 않는다 — inotify 재귀 감시는 하위 폴더마다
 /// 감시를 하나씩 걸어 한도(옛 커널 8,192)에 걸리고, ext4 는 폴더 시각을 믿을 수 있어 열 때 대조로 충분하다.
 fn watch_paths(cfg: &Config) -> Vec<PathBuf> {
-    let for_files = cfg.launcher.file_search.enabled() && !cfg!(target_os = "linux");
-    if cfg.launcher.content_search.enabled || for_files {
+    if cfg.launcher.content_search.enabled || watches_files(cfg) {
         cfg.launcher.effective_search_paths()
     } else {
         Vec::new()
     }
 }
 
+/// 파일 검색 색인을 위해 감시하는가
+fn watches_files(cfg: &Config) -> bool {
+    cfg.launcher.file_search.enabled() && !cfg!(target_os = "linux")
+}
+
 pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         lower_indexer_thread_priority();
 
-        let (tx, rx) = mpsc::channel::<Msg>();
+        let (tx, rx) = mpsc::sync_channel::<Msg>(QUEUE);
         let event_tx = tx.clone();
+        // 대기열이 넘쳐 버린 이벤트가 있다 — 루프가 한 번 다시 훑는다
+        let overflow = Arc::new(AtomicBool::new(false));
+        let event_overflow = overflow.clone();
         let watcher =
             match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 let Ok(event) = res else {
                     return;
                 };
-                if event.need_rescan() {
-                    let _ = event_tx.send(Msg::Rescan);
+                let msg = if event.need_rescan() {
+                    Msg::Rescan
                 } else if !matches!(event.kind, notify::EventKind::Access(_)) {
-                    let _ = event_tx.send(Msg::Paths(event.paths));
+                    Msg::Paths(event.paths)
+                } else {
+                    return;
+                };
+                if let Err(TrySendError::Full(_)) = event_tx.try_send(msg) {
+                    event_overflow.store(true, Ordering::Relaxed);
                 }
             }) {
                 Ok(w) => w,
@@ -185,10 +245,11 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
             watcher,
             desired: Vec::new(),
             watched: Vec::new(),
+            files_trusted: false,
             #[cfg(windows)]
             held: Vec::new(),
         }));
-        with_roots(&roots, |r| r.set(watch_paths(&config)));
+        set_roots(&roots, &config);
         #[cfg(windows)]
         volume_events::spawn(roots.clone(), tx.clone());
         drop(tx);
@@ -239,12 +300,16 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
                 Ok(Msg::Rescan) => on_event(&mut file_dirty, true, true),
                 #[cfg(windows)]
                 Ok(Msg::VolumeArrived) => {
-                    if with_roots(&roots, Roots::recheck) {
+                    if recheck(&roots) {
                         on_event(&mut file_dirty, true, true);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
+            }
+            if overflow.swap(false, Ordering::Relaxed) {
+                tracing::info!("파일 감시 대기열 넘침 — 다시 훑는다");
+                on_event(&mut file_dirty, true, true);
             }
 
             if last_config_load.elapsed() >= CONFIG_RELOAD {
@@ -254,13 +319,13 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
                 config = fresh;
                 content_allowed = kmd_core::content_index::allowed_extensions(&config.launcher);
                 if rewatch {
-                    with_roots(&roots, |r| r.set(watch_paths(&config)));
+                    set_roots(&roots, &config);
                 }
             }
             if last_recheck.elapsed() >= RECHECK {
                 last_recheck = Instant::now();
                 // 다시 마운트된 검색 폴더 — 꺼져 있던 동안의 변경은 이벤트가 없으니 훑는다
-                if with_roots(&roots, Roots::recheck) {
+                if recheck(&roots) {
                     file_rescan = true;
                     file_first_event = Instant::now();
                 }
@@ -320,7 +385,7 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
 #[cfg(windows)]
 mod volume_events {
     use super::{with_roots, Msg, Roots};
-    use std::sync::mpsc::Sender;
+    use std::sync::mpsc::SyncSender;
     use std::sync::{Arc, Mutex, OnceLock};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -333,12 +398,12 @@ mod volume_events {
 
     struct Shared {
         roots: Arc<Mutex<Roots>>,
-        tx: Mutex<Sender<Msg>>,
+        tx: Mutex<SyncSender<Msg>>,
     }
 
     static SHARED: OnceLock<Shared> = OnceLock::new();
 
-    pub(super) fn spawn(roots: Arc<Mutex<Roots>>, tx: Sender<Msg>) {
+    pub(super) fn spawn(roots: Arc<Mutex<Roots>>, tx: SyncSender<Msg>) {
         let shared = Shared {
             roots,
             tx: Mutex::new(tx),
@@ -399,7 +464,8 @@ mod volume_events {
     fn on_arrived() {
         if let Some(shared) = SHARED.get() {
             if let Ok(tx) = shared.tx.lock() {
-                let _ = tx.send(Msg::VolumeArrived);
+                // 창 프로시저를 막지 않는다 — 대기열이 차 못 보내도 10초 재확인이 다시 건다
+                let _ = tx.try_send(Msg::VolumeArrived);
             }
         }
     }

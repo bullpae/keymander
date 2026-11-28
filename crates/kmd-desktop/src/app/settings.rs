@@ -4,6 +4,15 @@ use super::*;
 #[allow(unused_imports)]
 use super::{items_to_results, save_config};
 
+/// 오토파일럿 위임이 실패했을 때 할 일 (UI 스레드에서 한다 — 클립보드)
+#[derive(Debug, Clone)]
+pub(crate) struct LlmFallback {
+    jobs: usize,
+    plain_urls: Vec<String>,
+    all_urls: Vec<String>,
+    paste: Option<String>,
+}
+
 /// `:set` 목록의 한 행. 화면 표시(name/icon/desc)와 실행 키(action)를 함께 든다.
 struct SettingsRow {
     name: String,
@@ -177,19 +186,23 @@ impl App {
             let req = kmd_core::ipc::Request::LlmAutopilot {
                 jobs: plan.jobs.clone(),
             };
-            match kmd_core::ipc::send_request_result(&req) {
-                Ok(_) => {
-                    // 자동화 불필요 서비스만 여기서 직접 연다
-                    for url in &plan.plain_urls {
-                        let _ = kmd_core::action::open_url(url);
-                    }
-                    tracing::info!("LLM 오토파일럿 위임: {}개 잡", plan.jobs.len());
-                    return Some(exit_launcher());
-                }
-                Err(e) => {
-                    tracing::warn!("오토파일럿 IPC 실패 — URL 폴백: {e}");
-                }
-            }
+            let fallback = LlmFallback {
+                jobs: plan.jobs.len(),
+                plain_urls: plan.plain_urls.clone(),
+                all_urls: web::llm_plan_all_urls(&plan),
+                paste: (has_paste && !final_prompt.is_empty()).then_some(final_prompt),
+            };
+            // IPC 는 데몬이 바쁘면 타임아웃까지 기다린다 — UI 스레드에서 부르면 그동안 창이 언다
+            return Some(Task::future(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    kmd_core::ipc::send_request_result(&req)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                Message::LlmAutopilotFinished { result, fallback }
+            }));
         }
 
         // 폴백: 전 서비스 URL 열기 + (붙여넣기형 있으면) 클립보드
@@ -204,8 +217,38 @@ impl App {
         Some(exit_launcher())
     }
 
-    /// `@@ <프롬프트>` 이어서 질문 — 데몬에 위임. 열 URL이 없으므로 데몬
-    /// 미실행/세션 없음 시엔 안내 로그만 남기고 종료(폴백 불가).
+    /// 오토파일럿 위임 결과. 실패하면 폴백 — 전 서비스 URL 을 열고 붙여넣기형이 있으면 프롬프트를
+    /// 클립보드에 담는다. 어느 쪽이든 창을 닫는다 (폴백이 곧 할 일을 한 것이다)
+    pub(super) fn finish_llm_autopilot(
+        &mut self,
+        result: Result<(), String>,
+        fallback: LlmFallback,
+    ) -> Task<Message> {
+        match result {
+            Ok(()) => {
+                // 자동화 불필요 서비스만 여기서 직접 연다
+                for url in &fallback.plain_urls {
+                    let _ = kmd_core::action::open_url(url);
+                }
+                tracing::info!("LLM 오토파일럿 위임: {}개 잡", fallback.jobs);
+            }
+            Err(e) => {
+                tracing::warn!("오토파일럿 IPC 실패 — URL 폴백: {e}");
+                if let Some(prompt) = &fallback.paste {
+                    if let Err(e) = kmd_core::clipboard::set_text(prompt) {
+                        tracing::warn!("클립보드 쓰기 실패: {e}");
+                    }
+                }
+                for url in &fallback.all_urls {
+                    let _ = kmd_core::action::open_url(url);
+                }
+            }
+        }
+        exit_launcher()
+    }
+
+    /// `@@ <프롬프트>` 이어서 질문 — 데몬에 위임. 열 URL이 없으므로 폴백이 없다 —
+    /// 데몬 미실행·세션 없음이면 창을 닫지 않고 상태 줄에 알린다
     pub(super) fn send_llm_followup(&self, prompt: &str) -> Task<Message> {
         let final_prompt = kmd_core::prompt::apply_template(
             &self.runtime_config.launcher.prompt_templates,
@@ -214,13 +257,35 @@ impl App {
         let req = kmd_core::ipc::Request::LlmFollowup {
             prompt: final_prompt,
         };
-        match kmd_core::ipc::send_request_result(&req) {
-            Ok(kmd_core::ipc::Response::Ok { message }) => tracing::info!("{message}"),
-            Ok(kmd_core::ipc::Response::Error { message }) => tracing::warn!("{message}"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("이어서 질문 실패(데몬 미실행?): {e}"),
+        Task::future(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                match kmd_core::ipc::send_request_result(&req) {
+                    Ok(kmd_core::ipc::Response::Ok { message }) => Ok(message),
+                    Ok(kmd_core::ipc::Response::Error { message }) => Err(message),
+                    Ok(_) => Ok(String::new()),
+                    Err(e) => Err(format!("이어서 질문 실패(데몬 미실행?): {e}")),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("이어서 질문 작업 실패: {e}")));
+            Message::LlmFollowupFinished(result)
+        })
+    }
+
+    pub(super) fn finish_llm_followup(&mut self, result: Result<String, String>) -> Task<Message> {
+        match result {
+            Ok(message) => {
+                if !message.is_empty() {
+                    tracing::info!("{message}");
+                }
+                exit_launcher()
+            }
+            Err(message) => {
+                tracing::warn!("{message}");
+                self.status_message = Some(message);
+                Task::none()
+            }
         }
-        exit_launcher()
     }
 
     pub(super) fn handle_keymap_action(

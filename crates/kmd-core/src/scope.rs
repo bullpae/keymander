@@ -386,6 +386,36 @@ fn list_results(
     items
 }
 
+/// 이만큼 안에 같은 폴더를 다시 나열하면 지난 목록을 쓴다
+const LISTING_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 지난 하위 폴더 목록 (폴더, 읽은 때, 목록)
+type Listing = (PathBuf, std::time::Instant, Vec<PathBuf>);
+static LAST_LISTING: std::sync::Mutex<Option<Listing>> = std::sync::Mutex::new(None);
+
+/// `base` 의 하위 폴더. `:scope ~/Docu` 처럼 이름을 치는 동안은 키마다 같은 부모를 다시 읽었다 —
+/// 2초 안의 같은 폴더는 지난 목록을 쓴다 (네트워크 폴더에서 키마다 기다리지 않게)
+fn child_dirs(base: &Path) -> Vec<PathBuf> {
+    let mut last = LAST_LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((path, at, dirs)) = last.as_ref() {
+        if path == base && at.elapsed() < LISTING_TTL {
+            return dirs.clone();
+        }
+    }
+    let dirs: Vec<PathBuf> =
+        crate::folder_search::list_dir(base, crate::folder_search::MAX_ENTRIES)
+            .map(|l| {
+                l.entries
+                    .into_iter()
+                    .filter(|e| e.is_dir)
+                    .map(|e| e.path)
+                    .collect()
+            })
+            .unwrap_or_default();
+    *last = Some((base.to_path_buf(), std::time::Instant::now(), dirs.clone()));
+    dirs
+}
+
 fn browse_results(launcher: &LauncherConfig, rest: &str, use_emoji: bool) -> Vec<IndexItem> {
     let typed = parse_input(rest);
     let ends_with_sep = rest.ends_with(['\\', '/']);
@@ -411,16 +441,7 @@ fn browse_results(launcher: &LauncherConfig, rest: &str, use_emoji: bool) -> Vec
         }
     };
 
-    let mut children: Vec<PathBuf> =
-        crate::folder_search::list_dir(&base, crate::folder_search::MAX_ENTRIES)
-            .map(|l| {
-                l.entries
-                    .into_iter()
-                    .filter(|e| e.is_dir)
-                    .map(|e| e.path)
-                    .collect()
-            })
-            .unwrap_or_default();
+    let mut children = child_dirs(&base);
     if !prefix.is_empty() {
         children.retain(|c| {
             c.file_name()

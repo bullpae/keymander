@@ -258,6 +258,19 @@ fn check_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// [`NoteStore::load_cached`] 가 들고 있는 지난 결과
+#[derive(Default)]
+pub struct LoadCache {
+    dir: Option<PathBuf>,
+    entries: HashMap<String, CacheEntry>,
+}
+
+fn sorted_notes(notes: impl Iterator<Item = Note>) -> Vec<Note> {
+    let mut notes: Vec<Note> = notes.collect();
+    notes.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then(b.id.cmp(&a.id)));
+    notes
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Cache {
     dir: PathBuf,
@@ -349,14 +362,41 @@ impl NoteStore {
 
     /// 전체 메모, 최근 것부터. 바뀐 파일만 읽는다
     pub fn load(&self) -> Result<Vec<Note>, String> {
+        let Some(fresh) = self.scan(None)? else {
+            return Ok(Vec::new());
+        };
+        Ok(sorted_notes(fresh.into_values().map(|c| c.note)))
+    }
+
+    /// [`Self::load`] 와 같되 지난 결과를 메모리에 들고 있다가 쓴다. 데몬은 30초마다 리마인더를 보느라
+    /// 메모 전체가 든 캐시 파일을 매번 읽고 파싱했다 — 바뀐 파일이 없으면 이제 `read_dir`·stat 만 한다.
+    pub fn load_cached(&self, mem: &mut LoadCache) -> Result<Vec<Note>, String> {
+        let old = (mem.dir.as_deref() == Some(self.dir.as_path()))
+            .then(|| std::mem::take(&mut mem.entries));
+        mem.dir = None;
+        let Some(fresh) = self.scan(old)? else {
+            return Ok(Vec::new());
+        };
+        let notes = sorted_notes(fresh.values().map(|c| c.note.clone()));
+        mem.dir = Some(self.dir.clone());
+        mem.entries = fresh;
+        Ok(notes)
+    }
+
+    /// 폴더를 훑어 바뀐 파일만 다시 읽는다. `old` 가 없으면 캐시 파일에서 읽는다.
+    /// 폴더가 없고 정한 폴더도 아니면 `None`
+    fn scan(
+        &self,
+        old: Option<HashMap<String, CacheEntry>>,
+    ) -> Result<Option<HashMap<String, CacheEntry>>, String> {
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !self.configured => {
-                return Ok(Vec::new())
+                return Ok(None)
             }
             Err(e) => return Err(format!("{} 을 읽지 못했습니다: {e}", self.dir.display())),
         };
-        let mut old = self.read_cache();
+        let mut old = old.unwrap_or_else(|| self.read_cache());
         let mut fresh: HashMap<String, CacheEntry> = HashMap::new();
         let mut changed = false;
         for entry in entries.flatten() {
@@ -408,9 +448,7 @@ impl NoteStore {
         if changed || !old.is_empty() {
             self.write_cache(&fresh);
         }
-        let mut notes: Vec<Note> = fresh.into_values().map(|c| c.note).collect();
-        notes.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then(b.id.cmp(&a.id)));
-        Ok(notes)
+        Ok(Some(fresh))
     }
 
     fn read_cache(&self) -> HashMap<String, CacheEntry> {
@@ -1555,6 +1593,26 @@ mod tests {
 
         std::fs::remove_file(store.file_path(&b).unwrap()).unwrap();
         assert_eq!(store.load().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn 메모리_캐시로_읽어도_결과가_같다() {
+        let d = tempfile::tempdir().unwrap();
+        let mut store = NoteStore::new(d.path().join("notes"), false);
+        store.cache = Some(d.path().join(CACHE_FILE));
+        let mut mem = LoadCache::default();
+        assert!(store.load_cached(&mut mem).unwrap().is_empty());
+        let a = store.add("처음", Local::now()).unwrap();
+        assert_eq!(store.load_cached(&mut mem).unwrap(), store.load().unwrap());
+        // 캐시 파일이 없어도 메모리 것을 쓴다
+        std::fs::remove_file(d.path().join(CACHE_FILE)).unwrap();
+        let path = store.file_path(&a).unwrap();
+        filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(1000, 0)).unwrap();
+        std::fs::write(&path, "고침\n".as_bytes()).unwrap();
+        let notes = store.load_cached(&mut mem).unwrap();
+        assert_eq!(notes[0].body, "고침");
+        std::fs::remove_file(&path).unwrap();
+        assert!(store.load_cached(&mut mem).unwrap().is_empty());
     }
 
     #[test]
