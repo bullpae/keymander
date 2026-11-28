@@ -240,10 +240,56 @@ fn char_bit(c: char) -> u64 {
 
 /// [`OsStr::as_encoded_bytes`] 로 저장한 바이트를 경로로 되돌린다.
 pub fn bytes_to_path(bytes: &[u8]) -> PathBuf {
-    // SAFETY: 이 바이트는 같은 플랫폼에서 `as_encoded_bytes` 로 만든 것이다
-    // (스냅숏 헤더의 플랫폼 표시로 다른 OS 의 스냅숏은 열지 않는다).
+    // 스냅숏은 디스크에서 읽은 신뢰하지 않는 입력이다. Unix 의 OsStr 은 아무 바이트나 되지만
+    // Windows 는 WTF-8 이어야 해서, 손상된 바이트를 그대로 넘기면 정의되지 않은 동작이다.
+    if cfg!(windows) && !is_wtf8(bytes) {
+        return PathBuf::from(String::from_utf8_lossy(bytes).into_owned());
+    }
+    // SAFETY: Unix 는 모든 바이트열이 유효한 OsStr 이고, Windows 는 위에서 WTF-8 임을 확인했다
     let s = unsafe { OsStr::from_encoded_bytes_unchecked(bytes) };
     Path::new(s).to_path_buf()
+}
+
+/// WTF-8 인지 — UTF-8 에 짝 없는 서로게이트(U+D800~DFFF 의 3바이트 표기)를 더 허용한 것.
+/// 짝이 맞는 서로게이트 두 개가 붙은 표기는 WTF-8 이 아니다 (4바이트로 써야 한다).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_wtf8(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    let mut prev_lead_surrogate = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let (len, lo, hi) = match b {
+            0x00..=0x7F => (1, 0x80, 0xBF),
+            0xC2..=0xDF => (2, 0x80, 0xBF),
+            0xE0 => (3, 0xA0, 0xBF),
+            0xE1..=0xEF => (3, 0x80, 0xBF), // 0xED 는 서로게이트까지 허용 (WTF-8)
+            0xF0 => (4, 0x90, 0xBF),
+            0xF1..=0xF3 => (4, 0x80, 0xBF),
+            0xF4 => (4, 0x80, 0x8F),
+            _ => return false,
+        };
+        if i + len > bytes.len() {
+            return false;
+        }
+        if len > 1 && !(lo..=hi).contains(&bytes[i + 1]) {
+            return false;
+        }
+        if len > 2
+            && bytes[i + 2..i + len]
+                .iter()
+                .any(|c| !(0x80..=0xBF).contains(c))
+        {
+            return false;
+        }
+        let surrogate = len == 3 && b == 0xED && bytes[i + 1] >= 0xA0;
+        let trail = surrogate && bytes[i + 1] >= 0xB0;
+        if trail && prev_lead_surrogate {
+            return false;
+        }
+        prev_lead_surrogate = surrogate && !trail;
+        i += len;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -281,6 +327,17 @@ mod tests {
         );
         assert_eq!(t.kind(dir as usize), Kind::Dir);
         assert_eq!(t.depth(file as usize), 2);
+    }
+
+    #[test]
+    fn wtf8_판정() {
+        assert!(is_wtf8("보고서 2026.hwp".as_bytes()));
+        assert!(is_wtf8(&[0xED, 0xA0, 0x80])); // 짝 없는 앞 서로게이트
+        assert!(is_wtf8(&[0xED, 0xB0, 0x80])); // 짝 없는 뒤 서로게이트
+        assert!(!is_wtf8(&[0xED, 0xA0, 0x80, 0xED, 0xB0, 0x80])); // 짝 맞는 쌍은 4바이트로
+        assert!(!is_wtf8(&[0xFF]));
+        assert!(!is_wtf8(&[0xE3, 0x81])); // 잘림
+        assert!(!is_wtf8(&[0xC0, 0x80])); // 과잉 표기
     }
 
     #[test]

@@ -73,9 +73,19 @@ pub fn publish(dir: &Path, table: &TableBuilder) -> Result<u64, SnapshotError> {
         return Err(SnapshotError::BigEndian);
     }
     create_private_dir(dir)?;
-    let generation = current_generation(dir).map_or(1, |g| g + 1);
-    let name = format!("files.{generation}.snap");
-    write_new_file(dir, &name, &encode(table, generation)?)?;
+    // 다른 프로세스(런처의 열 때 대조 ↔ 데몬)가 같은 `current+1` 을 고를 수 있다 — 세대 파일은
+    // 이미 있으면 덮지 않고 다음 번호로 넘어간다. 예전엔 rename 이 먼저 것을 덮어 지웠다.
+    let mut generation = current_generation(dir).map_or(1, |g| g + 1);
+    let name = loop {
+        let name = format!("files.{generation}.snap");
+        match write_new_file_exclusive(dir, &name, &encode(table, generation)?) {
+            Ok(()) => break name,
+            Err(SnapshotError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                generation += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    };
     write_new_file(dir, CURRENT_FILE, name.as_bytes())?;
     cleanup_old(dir, &name);
     Ok(generation)
@@ -413,6 +423,36 @@ fn write_new_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), SnapshotEr
     Ok(())
 }
 
+/// `write_new_file` 과 같지만 같은 이름이 이미 있으면 `AlreadyExists` — 임시 파일을 하드 링크로
+/// 붙여 원자적으로 "없을 때만" 만든다. 하드 링크를 못 쓰는 파일 시스템이면 예전처럼 rename.
+fn write_new_file_exclusive(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), SnapshotError> {
+    let target = dir.join(name);
+    if target.exists() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists).into());
+    }
+    let tmp_name = format!("{name}.excl-{}", std::process::id());
+    write_new_file(dir, &tmp_name, bytes)?;
+    let tmp = dir.join(&tmp_name);
+    let linked = fs::hard_link(&tmp, &target);
+    match linked {
+        Ok(()) => {
+            let _ = fs::remove_file(&tmp);
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&tmp);
+            Err(e.into())
+        }
+        Err(_) => {
+            let r = fs::rename(&tmp, &target);
+            if r.is_err() {
+                let _ = fs::remove_file(&tmp);
+            }
+            r.map_err(Into::into)
+        }
+    }
+}
+
 /// 현재가 아닌 옛 세대 중 오래된 것을 지운다 — 실패(Windows 에서 아직 매핑 중)는 다음에 다시
 fn cleanup_old(dir: &Path, current: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -455,6 +495,27 @@ mod tests {
         let y = b.push(OsStr::new("2026년"), NO_PARENT, root, Kind::Dir, 1, 5);
         b.push(OsStr::new("보고서.hwp"), y, root, Kind::File, 2, 6);
         b
+    }
+
+    #[test]
+    fn 다른_프로세스가_먼저_쓴_세대는_덮지_않는다() {
+        let tmp = tempfile::tempdir().unwrap();
+        let b = sample();
+        assert_eq!(publish(tmp.path(), &b).unwrap(), 1);
+        // 다른 프로세스가 같은 current+1 을 골라 먼저 썼다 (current 는 아직 1)
+        std::fs::write(tmp.path().join("files.2.snap"), b"other").unwrap();
+        assert_eq!(publish(tmp.path(), &b).unwrap(), 3);
+        assert_eq!(
+            std::fs::read(tmp.path().join("files.2.snap")).unwrap(),
+            b"other"
+        );
+        assert_eq!(Snapshot::open_current(tmp.path()).unwrap().generation(), 3);
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("excl"))
+            .collect();
+        assert!(leftovers.is_empty());
     }
 
     #[test]

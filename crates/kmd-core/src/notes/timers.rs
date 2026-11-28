@@ -6,13 +6,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-const LOCK_WAIT: Duration = Duration::from_secs(2);
-/// 이보다 오래된 잠금은 죽은 프로세스가 남긴 것이다
-const LOCK_STALE: Duration = Duration::from_secs(10);
 /// 울린 리마인더 기록을 지우는 나이
 const FIRED_KEEP_MS: i64 = 30 * 24 * 3600 * 1000;
 /// 이만큼 늦게 끝난 것은 "늦었다"고 알린다
@@ -159,7 +156,8 @@ impl TimerStore {
     }
 
     fn update<T>(&self, f: impl FnOnce(&mut State) -> T) -> Result<T, String> {
-        let _lock = FileLock::acquire(&self.path.with_extension("lock"))?;
+        let _lock = crate::fsutil::FileLock::acquire(&self.path.with_extension("lock"))
+            .map_err(|e| format!("타이머 {e}"))?;
         let mut state = Self::read(&self.path);
         let out = f(&mut state);
         let bytes = serde_json::to_vec(&state).map_err(|e| e.to_string())?;
@@ -305,48 +303,6 @@ impl DueWatch {
         }
         self.reset();
         store.take_due(now_ms)
-    }
-}
-
-/// 만들어 두는 동안만 잡히는 잠금. 프로세스가 죽어 남으면 나이로 걷어 낸다
-struct FileLock(PathBuf);
-
-impl FileLock {
-    fn acquire(path: &Path) -> Result<Self, String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("타이머 폴더 실패: {e}"))?;
-        }
-        let started = Instant::now();
-        loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-            {
-                Ok(_) => return Ok(Self(path.to_path_buf())),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(path)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| SystemTime::now().duration_since(t).ok())
-                        .is_some_and(|age| age > LOCK_STALE);
-                    if stale {
-                        let _ = std::fs::remove_file(path);
-                    } else if started.elapsed() > LOCK_WAIT {
-                        return Err("타이머 파일이 잠겨 있습니다".to_string());
-                    } else {
-                        std::thread::sleep(Duration::from_millis(20));
-                    }
-                }
-                Err(e) => return Err(format!("타이머 잠금 실패: {e}")),
-            }
-        }
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
     }
 }
 
