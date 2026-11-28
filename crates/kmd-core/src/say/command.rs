@@ -428,6 +428,7 @@ pub fn commit(
         });
     }
     let now = ctx.now;
+    let _lock = store.lock()?;
     let mut deck = store.load_deck(now)?;
     let mut state = store.load_state();
     let back = Some(":say ".to_string());

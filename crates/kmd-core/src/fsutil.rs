@@ -214,6 +214,52 @@ pub fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> std::io::Result
     Ok(())
 }
 
+/// 다른 프로세스와 읽고-고치고-쓰기를 나누는 잠금 파일. 만들어 두는 동안만 잡히고, 프로세스가 죽어
+/// 남은 것은 나이(10초)로 걷어 낸다. 2초 안에 못 잡으면 오류. (타이머·입버릇 파일이 쓴다)
+pub(crate) struct FileLock(std::path::PathBuf);
+
+impl FileLock {
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+    const STALE: std::time::Duration = std::time::Duration::from_secs(10);
+
+    pub(crate) fn acquire(path: &Path) -> Result<Self, String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("폴더 만들기 실패: {e}"))?;
+        }
+        let started = std::time::Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(_) => return Ok(Self(path.to_path_buf())),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+                        .is_some_and(|age| age > Self::STALE);
+                    if stale {
+                        let _ = std::fs::remove_file(path);
+                    } else if started.elapsed() > Self::WAIT {
+                        return Err("파일이 잠겨 있습니다".to_string());
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+                Err(e) => return Err(format!("잠금 실패: {e}")),
+            }
+        }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1031,11 +1031,7 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
 }
 
 /// `https://` 로 시작하는 주소인지 (대소문자 무시) — IPC 로 받은 URL 을 열기 전에 확인한다
-fn is_https_url(url: &str) -> bool {
-    url.trim_start()
-        .get(..8)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
-}
+use kmd_core::action::is_https_url;
 
 fn write_runtime_files(port: u16, token: &str) -> color_eyre::Result<()> {
     // 런타임 파일은 포터블 모드와 무관하게 OS 표준 사용자 디렉터리에 둔다

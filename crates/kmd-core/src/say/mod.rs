@@ -285,6 +285,13 @@ impl SayStore {
         }
     }
 
+    /// 문장·상태 파일을 읽고-고치고-쓰는 동안 잡는다 — 런처를 열 때의 "본 횟수" 기록과 연습 저장이
+    /// 겹치면 한쪽 변경이 사라졌다
+    pub(crate) fn lock(&self) -> Result<crate::fsutil::FileLock, String> {
+        crate::fsutil::FileLock::acquire(&self.dir.join("say.lock"))
+            .map_err(|e| format!("입버릇 {e}"))
+    }
+
     pub fn save_deck(&self, deck: &Deck) -> Result<(), String> {
         self.write_json(&self.deck_path(), deck)
     }
@@ -452,6 +459,7 @@ pub fn load_card(store: &SayStore, now: i64) -> Option<Card> {
 
 /// 카드가 한 번 보였음을 기록한다 (노출 수 +1, 카드 고정 상태 저장).
 pub fn record_card_seen(store: &SayStore, now: i64) -> Result<(), String> {
+    let _lock = store.lock()?;
     let mut deck = store.load_deck(now)?;
     let mut state = store.load_state();
     let (card, changed) = pick_card(&deck, &mut state, now);

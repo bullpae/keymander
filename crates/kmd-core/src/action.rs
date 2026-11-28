@@ -102,6 +102,16 @@ pub fn url_host(url: &str) -> &str {
     &url[..scheme_end + 3 + host_len]
 }
 
+/// `url` 이 `https://` 로 시작하는지 (대소문자 무시, 앞 공백 무시) — 데몬이 브라우저로만 여는 주소의 기준
+pub fn is_https_url(url: &str) -> bool {
+    has_scheme(url.trim_start(), "https://")
+}
+
+fn has_scheme(url: &str, scheme: &str) -> bool {
+    url.get(..scheme.len())
+        .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+}
+
 /// Spawn the platform-specific "open" command for a path or URL
 fn spawn_open(target: &str) -> std::io::Result<()> {
     spawn_open_child(target).map(crate::process::reap)
@@ -112,7 +122,9 @@ fn spawn_open_child(target: &str) -> std::io::Result<std::process::Child> {
     {
         let t = target.trim();
         // explorer.exe + URL 은 탐색기만 뜨는 환경이 있어, http(s)는 기본 브라우저 핸들러로 연다.
-        if t.starts_with("http://") || t.starts_with("https://") {
+        // 스킴은 대소문자를 가리지 않는다 — 데몬의 https 판정(is_https_url)과 같아야 `HTTPS://` 가
+        // 파일 열기(explorer) 경로로 새지 않는다
+        if has_scheme(t, "http://") || has_scheme(t, "https://") {
             Command::new("rundll32")
                 .arg("url.dll,FileProtocolHandler")
                 .arg(t)

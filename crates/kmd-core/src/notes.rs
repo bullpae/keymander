@@ -357,7 +357,16 @@ impl NoteStore {
 
     pub fn file_path(&self, id: &str) -> Result<PathBuf, String> {
         check_id(id)?;
-        Ok(self.dir.join(format!("{id}.md")))
+        let path = self.dir.join(format!("{id}.md"));
+        // 목록은 `.MD` 도 받는다 — 대소문자를 가리는 파일 시스템에서 그 파일을 고치면 `.md` 사본이
+        // 새로 생기고 지우기는 실패했다. 있는 쪽을 쓴다.
+        if !path.exists() {
+            let upper = self.dir.join(format!("{id}.MD"));
+            if upper.exists() {
+                return Ok(upper);
+            }
+        }
+        Ok(path)
     }
 
     /// 전체 메모, 최근 것부터. 바뀐 파일만 읽는다
@@ -597,12 +606,25 @@ impl NoteStore {
         let path = self.file_path(id)?;
         let trash = self.dir.join(TRASH_DIR);
         std::fs::create_dir_all(&trash).map_err(|e| format!("휴지통을 만들지 못했습니다: {e}"))?;
-        std::fs::rename(&path, trash.join(format!("{id}.md")))
-            .map_err(|e| format!("메모 삭제 실패: {e}"))
+        let target = trash.join(format!("{id}.md"));
+        // 같은 이름(같은 분에 만든 메모)이 이미 휴지통에 있으면 rename 이 그것을 덮어 지웠다 —
+        // 옛 것을 옆 이름으로 비켜 두고, 방금 지운 것은 되돌리기(restore)가 찾도록 제 이름에 둔다
+        if target.exists() {
+            let aside = (1..)
+                .map(|n| trash.join(format!("{id}-{n}.md")))
+                .find(|p| !p.exists())
+                .expect("무한 반복자");
+            std::fs::rename(&target, aside).map_err(|e| format!("메모 삭제 실패: {e}"))?;
+        }
+        std::fs::rename(&path, target).map_err(|e| format!("메모 삭제 실패: {e}"))
     }
 
     pub fn restore(&self, id: &str) -> Result<(), String> {
         let path = self.file_path(id)?;
+        if path.exists() {
+            // 그새 같은 이름의 메모가 생겼다 — 덮지 않는다
+            return Err("같은 이름의 메모가 있어 되살리지 않았습니다".to_string());
+        }
         std::fs::rename(self.dir.join(TRASH_DIR).join(format!("{id}.md")), path)
             .map_err(|e| format!("메모 복원 실패: {e}"))
     }
@@ -1459,6 +1481,59 @@ mod tests {
     fn found(body: &str, query: &str) -> bool {
         let notes = [note(body)];
         !search(&notes, query).is_empty()
+    }
+
+    #[test]
+    fn 휴지통의_같은_이름_메모를_덮지_않는다() {
+        let (_dir, store) = store();
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let id = "20261128-0900";
+        std::fs::write(store.dir().join(format!("{id}.md")), "첫째").unwrap();
+        store.trash(id).unwrap();
+        std::fs::write(store.dir().join(format!("{id}.md")), "둘째").unwrap();
+        store.trash(id).unwrap();
+        let trash = store.dir().join(TRASH_DIR);
+        assert_eq!(
+            std::fs::read_to_string(trash.join(format!("{id}-1.md"))).unwrap(),
+            "첫째"
+        );
+        // 되돌리기는 방금 지운 것
+        store.restore(id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(store.file_path(id).unwrap()).unwrap(),
+            "둘째"
+        );
+        // 있는 메모는 덮지 않는다
+        std::fs::rename(
+            trash.join(format!("{id}-1.md")),
+            trash.join(format!("{id}.md")),
+        )
+        .unwrap();
+        assert!(store.restore(id).is_err());
+    }
+
+    #[test]
+    fn 대문자_확장자_메모도_같은_파일을_고친다() {
+        let (_dir, store) = store();
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let upper = store.dir().join("20261128-0900.MD");
+        std::fs::write(&upper, "옛 글").unwrap();
+        let id = "20261128-0900";
+        store.update(id, "새 글").unwrap();
+        // 대소문자를 가리든 안 가리든 파일은 하나다 (사본이 생기지 않는다)
+        let files = std::fs::read_dir(store.dir())
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .ends_with(".md")
+            });
+        assert_eq!(files.count(), 1);
+        let notes = store.load().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].body.trim(), "새 글");
     }
 
     #[test]
