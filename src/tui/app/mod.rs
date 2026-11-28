@@ -15,7 +15,7 @@ use kmd_core::index::{
     files::{dir_icon, icon_for_path},
     ItemKind, Source,
 };
-use kmd_core::plugin::{builtin_calc, builtin_shell, Extension};
+use kmd_core::plugin::{builtin_shell, Extension};
 use kmd_core::query_prefix::QueryPrefix;
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
@@ -60,9 +60,6 @@ const SCORE_WEB_SEARCH: u32 = 100;
 
 /// Score for explicit calculator results (:calc prefix)
 const SCORE_CALC: u32 = 1000;
-
-/// Score for inline calculator results (always on top)
-const SCORE_CALC_INLINE: u32 = u32::MAX;
 
 /// Score for directory listing items
 const SCORE_DIR_LISTING: u32 = 0;

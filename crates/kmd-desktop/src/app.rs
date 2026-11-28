@@ -28,7 +28,7 @@ use iced::{
     Task,
 };
 
-use kmd_core::plugin::{builtin_calc, builtin_shell};
+use kmd_core::plugin::builtin_shell;
 use kmd_core::single_instance::Guard;
 use kmd_core::web;
 use kmd_core::{IndexItem, ItemKind, Source};
@@ -53,7 +53,7 @@ mod window_resize;
 use context_action::context_actions_for;
 pub use context_action::ContextAction;
 use engine_boot::{EngineSlot, QuickEngineSlot};
-use results::{estimate_title_max_chars, items_to_results, relaxed_hangul_query, truncate_str};
+use results::{estimate_title_max_chars, items_to_results, truncate_str};
 pub use ui_scale::{collapsed_window_height, full_window_height, initial_window_height, UiScale};
 use window_resize::UNCLOAK_AFTER_RESIZE;
 
@@ -65,7 +65,7 @@ const SEARCH_LIMIT: usize = 50;
 const SEARCH_RETRY_MS: u64 = 30;
 /// 빈 입력일 때 보여줄 최근 실행 항목 수 (TUI와 동일).
 const RECENT_DISPLAY_LIMIT: usize = 20;
-const SCORE_PLUGIN: u32 = u32::MAX;
+const SCORE_PLUGIN: u32 = kmd_core::launcher::SCORE_PINNED;
 
 /// 카드 외곽 래퍼 padding — 바깥 링(peach)과 창 가장자리 사이 간격.
 /// Windows 불투명 창에서는 이 간격이 창 배경색 띠로 노출되는 데다 DPI 소수

@@ -15,30 +15,41 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     // 한 번 묻고 끝나는 CLI — 미완성 결과를 찍지 않도록 끝날 때까지 기다린다
     engine.set_fuzzy_wait(std::time::Duration::from_secs(5));
 
-    let (mode, mut results) = engine.search(query, limit);
-
     let frecency = super::open_db()
         .map(|db| kmd_core::history::load_boost_map(&db))
         .unwrap_or_default();
 
-    // 새 파일 검색 엔진(docs/22) — 한 번 묻고 끝나므로 열 때 대조도 그 자리에서.
-    // 앱·실행 파일까지 한 척도로 다시 매기고 실행 이력도 그 안에서 더한다.
+    // 새 파일 검색 엔진(docs/22) — 한 번 묻고 끝나므로 열 때 대조도 그 자리에서
     let file_index = config
         .launcher
         .file_search
         .enabled()
         .then(kmd_core::filesearch::FileIndex::open_default)
-        .flatten();
-    if let Some(index) = file_index {
-        let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
-        let index = index.reconciled(&cfg).unwrap_or(index);
-        let weights = &config.launcher.kind_weights;
-        let boost = kmd_core::filesearch::Boost::new(&frecency);
-        let files = index.search(query, limit, &boost, weights, config.general.emoji_icons);
-        results = kmd_core::rank::merge(results, files, query, weights, &frecency);
-        results.truncate(limit);
-    } else {
-        kmd_core::history::boost_results_with_map(&mut results, &frecency);
+        .flatten()
+        .map(|index| {
+            let cfg = kmd_core::filesearch::scan::ScanConfig::from_launcher(&config.launcher);
+            index.reconciled(&cfg).unwrap_or(index)
+        });
+    let boost = kmd_core::filesearch::Boost::new(&frecency);
+    // 순위는 런처와 같은 공용 파이프라인 — 화면용 제안 행(웹 대체 제안 등)만 뺀다
+    let ctx = kmd_core::launcher::RankCtx {
+        launcher: &config.launcher,
+        file_index: file_index.as_ref(),
+        file_boost: &boost,
+        frecency: &frecency,
+        use_emoji: config.general.emoji_icons,
+        limit,
+        suggestions: false,
+    };
+    let kmd_core::launcher::RankOutcome {
+        results,
+        mode,
+        notice,
+        ..
+    } = kmd_core::launcher::rank_general(&mut engine, query, &ctx);
+    if let Some(notice) = notice {
+        // JSON 출력을 깨지 않게 stderr 로
+        eprintln!("{notice}");
     }
 
     if json {

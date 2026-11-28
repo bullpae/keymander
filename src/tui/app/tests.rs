@@ -908,3 +908,27 @@ fn url_열기_행은_자주_연_같은_이름_폴더보다_위에_있다() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn 복사할_값이_없는_계산기_행은_아무것도_하지_않는다() {
+    // 예전엔 기본 실행으로 흘러 빈 경로를 "실행"했다 — 데스크톱처럼 아무 일 없이 끝난다
+    let mut engine = SearchEngine::new();
+    let mut state = test_state();
+    let mut item = sysitem("Invalid expression: 1+", "", "");
+    item.item.kind = ItemKind::Calculator;
+    run_selected(&mut state, &mut engine, item);
+    assert!(state.status_message.is_none(), "{:?}", state.status_message);
+    assert!(!state.should_quit);
+}
+
+#[test]
+fn 결과가_없으면_데스크톱처럼_웹_검색_제안을_보여준다() {
+    let st = results_for("zzqqxxvv");
+    assert!(
+        st.results
+            .iter()
+            .any(|r| r.item.kind == ItemKind::WebSearch),
+        "{:?}",
+        st.results.iter().map(|r| &r.item.name).collect::<Vec<_>>()
+    );
+}

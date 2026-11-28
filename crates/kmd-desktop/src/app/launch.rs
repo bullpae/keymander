@@ -302,19 +302,11 @@ impl App {
         }
     }
 
-    /// `:t` 질의 → 열 URL 목록. 텍스트가 비면 클립보드 내용을 쓴다.
+    /// `:t` 질의 → 열 URL 목록 (core 공용 계획). 텍스트가 비면 클립보드 내용을 쓴다.
     fn transform_urls(&self) -> Vec<String> {
-        let trimmed = self.query.trim();
-        let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
-        let dispatch = normalized.as_deref().unwrap_or(trimmed);
-        let Some(tq) = kmd_core::transform::parse_transform_query_or_clipboard(dispatch) else {
-            return Vec::new();
-        };
-        kmd_core::transform::build_transform_urls(
-            &tq,
-            &self.runtime_config.launcher.spell_providers,
-            &self.runtime_config.launcher.translate_providers,
-        )
+        kmd_core::launcher::transform_launch(&self.query, &self.runtime_config.launcher)
+            .map(|t| t.urls)
+            .unwrap_or_default()
     }
 
     /// `:prompt add/rm` Enter 확정 — 현재 질의를 다시 해석해 적용·저장한다.

@@ -161,25 +161,13 @@ impl App {
     /// - 아니면 폴백: 전 서비스 URL을 열고, 붙여넣기형(gemini)이 있으면 프롬프트를
     ///   클립보드에 담아 수동 붙여넣기를 돕는다 (현행 동작).
     pub(super) fn try_llm_launch(&self) -> Option<Task<Message>> {
-        let (services, prompt) = web::parse_any_llm_query(
-            &self.query,
-            &self.runtime_config.launcher.multi_llm_providers,
-            &self.runtime_config.launcher.multi_llm_prefixes,
-        )?;
-        if services.is_empty() {
-            return None;
-        }
-
-        let final_prompt = kmd_core::prompt::apply_template(
-            &self.runtime_config.launcher.prompt_templates,
-            &prompt,
-        );
-        let plan = web::build_llm_launch_plan(&services, &final_prompt);
-
-        let has_paste = plan
-            .jobs
-            .iter()
-            .any(|j| matches!(j.method, kmd_core::ipc::LlmInject::PasteEnter));
+        // 무엇을 열고 무엇을 붙여넣을지는 core가 정한다 (TUI와 공유)
+        let launch = kmd_core::launcher::llm_launch(&self.query, &self.runtime_config.launcher)?;
+        let kmd_core::launcher::LlmLaunch {
+            plan,
+            all_urls,
+            paste,
+        } = launch;
 
         // 오토파일럿 시도 (opt-in + 데몬 실행 필요)
         if self.runtime_config.launcher.llm_autopilot && !plan.jobs.is_empty() {
@@ -189,8 +177,8 @@ impl App {
             let fallback = LlmFallback {
                 jobs: plan.jobs.len(),
                 plain_urls: plan.plain_urls.clone(),
-                all_urls: web::llm_plan_all_urls(&plan),
-                paste: (has_paste && !final_prompt.is_empty()).then_some(final_prompt),
+                all_urls,
+                paste,
             };
             // IPC 는 데몬이 바쁘면 타임아웃까지 기다린다 — UI 스레드에서 부르면 그동안 창이 언다
             return Some(Task::future(async move {
@@ -206,13 +194,13 @@ impl App {
         }
 
         // 폴백: 전 서비스 URL 열기 + (붙여넣기형 있으면) 클립보드
-        if has_paste && !final_prompt.is_empty() {
-            if let Err(e) = kmd_core::clipboard::set_text(&final_prompt) {
+        if let Some(prompt) = &paste {
+            if let Err(e) = kmd_core::clipboard::set_text(prompt) {
                 tracing::warn!("클립보드 쓰기 실패: {e}");
             }
         }
-        for url in web::llm_plan_all_urls(&plan) {
-            let _ = kmd_core::action::open_url(&url);
+        for url in &all_urls {
+            let _ = kmd_core::action::open_url(url);
         }
         Some(exit_launcher())
     }
