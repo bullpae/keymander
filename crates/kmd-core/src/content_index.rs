@@ -165,7 +165,7 @@ pub(crate) fn is_candidate_file(
 /// 유효 확장자 집합 — 설정이 비어 있으면 내장 기본 목록, 거기서
 /// `launcher.ignore_extensions`를 뺀다(런처 인덱스와 같은 제외 규칙).
 /// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
-pub(crate) fn allowed_extensions(launcher: &LauncherConfig) -> HashSet<String> {
+pub fn allowed_extensions(launcher: &LauncherConfig) -> HashSet<String> {
     let cs = &launcher.content_search;
     let mut allowed: HashSet<String> = if cs.extensions.is_empty() {
         DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
@@ -176,6 +176,23 @@ pub(crate) fn allowed_extensions(launcher: &LauncherConfig) -> HashSet<String> {
         allowed.remove(&ext);
     }
     allowed
+}
+
+/// 파일 감시 이벤트 경로가 본문 인덱스를 바꿀 수 있는지 — 아니면 동기화를 건너뛴다.
+/// 허용 확장자 파일, 또는 확장자 없는 경로(폴더 이름 바꾸기·지우기일 수 있다)만 본다.
+/// 숨김 경로(`.git` 등)는 본문 인덱스가 원래 훑지 않으므로 거른다.
+pub fn may_affect_content(path: &Path, allowed: &HashSet<String>) -> bool {
+    if path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|s| s.starts_with('.') && s != "." && s != "..")
+    }) {
+        return false;
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        None => true,
+        Some(ext) => allowed.contains(&ext.to_lowercase()),
+    }
 }
 
 /// 배치 트랜잭션 크기 — fsync 횟수를 줄인다.
@@ -770,6 +787,29 @@ pub fn launcher_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 본문_대상이_아닌_파일_변경은_sync_를_부르지_않는다() {
+        let allowed: HashSet<String> = ["md", "pdf"].iter().map(|s| s.to_string()).collect();
+        assert!(may_affect_content(Path::new("/docs/회의록.md"), &allowed));
+        assert!(may_affect_content(Path::new("/docs/보고서.PDF"), &allowed));
+        // 확장자 없는 경로는 폴더일 수 있다 — 이름 바꾸기·지우기를 놓치지 않는다
+        assert!(may_affect_content(Path::new("/docs/2026"), &allowed));
+        assert!(!may_affect_content(
+            Path::new("/docs/build/app.o"),
+            &allowed
+        ));
+        assert!(!may_affect_content(
+            Path::new("/docs/~$보고서.tmp"),
+            &allowed
+        ));
+        // 숨김 경로는 본문 인덱스가 훑지 않는다 (.git 오브젝트는 확장자가 없다)
+        assert!(!may_affect_content(
+            Path::new("/src/kmd/.git/objects/ab/cdef01"),
+            &allowed
+        ));
+        assert!(!may_affect_content(Path::new("/docs/.DS_Store"), &allowed));
+    }
     use std::io::Write;
 
     fn test_launcher(root: &Path) -> LauncherConfig {

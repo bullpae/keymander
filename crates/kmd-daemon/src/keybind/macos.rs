@@ -160,18 +160,6 @@ extern "C" {
     fn CFRunLoopStop(rl: CFRunLoopRef);
     fn CFRelease(cf: *mut c_void);
     static kCFRunLoopCommonModes: CFStringRef;
-    fn CFArrayGetCount(arr: *const c_void) -> i64;
-    fn CFArrayGetValueAtIndex(arr: *const c_void, idx: i64) -> *const c_void;
-    fn CFStringCompare(s1: *const c_void, s2: *const c_void, opts: u64) -> i32;
-}
-
-// ── Carbon TIS (Text Input Source) API — 한/영 입력 소스 전환 ────────────────
-
-#[link(name = "Carbon", kind = "framework")]
-extern "C" {
-    fn TISCopyCurrentKeyboardInputSource() -> *mut c_void;
-    fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *const c_void;
-    static kTISPropertyInputSourceLanguages: *const c_void;
 }
 
 // ── VKey → macOS CGKeyCode 변환 ──────────────────────────────────────────────
@@ -442,8 +430,6 @@ fn send_chord_engage(trigger: VKey, key: VKey) {
 
 // ── 입력 소스 전환 (한/영 토글) ───────────────────────────────────────────────
 
-const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-
 /// macOS 한/영 입력 소스 토글.
 ///
 /// TIS API(TISSelectInputSource)로 CJK 입력기를 선택하면 선택(메뉴바)만 바뀌고
@@ -497,20 +483,8 @@ fn toggle_input_source() {
         return;
     }
 
-    let to_korean = unsafe {
-        let current = TISCopyCurrentKeyboardInputSource();
-        if current.is_null() {
-            tracing::warn!("TISCopyCurrentKeyboardInputSource 실패");
-            TOGGLE_IN_FLIGHT.store(false, Ordering::Release);
-            return;
-        }
-        let is_korean = tis_first_language_matches(current, b"ko\0");
-        CFRelease(current);
-        !is_korean
-    };
-    let target: &'static [u8] = if to_korean { b"ko\0" } else { b"en\0" };
-    let target_name = if to_korean { "ko" } else { "en" };
-
+    // 전환 방향은 Ctrl+Space 가 정한다(직전 소스로 토글). 데몬 스레드의 TIS 읽기는 낡은 값을
+    // 돌려줘 방향도, 반영 확인도 믿을 수 없었다 — 실측 153회 중 확인 0회 (2026-11-28 로그 분석).
     std::thread::spawn(move || unsafe {
         // 물리 Shift가 눌린 채로 Ctrl+Space를 주입하면 OS가 Ctrl+Shift+Space
         // (다른 단축키)로 해석해 전환이 안 된다. 예전에는 Shift가 물리적으로
@@ -538,47 +512,13 @@ fn toggle_input_source() {
             std::thread::sleep(std::time::Duration::from_millis(3));
         }
 
-        tracing::info!("입력 소스 전환: Ctrl+Space 주입 → {target_name}");
+        tracing::debug!("입력 소스 전환: Ctrl+Space 주입");
         send_combo(&[VKey::LCtrl], VKey::Space);
 
-        // 주입(4이벤트)이 끝난 뒤에만 다음 토글을 허용한다 — 검증 로깅은
-        // 읽기 전용이라 다음 토글과 겹쳐도 무해하므로 여기서 가드를 푼다.
+        // 주입(4이벤트)이 끝난 뒤에만 다음 토글을 허용한다
         LAST_INJECT_DONE_MS.store(monotonic_ms().max(1), Ordering::Release);
         TOGGLE_IN_FLIGHT.store(false, Ordering::Release);
-
-        // 주입 반영 확인 — 로그 전용. 이 스레드의 TIS 읽기는 낡은 값일 수 있어
-        // 미확인이어도 개입하지 않는다 (실제 전환은 네이티브 경로가 이미 처리).
-        for attempt in 0..4 {
-            std::thread::sleep(std::time::Duration::from_millis(60));
-            let cur = TISCopyCurrentKeyboardInputSource();
-            if cur.is_null() {
-                continue;
-            }
-            let applied = tis_first_language_matches(cur, target);
-            CFRelease(cur);
-            if applied {
-                tracing::info!("입력 소스 전환 확인: {target_name} (attempt={attempt})");
-                return;
-            }
-        }
-        tracing::info!("입력 소스 전환 미확인(TIS 읽기 지연 가능): {target_name}");
     });
-}
-
-unsafe fn tis_first_language_matches(source: *mut c_void, lang: &[u8]) -> bool {
-    let langs = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages);
-    if langs.is_null() {
-        return false;
-    }
-    if CFArrayGetCount(langs) < 1 {
-        return false;
-    }
-    let first = CFArrayGetValueAtIndex(langs, 0);
-    let target =
-        CFStringCreateWithCString(std::ptr::null(), lang.as_ptr(), K_CF_STRING_ENCODING_UTF8);
-    let eq = CFStringCompare(first, target, 0) == 0;
-    CFRelease(target as *mut c_void);
-    eq
 }
 
 // ── 마우스 주입 ──────────────────────────────────────────────────────────────

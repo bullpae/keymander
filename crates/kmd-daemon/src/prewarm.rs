@@ -18,6 +18,9 @@ const START_DELAY: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_secs(10);
 /// 깨어 있던 시간보다 흐른 시간이 이만큼 더 길면 그 사이 잠들었던 것이다
 const SLEEP_GAP_MS: u64 = 60_000;
+/// 절전 복귀 예열 최소 간격 — 덮개를 닫아 둔 동안 macOS 는 화면 없이 수 분마다 잠깐 깬다
+/// (DarkWake, 실측 하루 50~340회). 그 사이 캐시는 그대로라 매번 데울 필요가 없다.
+const REWARM_MIN_MS: u64 = 30 * 60_000;
 
 pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
     std::thread::spawn(move || {
@@ -27,10 +30,12 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
         }
         warm("데몬 시작");
         let mut prev = clocks();
+        let mut last_warm = prev.0;
         while sleep_unless_shutdown(POLL, &shutdown) {
             let now = clocks();
-            if slept(prev, now) {
+            if slept(prev, now) && due(last_warm, now.0) {
                 warm("절전 복귀");
+                last_warm = now.0;
             }
             prev = now;
         }
@@ -63,6 +68,11 @@ fn warm(why: &str) {
         Ok(_) => tracing::info!("런처 예열({why}): {}ms", started.elapsed().as_millis()),
         Err(e) => tracing::debug!("런처 예열 생략({why}) — {exe}: {e}"),
     }
+}
+
+/// 마지막 예열(벽시계 ms) 뒤로 충분히 지났는지. 시계가 뒤로 가면 데운다.
+fn due(last_wall_ms: u64, now_wall_ms: u64) -> bool {
+    now_wall_ms < last_wall_ms || now_wall_ms - last_wall_ms >= REWARM_MIN_MS
 }
 
 /// (절전 포함 ms, 절전 제외 ms) — 둘의 차이가 벌어지면 잠들었던 것
@@ -113,6 +123,14 @@ mod tests {
     #[test]
     fn 흐른_시간이_1분_넘게_길면_잠들었던_것() {
         assert!(slept((1_000, 500), (3_600_000, 10_500)));
+    }
+
+    #[test]
+    fn 잦은_짧은_깸에는_다시_데우지_않는다() {
+        let t = 10 * 60_000;
+        assert!(!due(t, t + 5 * 60_000));
+        assert!(due(t, t + REWARM_MIN_MS));
+        assert!(due(t, t - 1));
     }
 
     #[test]
