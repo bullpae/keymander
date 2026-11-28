@@ -90,41 +90,7 @@ pub(super) fn update_search(
         // TUI에서는 일반 검색으로 흘려보낸다.
         QueryPrefix::Clipboard => handle_main_search(&query, state, engine),
         QueryPrefix::Route => handle_route_query(&query, state),
-        QueryPrefix::General => {
-            handle_main_search(&query, state, engine);
-            // 범위 밖 폴더 경로를 그대로 쳤으면 맨 위에 "검색 범위에 추가" (docs/18 E1)
-            if let Some(item) = kmd_core::scope::path_add_suggestion(
-                &state.config.launcher,
-                &query,
-                state.use_emoji,
-            ) {
-                state.results.insert(0, SearchResult { item, score: 0 });
-            }
-            // `:` · `:ti` — 치는 중인 명령의 자동완성. 없으면 이름으로 친 명령을 상위 결과 아래에
-            let completions = kmd_core::query_prefix::command_completions(&query, state.use_emoji);
-            if !completions.is_empty() {
-                state.results = items_to_results(completions, 0);
-                state.search_mode = SearchMode::Contains;
-                state.selected_index = 0;
-            } else {
-                let named = kmd_core::query_prefix::command_name_matches(&query, state.use_emoji);
-                let at = state.results.len().min(3);
-                state.results.splice(at..at, items_to_results(named, 0));
-            }
-            // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
-            if let Some(hint) =
-                kmd_core::query_prefix::unknown_command_hint(&query, state.use_emoji)
-            {
-                state.results.insert(
-                    0,
-                    SearchResult {
-                        item: hint,
-                        score: 0,
-                    },
-                );
-                state.selected_index = 0;
-            }
-        }
+        QueryPrefix::General => handle_main_search(&query, state, engine),
     }
 }
 
@@ -352,93 +318,24 @@ fn handle_shell_query(query: &str, state: &mut AppState) {
     state.selected_index = 0;
 }
 
-/// Main fuzzy search with optional inline calculator and history boost
+/// 일반 검색 — 순위 파이프라인은 kmd-core 공용(데스크톱·CLI와 같은 결과), 여기서는 그리기만.
 fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngine) {
-    let (mode, mut results) = engine.search(query, SEARCH_RESULT_LIMIT);
-    state.search_mode = mode;
-
-    // URL로 판정된 쿼리: 원본 쿼리로 일반(contains) 검색을 수행해 파일도
-    // 계속 찾을 수 있게 하고, "URL 열기" 가상 항목을 맨 위에 추가한다.
-    // (Enter는 항상 선택된 항목을 실행 — URL은 이 가상 항목으로 연다)
-    if mode == SearchMode::Url {
-        let (_, normalized_url) = SearchMode::detect(query);
-        results = engine.search_with_mode(SearchMode::Contains, query.trim(), SEARCH_RESULT_LIMIT);
-        let url_item = kmd_core::query_prefix::url_open_item(&normalized_url, state.use_emoji);
-        results.insert(
-            0,
-            SearchResult {
-                item: url_item,
-                // 맨 위 고정 — 아래 rank::merge 가 다시 매겨도 정확히 일치하는 폴더(160점)에
-                // 밀리지 않게 데스크톱(SCORE_PLUGIN)과 같은 최댓값을 쓴다
-                score: u32::MAX,
-            },
-        );
-    }
-
-    // Inline calculator: prepend result if query looks like math
-    if builtin_calc::looks_like_math(query) {
-        let calc = builtin_calc::CalcExtension;
-        let calc_items = calc.search_with_emoji(query, state.use_emoji);
-        let calc_results = items_to_results(calc_items, SCORE_CALC_INLINE);
-        results.splice(0..0, calc_results);
-    }
-
-    // 새 파일 검색 엔진(docs/22): 옛 파일 결과를 전체 색인 결과로 바꾸고 한 척도로 다시 매긴다
-    // (실행 이력도 그 안에서). 이력은 캐시된 맵으로 — 키 입력마다 DB 조회 없음.
-    if let Some(index) = &state.file_index {
-        let weights = &state.config.launcher.kind_weights;
-        let files = index.search(
-            query,
-            SEARCH_RESULT_LIMIT,
-            &state.file_boost,
-            weights,
-            state.use_emoji,
-        );
-        results = kmd_core::rank::merge(results, files, query, weights, &state.frecency);
-        results.truncate(SEARCH_RESULT_LIMIT);
-    } else {
-        kmd_core::history::boost_results_with_map(&mut results, &state.frecency);
-    }
-
-    // 한영 오타: 영문 자판으로 친 한글(`qhrhtj` → 보고서). 질의가 이름에 그대로 든 결과가 없을 때만
-    // 바꾼 질의로 다시 찾아, 그쪽에 그대로 든 결과가 있으면 그것을 보여 준다 (데스크톱과 같은 규칙).
-    if !engine.is_pending() && !results.iter().any(|r| name_contains(&r.item.name, query)) {
-        if let Some(ko) = kmd_core::hangul::qwerty_to_hangul(query) {
-            // 바꾼 질의의 결과가 맞지 않으면 아래에서 원래 결과(results)로 덮어쓴다
-            handle_main_search(&ko, state, engine);
-            if state
-                .results
-                .iter()
-                .any(|r| name_contains(&r.item.name, &ko))
-            {
-                state.status_message = Some(format!("한글로 바꿔 찾음: {ko}"));
-                return;
-            }
-            state.search_mode = mode;
-        }
-    }
-
-    // 결과가 없으면 "검색 범위 밖 폴더" 제안을 보여준다. 빈 화면만 내놓으면
-    // 사용자는 왜 안 나오는지 알 수 없다 — 가장 흔한 원인이 범위 누락이다.
-    // (데스크톱도 같은 지점에서 같은 제안을 쓴다)
-    // 미완성(항목이 많아 퍼지가 덜 끝남)이면 빈 결과가 진짜가 아니다 — 다음 Tick 에 다시 묻는다
-    if results.is_empty() && !query.trim().is_empty() && !engine.is_pending() {
-        results.extend(kmd_core::folder_suggest::suggestion_results(
-            &state.config.launcher,
-            state.use_emoji,
-            2,
-        ));
-    }
-
-    state.results = results;
+    let ctx = kmd_core::launcher::RankCtx {
+        launcher: &state.config.launcher,
+        file_index: state.file_index.as_ref(),
+        file_boost: &state.file_boost,
+        frecency: &state.frecency,
+        use_emoji: state.use_emoji,
+        limit: SEARCH_RESULT_LIMIT,
+        suggestions: true,
+    };
+    let outcome = kmd_core::launcher::rank_general(engine, query, &ctx);
+    state.results = outcome.results;
+    state.search_mode = outcome.mode;
     state.selected_index = 0;
-}
-
-/// 이름에 질의가 그대로 들었는지 (대소문자·NFC 무시)
-fn name_contains(name: &str, query: &str) -> bool {
-    let name = kmd_core::textenc::nfc(name).to_lowercase();
-    let query = query.trim().to_lowercase();
-    !query.is_empty() && name.contains(query.as_str())
+    if let Some(notice) = outcome.notice {
+        state.status_message = Some(notice);
+    }
 }
 
 // ── History ──────────────────────────────────────────────────────────────────

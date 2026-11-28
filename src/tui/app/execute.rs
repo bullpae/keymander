@@ -69,24 +69,15 @@ fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
 /// LLM 실행(@gpt/@llm) 라우팅. LLM 쿼리를 처리했으면 true.
 /// 오토파일럿 켜짐 + 데몬 위임 성공 시 자동 제출, 아니면 URL/클립보드 폴백.
 fn tui_try_llm_launch(state: &mut AppState) -> bool {
-    let Some((services, prompt)) = web::parse_any_llm_query(
-        &state.query,
-        &state.config.launcher.multi_llm_providers,
-        &state.config.launcher.multi_llm_prefixes,
-    ) else {
+    // 무엇을 열고 무엇을 붙여넣을지는 core가 정한다 (데스크톱과 공유)
+    let Some(kmd_core::launcher::LlmLaunch {
+        plan,
+        all_urls,
+        paste,
+    }) = kmd_core::launcher::llm_launch(&state.query, &state.config.launcher)
+    else {
         return false;
     };
-    if services.is_empty() {
-        return false;
-    }
-
-    let final_prompt =
-        kmd_core::prompt::apply_template(&state.config.launcher.prompt_templates, &prompt);
-    let plan = web::build_llm_launch_plan(&services, &final_prompt);
-    let has_paste = plan
-        .jobs
-        .iter()
-        .any(|j| matches!(j.method, kmd_core::ipc::LlmInject::PasteEnter));
 
     if state.llm_autopilot && !plan.jobs.is_empty() {
         let req = kmd_core::ipc::Request::LlmAutopilot {
@@ -103,16 +94,16 @@ fn tui_try_llm_launch(state: &mut AppState) -> bool {
     }
 
     // 폴백: 전 서비스 URL + (붙여넣기형 있으면) 클립보드
-    if has_paste && !final_prompt.is_empty() {
+    if let Some(prompt) = &paste {
         // 실패를 숨기지 않는다 — 복사됐다고 믿고 붙여넣으면 빈 프롬프트가 나간다.
-        state.status_message = Some(match kmd_core::clipboard::set_text(&final_prompt) {
+        state.status_message = Some(match kmd_core::clipboard::set_text(prompt) {
             Ok(()) => "✅ 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)"
                 .to_string(),
             Err(e) => format!("❌ 프롬프트 복사 실패: {e} — 서비스 창에 직접 입력하세요"),
         });
     }
-    for url in web::llm_plan_all_urls(&plan) {
-        let _ = action::open_url(&url);
+    for url in &all_urls {
+        let _ = action::open_url(url);
     }
     true
 }
@@ -228,7 +219,9 @@ pub(super) fn execute_selected(
                 Err(e) => format!("\u{274C} 복사 실패: {e}"),
             });
         }
-        Activation::Copy(_) => execute_default(state, &result, db),
+        // 복사할 값이 없다(계산식 오류·안내 행) — 데스크톱처럼 아무것도 하지 않는다.
+        // 예전엔 기본 실행으로 흘러 빈 경로가 실행 이력에 남았다.
+        Activation::Copy(_) => {}
         // Shell command — quick action은 백그라운드 실행 후 결과를 클립보드에 복사,
         // 사용자 명령은 새 터미널 창에서 실행한다 (데스크톱과 동일한 UX).
         // 인라인 실행의 10초 타임아웃은 즉답형 quick action에만 적합하다 —
@@ -273,28 +266,20 @@ pub(super) fn execute_selected(
 
 /// `:t` 실행 — 질의로 변환 URL을 만들어 연다. 텍스트가 비면 클립보드를 쓴다.
 fn run_transform(state: &mut AppState) {
-    use kmd_core::transform;
-    let trimmed = state.query.trim();
-    let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
-    let dispatch = normalized.as_deref().unwrap_or(trimmed);
-    let Some(tq) = transform::parse_transform_query_or_clipboard(dispatch) else {
+    use kmd_core::transform::TransformKind;
+    let Some(t) = kmd_core::launcher::transform_launch(&state.query, &state.config.launcher) else {
         return;
     };
-    let urls = transform::build_transform_urls(
-        &tq,
-        &state.config.launcher.spell_providers,
-        &state.config.launcher.translate_providers,
-    );
-    let kind_label = match &tq.kind {
-        transform::TransformKind::Spell => "맞춤법 검사",
-        transform::TransformKind::Translate(_) => "번역",
+    let kind_label = match &t.kind {
+        TransformKind::Spell => "맞춤법 검사",
+        TransformKind::Translate(_) => "번역",
     };
     state.status_message = Some(format!(
         "\u{2705} {} 실행 ({} 서비스)",
         kind_label,
-        urls.len()
+        t.urls.len()
     ));
-    open_urls_and_quit(state, &urls);
+    open_urls_and_quit(state, &t.urls);
 }
 
 /// `:prompt add/rm` Enter 확정 — 현재 질의를 다시 해석해 적용·저장한다.

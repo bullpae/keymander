@@ -136,31 +136,6 @@ pub(super) fn estimate_title_max_chars(width_px: f32, font_size: f32) -> usize {
     ((width_px / em).floor() as usize).clamp(8, 64)
 }
 
-/// IME 조합 중 생성되는 trailing 자모를 완화해 즉시 검색 반응성을 높인다.
-///
-/// 예: `하ㄴ` -> `하`, `한ㄱ` -> `한`
-pub(super) fn relaxed_hangul_query(query: &str) -> Option<String> {
-    if query.is_empty() {
-        return None;
-    }
-
-    let mut chars: Vec<char> = query.chars().collect();
-    let original_len = chars.len();
-    while let Some(last) = chars.last() {
-        if kmd_core::hangul::is_jamo(*last) {
-            chars.pop();
-        } else {
-            break;
-        }
-    }
-
-    if chars.is_empty() || chars.len() == original_len {
-        return None;
-    }
-
-    Some(chars.into_iter().collect())
-}
-
 pub(super) fn items_to_results(
     items: impl IntoIterator<Item = kmd_core::IndexItem>,
 ) -> Vec<kmd_core::SearchResult> {
