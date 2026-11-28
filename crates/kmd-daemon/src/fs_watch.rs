@@ -204,15 +204,18 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
         let mut file_apply = Instant::now();
         let mut last_config_load = Instant::now();
         let mut last_recheck = Instant::now();
+        let mut content_allowed = kmd_core::content_index::allowed_extensions(&config.launcher);
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
                 return;
             }
-            let mut on_event = |dirty: &mut HashSet<PathBuf>, rescan: bool| {
+            let mut on_event = |dirty: &mut HashSet<PathBuf>, rescan: bool, content: bool| {
                 let now = Instant::now();
-                content_dirty = true;
-                content_event = now;
+                if content {
+                    content_dirty = true;
+                    content_event = now;
+                }
                 if dirty.is_empty() && !file_rescan {
                     file_first_event = now;
                 }
@@ -224,15 +227,20 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
                     let dirs: Vec<PathBuf> =
                         paths.iter().filter_map(|p| dirty_dir(p, &own)).collect();
                     if !dirs.is_empty() {
-                        on_event(&mut file_dirty, false);
+                        // 본문 대상이 아닌 파일(캐시·빌드 산출물·.git)만 바뀌었으면 본문 sync 는 건너뛴다
+                        let content = paths.iter().any(|p| {
+                            dirty_dir(p, &own).is_some()
+                                && kmd_core::content_index::may_affect_content(p, &content_allowed)
+                        });
+                        on_event(&mut file_dirty, false, content);
                         file_dirty.extend(dirs);
                     }
                 }
-                Ok(Msg::Rescan) => on_event(&mut file_dirty, true),
+                Ok(Msg::Rescan) => on_event(&mut file_dirty, true, true),
                 #[cfg(windows)]
                 Ok(Msg::VolumeArrived) => {
                     if with_roots(&roots, Roots::recheck) {
-                        on_event(&mut file_dirty, true);
+                        on_event(&mut file_dirty, true, true);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -244,6 +252,7 @@ pub(crate) fn spawn(shutdown: Arc<AtomicBool>) {
                 let fresh = load_config();
                 let rewatch = watch_paths(&fresh) != watch_paths(&config);
                 config = fresh;
+                content_allowed = kmd_core::content_index::allowed_extensions(&config.launcher);
                 if rewatch {
                     with_roots(&roots, |r| r.set(watch_paths(&config)));
                 }
