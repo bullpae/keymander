@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// 자모로 끝난 질의를 초성 질의로 보기까지 기다리는 시간 — 한글 조합은 키 간격이 이보다 짧다
+const IME_SETTLE_MS: u64 = 300;
+
 impl App {
     pub(super) fn apply_contains_items<I>(&mut self, items: I)
     where
@@ -27,6 +30,23 @@ impl App {
             .rev()
             .find(|c| !c.is_whitespace())
             .is_some_and(kmd_core::hangul::is_jamo)
+            && self.ime_settled_query.as_deref() != Some(self.query.as_str())
+    }
+
+    /// 자모 꼬리 질의가 잠시 그대로면 검색한다 — 조합 중이었다면 그 사이 글자가 바뀐다
+    pub(super) fn schedule_ime_settle(query: String) -> Task<Message> {
+        Task::future(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(IME_SETTLE_MS)).await;
+            Message::ImeSettled(query)
+        })
+    }
+
+    pub(super) fn handle_ime_settled(&mut self, query: String) -> Task<Message> {
+        if query != self.query {
+            return Task::none();
+        }
+        self.ime_settled_query = Some(query);
+        self.perform_search()
     }
 
     fn kind_code(kind: ItemKind) -> u8 {
@@ -72,9 +92,24 @@ impl App {
             return;
         }
 
+        // 같은 질의의 재검색(엔진 교체·파일 색인 갱신)이면 고른 항목을 지킨다 — 예전엔 ↓ 로 고른 뒤
+        // Enter 직전에 뒤에서 결과가 바뀌면 첫 항목이 실행됐다
+        let keep = (self.committed_query == self.query)
+            .then(|| self.results.get(self.selected))
+            .flatten()
+            .map(|r| (r.item.kind, r.item.path.clone(), r.item.name.clone()));
+        self.committed_query.clone_from(&self.query);
+
         self.results = new_results;
         self.last_results_signature = signature;
-        if reset_selection {
+        let kept = keep.and_then(|(kind, path, name)| {
+            self.results
+                .iter()
+                .position(|r| r.item.kind == kind && r.item.path == path && r.item.name == name)
+        });
+        if let Some(i) = kept {
+            self.selected = i;
+        } else if reset_selection {
             self.selected = 0;
         } else if self.selected >= self.results.len() {
             self.selected = self.results.len().saturating_sub(1);

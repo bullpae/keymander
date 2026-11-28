@@ -318,6 +318,8 @@ impl EngineState {
         self.active_tap_hold = None;
         self.tap_hold_engaged = false;
         self.mouse_keys_held.clear();
+        // 버려진 지연 Launch 의 시작 시각이 남으면 다음 Launch 대기가 전부 "2초+" 로 잡힌다
+        self.stats.launch_down = None;
     }
 
     /// 키맵이 켜져 있는지 (toggle_keymap으로 끈 상태면 false)
@@ -883,7 +885,10 @@ impl EngineState {
                     if let Some(action) = pending_launch {
                         return Some(KeyDecision::execute(action));
                     }
-                    self.mouse_keys_held.clear();
+                    // 정지했으니 남은 키는 orphan 이다 — 안 그러면 쥔 키의 오토리피트 down 이
+                    // 맨키로 새어 글자가 찍힌다 (RAlt+D 를 쥔 채 RAlt 를 먼저 떼면 "ddd")
+                    self.orphaned_layer_keys
+                        .extend(self.mouse_keys_held.drain().map(|(k, _)| k));
                     return Some(KeyDecision::MouseStopAll);
                 }
 
@@ -912,6 +917,10 @@ impl EngineState {
             if let Some(mb) = self.mouse_keys_held.remove(&vkey) {
                 return Some(KeyDecision::MouseRelease(mb));
             }
+        } else if self.mouse_keys_held.contains_key(&vkey) {
+            // 아직 쥔 마우스 키의 오토리피트 — 레이어가 꺼진 뒤(지연 Launch 로 트리거를 뗐을 때)에도
+            // 맨키로 새지 않게 막는다. up 에서 위 분기가 해제한다.
+            return Some(KeyDecision::Suppress);
         }
         None
     }
@@ -1451,6 +1460,27 @@ mod tests {
         let got = e.take_stats().named();
         assert!(got.contains(&("perf:wait:0".into(), 1)), "{got:?}");
         assert!(got.contains(&("move:nav:Space".into(), 1)), "{got:?}");
+    }
+
+    #[test]
+    fn 버려진_지연_launch_는_다음_대기에_섞이지_않는다() {
+        let mut cfg = layer_config();
+        cfg.stats = true;
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Space, true, 1100);
+        // 훅 상실·토글 등으로 지연 Launch 가 버려졌다
+        e.reset_transient_state();
+        e.process_key(VKey::LAlt, true, 5000);
+        e.process_key(VKey::Space, true, 5100);
+        e.process_key(VKey::Space, false, 5150);
+        e.process_key(VKey::LAlt, false, 5300);
+        let got = e.take_stats().named();
+        let b = kmd_core::keystats::perf_bucket(200);
+        assert!(got.contains(&(format!("perf:wait:{b}"), 1)), "{got:?}");
     }
 
     #[test]
@@ -2733,9 +2763,19 @@ mod tests {
             e.process_key(VKey::RAlt, false, 1200),
             KeyDecision::MouseStopAll
         ));
-        // 이후 잔여 keyup은 레이어 밖 — 통과 (stuck 없음, 이미 정지됨)
+        // 쥔 채 남은 키의 오토리피트 down 은 맨키로 새지 않는다 ("www" 방지)
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1230),
+            KeyDecision::Suppress
+        ));
+        // keyup 도 삼킨다 — down 이 OS 에 간 적이 없다 (이미 정지됨)
         assert!(matches!(
             e.process_key(VKey::W, false, 1250),
+            KeyDecision::Suppress
+        ));
+        // 다음 W 는 다시 평소대로 통과
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1300),
             KeyDecision::PassThrough
         ));
     }

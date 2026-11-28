@@ -599,10 +599,9 @@ impl Snapshot {
         } else {
             path.to_path_buf()
         };
-        let tmp = target.with_extension("json.tmp");
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, &target)?;
+        // 고정 임시 이름이면 CLI 내보내기와 데몬 동기화가 겹칠 때 섞인 내용이 올라간다
+        crate::fsutil::write_atomic(&target, json.as_bytes(), false)?;
         Ok(target)
     }
 
@@ -638,8 +637,27 @@ impl Snapshot {
                 Err(e) => bad.push((f, e)),
             }
         }
-        (ok, bad)
+        (dedupe_devices(ok), bad)
     }
+}
+
+/// 같은 기기(id)의 스냅숏이 여럿이면 가장 최근에 내보낸 것 하나만 남긴다 — 호스트 이름이 바뀌어
+/// 옛 파일이 남았거나 동기화 도구가 충돌 사본(`… (1).json`)을 만들면 같은 기기가 두 번 합산됐다.
+/// id 가 없는 옛 스냅숏은 가를 수 없으니 그대로 둔다. 같은 날이면 뒤에 읽은(이름순) 것을 쓴다.
+fn dedupe_devices(snaps: Vec<Snapshot>) -> Vec<Snapshot> {
+    let mut out: Vec<Snapshot> = Vec::with_capacity(snaps.len());
+    for s in snaps {
+        if !s.id.is_empty() {
+            if let Some(prev) = out.iter_mut().find(|p| p.id == s.id) {
+                if s.exported >= prev.exported {
+                    *prev = s;
+                }
+                continue;
+            }
+        }
+        out.push(s);
+    }
+    out
 }
 
 /// `[launcher.keymap] stats_sync` 폴더 (`~` 를 풀어서)
@@ -1357,6 +1375,22 @@ mod tests {
         let h = rows.iter().find(|r| r.0 == "move:nav:H").unwrap();
         assert_eq!(h.1, 5);
         assert_eq!(db.key_stats_clear().unwrap(), 2);
+    }
+
+    #[test]
+    fn 같은_기기_스냅숏은_최근_것_하나만_센다() {
+        let km = keymap();
+        let mut old = snap("old-name", "macos", &[("2026-10-20", "move:nav:H", 5)], &km);
+        old.id = "abc".into();
+        old.exported = "2026-10-20".into();
+        let mut new = snap("new-name", "macos", &[("2026-10-24", "move:nav:H", 9)], &km);
+        new.id = "abc".into();
+        let mut other = snap("win", "windows", &[], &km);
+        other.id = "zzz".into();
+        let legacy = snap("legacy", "linux", &[], &km); // id 없음 — 가를 수 없어 그대로
+        let out = dedupe_devices(vec![new.clone(), other, old, legacy]);
+        let devices: Vec<&str> = out.iter().map(|s| s.device.as_str()).collect();
+        assert_eq!(devices, ["new-name", "win", "legacy"]);
     }
 
     #[test]

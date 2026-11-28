@@ -368,7 +368,9 @@ fn handle_main_search(query: &str, state: &mut AppState, engine: &mut SearchEngi
             0,
             SearchResult {
                 item: url_item,
-                score: SCORE_WEB_SEARCH,
+                // 맨 위 고정 — 아래 rank::merge 가 다시 매겨도 정확히 일치하는 폴더(160점)에
+                // 밀리지 않게 데스크톱(SCORE_PLUGIN)과 같은 최댓값을 쓴다
+                score: u32::MAX,
             },
         );
     }

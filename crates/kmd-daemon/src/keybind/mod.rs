@@ -401,7 +401,9 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
     let resolved = resolve_launch_cmd(name);
     // 런처가 아직 뜨는 중이면 또 띄우지 않는다. 백신 검사로 프로세스 생성이 수 초 막히는 동안
     // 누른 횟수만큼 프로세스가 쌓였다가 한꺼번에 떠서 서로 토글해 꺼 버린다.
-    let track = crate::clipboard::launch_captures_foreground(cmd);
+    // 메모 단축키(`kmd-desktop --memo`)는 다른 창이라 게이트를 나누지 않으면 런처가 뜨는 동안
+    // (Windows WaitForInputIdle 최대 15초) 누른 메모가 버려졌다
+    let track = crate::clipboard::launch_captures_foreground(cmd) && arg.is_none();
     if track && !LAUNCHER_STARTING.try_begin(std::time::Instant::now()) {
         tracing::info!("런처가 아직 뜨는 중 — 다시 띄우지 않음: {resolved} ({trace})");
         return;
@@ -422,15 +424,20 @@ pub fn spawn_launch(cmd: &str, delay: std::time::Duration) {
             .hide_console()
             .spawn()
         {
-            Ok(child) => {
+            Ok(mut child) => {
                 if track {
                     wait_until_ready(&child);
+                    LAUNCHER_STARTING.finish();
+                }
+                // 이 스레드가 그대로 거둔다 — 버리면 Unix 에서 좀비로 남는다
+                let _ = child.wait();
+            }
+            Err(e) => {
+                tracing::error!("프로그램 실행 실패: {resolved} — {e}");
+                if track {
+                    LAUNCHER_STARTING.finish();
                 }
             }
-            Err(e) => tracing::error!("프로그램 실행 실패: {resolved} — {e}"),
-        }
-        if track {
-            LAUNCHER_STARTING.finish();
         }
     });
 }

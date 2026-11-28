@@ -91,7 +91,7 @@ pub(crate) fn walk_into(
         return;
     }
     let ignore: HashSet<&str> = cfg.ignore.iter().map(String::as_str).collect();
-    let walker = WalkDir::new(dir)
+    let mut walker = WalkDir::new(dir)
         .max_depth(cfg.depth - dir_depth)
         .follow_links(false)
         .into_iter()
@@ -104,9 +104,14 @@ pub(crate) fn walk_into(
 
     // 깊이별 마지막 폴더 행 — 걷기는 폴더를 내용보다 먼저 내놓으므로 부모가 늘 앞에 있다
     let mut stack: Vec<u32> = vec![parent];
-    for entry in walker {
+    while let Some(entry) = walker.next() {
         let Ok(entry) = entry else { continue };
         if !is_walk_candidate(&entry) {
+            // 거른 폴더(이름이 UTF-8 이 아님 등) 안으로는 내려가지 않는다 — 스택에 행을 넣지 않았으니
+            // 내려가면 그 자식이 직전 형제 폴더 밑에 붙어 경로가 틀어진다
+            if entry.depth() > 0 && entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
             continue;
         }
         let d = entry.depth();
@@ -328,6 +333,24 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("node_modules/x")).unwrap();
         std::fs::write(tmp.path().join(".hidden"), "").unwrap();
         tmp
+    }
+
+    /// 이름이 UTF-8 이 아닌 폴더는 거르고 그 안으로도 내려가지 않는다 — 예전엔 그 자식이
+    /// 직전 형제 폴더 밑에 붙어 없는 경로가 표에 들어갔다. (macOS APFS 는 이런 이름을 못 만든다)
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn utf8_아닌_폴더_자식은_다른_폴더에_붙지_않는다() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("a")).unwrap();
+        let bad = tmp.path().join(std::ffi::OsStr::from_bytes(b"b\xff"));
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(bad.join("in_bad.txt"), "").unwrap();
+        let (b, _) = build_table(&cfg(tmp.path(), 1_000_000));
+        let t = b.table();
+        for row in 0..t.len() {
+            assert!(t.path(row).exists(), "{:?}", t.path(row));
+        }
     }
 
     #[test]

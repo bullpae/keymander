@@ -176,12 +176,12 @@ pub fn run_app(
                 {
                     state.file_index = Some(updated);
                     state.pending_file_index = None;
-                    update_search(&mut state, &mut engine, db.as_ref());
+                    research_keeping_selection(&mut state, &mut engine, db.as_ref());
                     state.mark_dirty();
                 }
                 // 퍼지 검색이 시간 안에 안 끝났으면 같은 질의로 다시 물어 결과를 완성한다
                 if engine.is_pending() && state.settings.is_none() {
-                    update_search(&mut state, &mut engine, db.as_ref());
+                    research_keeping_selection(&mut state, &mut engine, db.as_ref());
                     state.mark_dirty();
                 }
                 // Re-render on tick only when status_message is set (for auto-clear)
@@ -217,5 +217,28 @@ impl Drop for TerminalSession {
         let _ = crossterm::execute!(out, LeaveAlternateScreen);
         let _ = crossterm::execute!(out, crossterm::cursor::Show);
         let _ = disable_raw_mode();
+    }
+}
+
+/// 같은 질의를 뒤에서 다시 검색한다(파일 색인 갱신·미완성 퍼지 결과 완성). 고른 항목은 지킨다 —
+/// 예전엔 ↓ 로 고른 뒤 결과가 갱신되면 선택이 맨 위로 돌아가 Enter 가 다른 항목을 실행했다.
+fn research_keeping_selection(
+    state: &mut AppState,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) {
+    let picked = state
+        .results
+        .get(state.selected_index)
+        .map(|r| (r.item.kind, r.item.path.clone(), r.item.name.clone()));
+    update_search(state, engine, db);
+    if let Some((kind, path, name)) = picked {
+        if let Some(i) = state
+            .results
+            .iter()
+            .position(|r| r.item.kind == kind && r.item.path == path && r.item.name == name)
+        {
+            state.selected_index = i;
+        }
     }
 }

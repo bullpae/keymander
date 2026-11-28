@@ -73,7 +73,7 @@ pub fn run(action: Option<Action>) -> Result<()> {
                         "vi".to_string()
                     }
                 });
-            std::process::Command::new(&editor).arg(path).status()?;
+            super::editor_command(&editor).arg(path).status()?;
         }
         Action::Remove { query } => {
             let all = store.load().map_err(|e| eyre!(e))?;
